@@ -1,0 +1,8 @@
+---
+ludus_gitlab:
+  smtp: 127.0.0.1
+  url: http://localhost:8080
+  email_from: gitlab@example.com
+  displayname: gitlab
+  replyto: no-reply@example.com
+  emailroot: admin@example.com
