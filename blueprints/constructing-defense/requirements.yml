@@ -2,8 +2,6 @@
 # Local roles (role_*, ludus_install_sysmon) are vendored in this source's ansible/roles/.
 
 ---
-roles:
-  - name: ludus_install_docker
 
 collections:
   - name: ansible.posix
