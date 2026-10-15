@@ -202,7 +202,7 @@ ludus:
     cpus: 4
     linux: true
     roles:
-      - ludus_gitlab_ce
+      - dotknewt.ludus_gitlab_ce
     role_vars:
       ludus_gitlab:
         url: http://gitlab.condef.internal

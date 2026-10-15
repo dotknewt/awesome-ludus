@@ -1,0 +1,62 @@
+---
+
+# Install Gitlab-CE
+
+- name: (GITLAB-CE) Install prerequisites
+  package:
+    name: "{{ package }}"
+    state: latest
+  loop: 
+    - curl
+    - openssh-server
+    - ca-certificates
+  loop_control:
+    loop_var: package
+
+- name: (GITLAB-CE) Check if GitLab-CE is already installed
+  stat:
+    path: /etc/gitlab
+  register: gitlab_installed
+
+- name: (GITLAB-CE) Download GitLab-CE Deb script
+  get_url:
+    url: https://packages.gitlab.com/install/repositories/gitlab/gitlab-ce/script.deb.sh
+    dest: /tmp/gitlab-ce.deb.sh
+  when: not gitlab_installed.stat.exists 
+
+- name: (GITLAB-CE) Execute GitLab-CE Deb script
+  command: /bin/bash /tmp/gitlab-ce.deb.sh
+  when: not gitlab_installed.stat.exists
+
+- name: (GITLAB-CE) Install Latest GitLab Community Edition
+  package:
+    name: gitlab-ce
+    state: present
+  when: not gitlab_installed.stat.exists and not ludus_gitlab.version is defined
+
+- name: (GITLAB-CE) Install Specific GitLab Community Edition
+  package:
+    name: gitlab-ce={{ludus_gitlab.version}}-ce.0
+    state: present
+    allow_downgrade: true
+  when: not gitlab_installed.stat.exists and ludus_gitlab.version is defined
+
+- name: (GITLAB-CE) Copy configuration
+  template:
+    src: gitlab.rb
+    dest: /etc/gitlab/gitlab.rb
+    force: yes
+  when: not gitlab_installed.stat.exists
+
+- name: (GITLAB-CE) Reconfigure GitLab Community Edition
+  command: gitlab-ctl reconfigure
+  when: not gitlab_installed.stat.exists
+
+- name: (GITLAB-CE) Set root email
+  ansible.builtin.command: "gitlab-rails runner \"user = User.find_by_username('root'); user.email='{{ludus_gitlab.emailroot}}';user.skip_reconfirmation!; user.save!\""
+  when: not gitlab_installed.stat.exists
+
+# Populate with content
+- name: (GITLAB-CE) Run playbook to add content
+  include_tasks: content.yml
+  when: ludus_gitlab.groups is defined or ludus_gitlab.users is defined

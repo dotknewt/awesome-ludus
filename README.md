@@ -38,7 +38,3 @@ settings. The bridge must already exist.
 
 See the [bridge role documentation](ansible/roles/ludus_configure_bridge/README.md)
 for host prerequisites and the hook retirement procedure.
-
-## Add a submodule
-1. `git submodule add https://github.com/Cyblex-Consulting/ludus-gitlab-ce.git`
-2. Add an entry in `.gitmodules`

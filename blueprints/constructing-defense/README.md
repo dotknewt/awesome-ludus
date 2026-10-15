@@ -43,10 +43,9 @@ All templates are stock Ludus built-ins — this source ships no Packer template
 
 ## GitLab CE
 
-The `{{ range_id }}-gitlab` VM runs the `ludus_gitlab_ce` role from the
-[upstream submodule](../../ansible/roles/ludus_gitlab_ce). Initialize the repository's
-submodules with `git submodule update --init --recursive` before importing the source.
-Ensure the `debian-12-x64-server-template` template and `ludus_gitlab_ce` role are
+The `{{ range_id }}-gitlab` VM runs the local `dotknewt.ludus_gitlab_ce` role from
+[`ansible/roles/ludus_gitlab_ce`](../../ansible/roles/ludus_gitlab_ce). Ensure the
+`debian-12-x64-server-template` template and `dotknewt.ludus_gitlab_ce` role are
 available on the Ludus server before deploying. Debian 12 follows the role's
 documented example and supported-platform metadata.
 
