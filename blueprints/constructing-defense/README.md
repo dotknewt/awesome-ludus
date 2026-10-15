@@ -3,7 +3,7 @@
 A single-domain detection-engineering lab. A Windows AD forest (`condef.internal`) with an
 ADCS server misconfigured for ESC1, Sysmon on every Windows host, a Splunk SIEM collecting
 Windows/Linux/Kubernetes telemetry, a Malcolm network-monitoring sensor, a minikube cluster
-emitting K8s telemetry, and a docker host running VECTR, Ghostwriter and BloodHound CE.
+emitting K8s telemetry, a GitLab CE server, and a docker host running VECTR, Ghostwriter and BloodHound CE.
 
 ## Topology
 
@@ -17,6 +17,7 @@ graph TB
     linuxa["linuxa (.15)<br/>utility host"]
     linuxv["linuxv (.16)<br/>minikube · K8s telemetry"]
     pcap["pcap (.17)<br/>Malcolm sensor"]
+    gitlab["gitlab (.18)<br/>GitLab CE"]
   end
 
   CERTER -. ESC1 abuse .-> DC
@@ -36,8 +37,25 @@ graph TB
 | linuxa  | debian-13.5-x64-server-no-template         | .15  | General-purpose Linux host                     |
 | linuxv  | debian-13.5-x64-server-no-template         | .16  | minikube cluster + K8s→Splunk telemetry        |
 | pcap    | debian-13.5-x64-server-no-template         | .17  | Malcolm network monitoring (64 GB RAM)         |
+| gitlab  | debian-12-x64-server-template             | .18  | GitLab CE (8 GB RAM, 4 CPUs)                   |
 
 All templates are stock Ludus built-ins — this source ships no Packer templates.
+
+## GitLab CE
+
+The `{{ range_id }}-gitlab` VM runs the `ludus_gitlab_ce` role from the
+[upstream submodule](../../ansible/roles/ludus_gitlab_ce). Initialize the repository's
+submodules with `git submodule update --init --recursive` before importing the source.
+Ensure the `debian-12-x64-server-template` template and `ludus_gitlab_ce` role are
+available on the Ludus server before deploying. Debian 12 follows the role's
+documented example and supported-platform metadata.
+
+Access GitLab at `http://gitlab.condef.internal` using the range's DNS resolver;
+the DNS rewrite points to `10.{{ range_second_octet }}.10.18`. The role installs
+the latest available GitLab CE package and requires internet access during deployment.
+Sign in as `root` with the generated password from `/etc/gitlab/initial_root_password`
+on the VM; retrieve it after deployment before GitLab removes that file.
+The SMTP setting points to localhost; outbound email requires a working mail server.
 
 ## Malcolm packet capture bridge
 

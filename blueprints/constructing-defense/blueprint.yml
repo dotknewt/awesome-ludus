@@ -1,7 +1,7 @@
 manifest_version: 1
 id: constructing-defense
 name: "Constructing Defense"
-description: Detection-engineering lab with AD + ADCS (ESC1), Splunk SIEM, Malcolm network monitoring, minikube K8s telemetry, and a VECTR/Ghostwriter/BloodHound CE docker host.
+description: Detection-engineering lab with AD + ADCS (ESC1), Splunk SIEM, Malcolm network monitoring, minikube K8s telemetry, GitLab CE, and a VECTR/Ghostwriter/BloodHound CE docker host.
 version: 1.0.0
 config: range-config.yml
 
@@ -12,6 +12,7 @@ tags:
   - detection-engineering
   - kubernetes
   - malcolm
+  - gitlab
   - sysmon
   - windows
   - linux

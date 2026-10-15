@@ -191,6 +191,27 @@ ludus:
       ludus_install_malcolm_admin_password: "Temp1234!!"
       ludus_install_malcolm_capture_enabled: true
 
+  - vm_name: "{{ range_id }}-gitlab"
+    hostname: "{{ range_id }}-gitlab"
+    template: debian-12-x64-server-template
+    vlan: 10
+    ip_last_octet: 18
+    dns_rewrites:
+      - gitlab.condef.internal
+    ram_gb: 8
+    cpus: 4
+    linux: true
+    roles:
+      - ludus_gitlab_ce
+    role_vars:
+      ludus_gitlab:
+        url: http://gitlab.condef.internal
+        displayname: Constructing Defense GitLab
+        smtp: 127.0.0.1
+        email_from: gitlab@condef.internal
+        replyto: no-reply@condef.internal
+        emailroot: admin@condef.internal
+
 router:
   vm_name: "{{ range_id }}-router"
   hostname: "{{ range_id }}-router"

@@ -2,6 +2,25 @@
 Add: `ludus source add https://github.com/dotknewt/awesome-ludus-sauce.git --id awesome-ludus-sauce --force` 
 Apply a blueprint: `ludus blueprint apply awesome-ludus-sauce/constructing-defense --target-range condef`
 
+## Submodule checklist
+
+When adding an upstream Ansible role:
+
+- [ ] Inspect the destination for existing files. If it is an empty directory,
+  remove it with `rmdir` before adding the submodule.
+- [ ] Register the submodule:
+  `git submodule add <repository-url> ansible/roles/<role-name>`.
+  Editing `.gitmodules` alone does not register a submodule.
+- [ ] Run `git ls-files --stage ansible/roles/<role-name>` and confirm the entry
+  has mode `160000`. Its commit must match
+  `git -C ansible/roles/<role-name> rev-parse HEAD`.
+- [ ] Run `git submodule update --init --recursive`, then
+  `git submodule status --recursive`. Confirm there are no `-` (uninitialized),
+  `+` (commit mismatch), or `U` (conflict) prefixes.
+- [ ] Include both `.gitmodules` and the pinned submodule entry in the parent
+  repository commit. Ensure the pinned commit is available from the upstream
+  repository so other clones can initialize it.
+
 ## Configure the host packet capture bridge
 
 Once the range bridge exists, run the [host playbook](ludus-configure-bridge.yaml)
@@ -19,3 +38,7 @@ settings. The bridge must already exist.
 
 See the [bridge role documentation](ansible/roles/ludus_configure_bridge/README.md)
 for host prerequisites and the hook retirement procedure.
+
+## Add a submodule
+1. `git submodule add https://github.com/Cyblex-Consulting/ludus-gitlab-ce.git`
+2. Add an entry in `.gitmodules`
