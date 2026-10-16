@@ -12,7 +12,7 @@
 - name: "Set gitlab_url from ip to http://{{ansible_default_ipv4.address}}"
   set_fact:
     gitlab_url: "http://{{ansible_default_ipv4.address}}"
-  run_once: yes
+  run_once: true
 
 # Get root access tokens number
 
