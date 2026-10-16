@@ -1,0 +1,37 @@
+{
+  "$schema": "https://unpkg.com/oh-my-opencode-slim@latest/oh-my-opencode-slim.schema.json",
+  "preset": "ludus",
+  "presets": {
+    "ludus": {
+      "extends": "openai",
+      "agents": {
+        "librarian": {
+          "skills_add": [
+            "ludus-cli",
+            "ludus-environment-guide",
+            "ludus-troubleshoot"
+          ],
+          "mcps": [
+            "DOCKER_MCP",
+            "ludus"
+          ]
+        },
+        "fixer": {
+          "skills_add": [
+            "ludus-range-config",
+            "ludus-template-naming",
+            "update-os-template",
+            "change-template-input-language"
+          ]
+        },
+        "oracle": {
+          "skills_add": [
+            "ludus-range-config",
+            "ludus-template-naming",
+            "ludus-troubleshoot"
+          ]
+        }
+      }
+    }
+  }
+}

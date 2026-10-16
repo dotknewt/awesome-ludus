@@ -11,11 +11,14 @@ Use this skill to triage user-reported failures quickly, categorize errors, and 
 
 1. Gather context and exact error output.
 2. Check range deployment status and recent errors.
-3. Review deployment logs for failure details.
-4. Identify the failure category using the known error catalog.
-5. Inspect the current range config for misconfigurations.
-6. Provide targeted fixes with concrete steps.
-7. Define clear verification steps to confirm recovery.
+3. When debugging range VMs, verify each VM's power state by its assigned Proxmox VM ID (numeric `proxmoxID`), not by name:
+   `ludus range status --json | jq --argjson vmid "$VMID" '.VMs[] | select(.proxmoxID == $vmid)'`
+   Inspect `poweredOn` in the matching result. No match is not proof the VM is powered off; confirm the range and assigned ID. A query failure does not establish power state. Do not automatically change power state.
+4. Review deployment logs for failure details.
+5. Identify the failure category using the known error catalog.
+6. Inspect the current range config for misconfigurations.
+7. Provide targeted fixes with concrete steps.
+8. Define clear verification steps to confirm recovery.
 
 ## Key Diagnostic Information
 
