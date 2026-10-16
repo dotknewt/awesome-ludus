@@ -12,7 +12,7 @@
             "ludus-troubleshoot"
           ],
           "mcps": [
-            "DOCKER_MCP",
+            "default",
             "ludus"
           ]
         },
