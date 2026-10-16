@@ -19,7 +19,7 @@ ludus:
     template: windows-server-2022-x64-no-template
     vlan: 10
     ip_last_octet: 11
-    ram_gb: 8
+    ram_gb: 16
     cpus: 4
     windows:
       sysprep: true
@@ -52,7 +52,7 @@ ludus:
     template: windows-server-2022-x64-no-template
     vlan: 10
     ip_last_octet: 12
-    ram_gb: 4
+    ram_gb: 8
     cpus: 4
     windows:
       sysprep: true
