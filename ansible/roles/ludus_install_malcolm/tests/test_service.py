@@ -54,8 +54,11 @@ def test_role_orchestration_and_service_unit_contract() -> None:
         "configure.yml",
         "authentication.yml",
         "service.yml",
-        "vm_power.yml",
     ]
+    assert not (ROLE_DIR / "tasks" / "vm_power.yml").exists()
+    documentation = (ROLE_DIR / "README.md").read_text(encoding="utf-8")
+    assert "guest VM must already be powered on and reachable" in documentation
+    assert "Ludus owns VM lifecycle management" in documentation
     unit = (ROLE_DIR / "templates" / "malcolm.service.j2").read_text(encoding="utf-8")
     for expected in (
         "Type=oneshot",

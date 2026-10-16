@@ -3,6 +3,8 @@
 The behavioral suite runs production task includes against pytest temporary
 directories. It does not install packages, modify sysctls, control systemd, or
 use the host Docker daemon. Service tests provide PATH-scoped fake executables.
+The guest VM must already be powered on and reachable before the role runs; VM
+lifecycle management belongs to Ludus, not this guest-level role.
 
 ## Prerequisites
 

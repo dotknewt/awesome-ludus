@@ -13,9 +13,7 @@
 - [ ] Review blueprint host memory budgeting across all concurrently running VMs, including Malcolm startup peaks and headroom for Proxmox and other host workloads.
   - Observed 2026-10-16 at 08:08:23: host global OOM killed VM 115's QEMU process, with approximately 47.7 GiB anonymous resident memory; confirm VM ID mapping to `pcap` when recording the incident.
   - Document supported host capacity and workload-sizing options; validate a full fresh deployment without host or guest OOM rather than merely lowering the `pcap` memory allocation.
-- [ ] Review the late Malcolm VM power-on check in `ansible/roles/ludus_install_malcolm/tasks/main.yml`, currently after service convergence.
-  - Determine whether VM startup belongs in range orchestration before guest tasks; the late check cannot recover a VM lost during service health checks or bootstrap a stopped VM for earlier tasks.
-  - Validate initially stopped-VM handling and failure diagnostics; avoid automatic restart loops that mask host OOM or repeatedly exhaust memory.
+- [x] Keep Malcolm VM lifecycle in Ludus range orchestration; `ludus_install_malcolm` requires its guest to be powered on and reachable before guest tasks run.
 
 ## role_gpo_deploy
 ansible/roles/role_gpo_deploy/tasks/main.yml is a single big script; "convert" script to ansible using 

@@ -19,6 +19,3 @@
 
 - name: Converge Malcolm service
   ansible.builtin.include_tasks: service.yml
-
-- name: Ensure the Malcolm VM is powered on
-  ansible.builtin.include_tasks: vm_power.yml
