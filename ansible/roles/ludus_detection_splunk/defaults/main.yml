@@ -1,0 +1,36 @@
+---
+detection_splunk_restore_authorized: false
+detection_splunk_maintenance_state_path: /var/lib/detection-engineering/splunk-maintenance-state.json
+detection_splunk_download_auth_path: null
+
+# The blueprint supplies the factual product inputs below. Empty defaults fail
+# closed before download or package mutation.
+detection_splunk_artifact: {}
+detection_splunk_license: {}
+detection_splunk_hec_supported: false
+detection_splunk_search_api_supported: false
+detection_splunk_bind_ip: ""
+detection_splunk_admin_password: ""
+
+detection_splunk_artifact_path: /var/cache/detection-engineering/splunk.deb
+detection_splunk_provenance_path: /etc/detection-engineering/splunk-install-provenance.yml
+detection_splunk_secret_dir: /etc/detection-engineering/secrets
+detection_splunk_hec_token_path: /etc/detection-engineering/secrets/hec-workload.token
+detection_splunk_bootstrap_state_path: /var/lib/detection-engineering/splunk-bootstrap-complete
+detection_splunk_seed_path: /opt/splunk/etc/system/local/user-seed.conf
+detection_splunk_indexes_path: /opt/splunk/etc/system/local/indexes.conf
+detection_splunk_inputs_path: /opt/splunk/etc/system/local/inputs.conf
+detection_splunk_web_path: /opt/splunk/etc/system/local/web.conf
+detection_splunk_hec_input_path: /opt/splunk/etc/apps/detection_hec/local/inputs.conf
+
+detection_splunk_cli: /opt/splunk/bin/splunk
+detection_splunk_dpkg: /usr/bin/dpkg
+detection_splunk_dpkg_query: /usr/bin/dpkg-query
+detection_splunk_dpkg_deb: /usr/bin/dpkg-deb
+detection_splunk_systemctl: /usr/bin/systemctl
+detection_splunk_python: /usr/bin/python3
+detection_splunk_service_name: Splunkd.service
+detection_splunk_file_owner: splunk
+detection_splunk_file_group: splunk
+detection_splunk_root_owner: root
+detection_splunk_root_group: root

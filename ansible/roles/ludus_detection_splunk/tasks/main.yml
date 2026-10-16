@@ -1,0 +1,603 @@
+---
+- name: Validate required Splunk input object types
+  ansible.builtin.assert:
+    that:
+      - range_id is defined
+      - range_id is string
+      - range_id | length > 0
+      - detection_splunk_artifact is mapping
+      - detection_splunk_license is mapping
+      - detection_splunk_restore_authorized is boolean
+      - detection_splunk_hec_supported is boolean
+      - detection_splunk_search_api_supported is boolean
+    fail_msg: Splunk deployment inputs are missing or have invalid types
+
+- name: Validate verified Splunk artifact facts
+  ansible.builtin.assert:
+    that:
+      - detection_splunk_artifact.keys() | sort == ['build', 'download_auth_required', 'sha256', 'url', 'version']
+      - detection_splunk_artifact.version is string
+      - detection_splunk_artifact.version | length > 0
+      - detection_splunk_artifact.build is string
+      - detection_splunk_artifact.build | length > 0
+      - detection_splunk_artifact.url is match('^https://[^?#]+\\.deb$')
+      - detection_splunk_artifact.sha256 is match('^[0-9a-f]{64}$')
+      - detection_splunk_artifact.download_auth_required is boolean
+      - detection_splunk_artifact.version in (detection_splunk_artifact.url | basename)
+      - detection_splunk_artifact.build in (detection_splunk_artifact.url | basename)
+    fail_msg: Refusing Splunk mutation without a complete verified Debian artifact identity
+
+- name: Validate verified initial-trial capability facts
+  ansible.builtin.assert:
+    that:
+      - detection_splunk_license.keys() | sort == ['auth_behavior', 'expiry_behavior', 'hec', 'initial_mode', 'search_api', 'terms_confirmation', 'trial_days_user_confirmed']
+      - detection_splunk_license.initial_mode == 'ENTERPRISE_60_DAY_TRIAL'
+      - detection_splunk_license.trial_days_user_confirmed == 60
+      - detection_splunk_license.terms_confirmation == 'USER_CONFIRMED_NOT_INDEPENDENTLY_VERIFIED'
+      - detection_splunk_license.expiry_behavior is string
+      - detection_splunk_license.expiry_behavior | length > 0
+      - detection_splunk_license.auth_behavior is string
+      - detection_splunk_license.auth_behavior | length > 0
+      - detection_splunk_license.hec is sameas true
+      - detection_splunk_license.search_api is sameas true
+      - detection_splunk_hec_supported is sameas true
+      - detection_splunk_search_api_supported is sameas true
+      - detection_splunk_bind_ip is match('^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}$')
+      - detection_splunk_admin_password is string
+      - detection_splunk_admin_password | length >= 12
+    fail_msg: Refusing Splunk mutation without verified trial HEC, search, expiry, and authentication facts
+
+- name: Validate protected authenticated-download input
+  ansible.builtin.assert:
+    that:
+      - not detection_splunk_artifact.download_auth_required or detection_splunk_download_auth_path is string
+      - not detection_splunk_artifact.download_auth_required or detection_splunk_download_auth_path | length > 0
+    fail_msg: Authenticated download requires a protected target-side Authorization value file
+
+- name: Inspect durable Splunk maintenance authority
+  ansible.builtin.stat:
+    path: "{{ detection_splunk_maintenance_state_path }}"
+  register: _detection_splunk_maintenance_stat
+
+- name: Read durable Splunk maintenance authority
+  ansible.builtin.slurp:
+    src: "{{ detection_splunk_maintenance_state_path }}"
+  register: _detection_splunk_maintenance_raw
+  when: _detection_splunk_maintenance_stat.stat.exists
+  no_log: true
+
+- name: Decode durable Splunk maintenance authority
+  ansible.builtin.set_fact:
+    _detection_splunk_maintenance: "{{ _detection_splunk_maintenance_raw.content | b64decode | from_json }}"
+  when: _detection_splunk_maintenance_stat.stat.exists
+  no_log: true
+
+- name: Validate durable Splunk maintenance authority
+  ansible.builtin.assert:
+    that:
+      - _detection_splunk_maintenance is mapping
+      - _detection_splunk_maintenance.keys() | sort == ['acceptance', 'baseline', 'journal', 'operation_id', 'package', 'range_id', 'schema_version', 'startup_paths', 'state']
+      - _detection_splunk_maintenance.schema_version | type_debug == 'int'
+      - _detection_splunk_maintenance.schema_version == 1
+      - _detection_splunk_maintenance.range_id is string
+      - _detection_splunk_maintenance.range_id == range_id
+      - _detection_splunk_maintenance.state is string
+      - _detection_splunk_maintenance.state in ['HEALTHY', 'PREPARED', 'REMOVE_FAILED', 'POSTCHECK_FAILED', 'ABSENT', 'RESTORED_PENDING_ACCEPTANCE']
+      - _detection_splunk_maintenance.operation_id is none or (_detection_splunk_maintenance.operation_id is string and _detection_splunk_maintenance.operation_id is match('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'))
+      - _detection_splunk_maintenance.state == 'HEALTHY' or _detection_splunk_maintenance.operation_id is not none
+      - _detection_splunk_maintenance.package is mapping
+      - _detection_splunk_maintenance.package.keys() | sort == ['architecture', 'build', 'name', 'sha256', 'version']
+      - _detection_splunk_maintenance.package.name == 'splunk'
+      - _detection_splunk_maintenance.package.version is string
+      - _detection_splunk_maintenance.package.version == detection_splunk_artifact.version
+      - _detection_splunk_maintenance.package.build is string
+      - _detection_splunk_maintenance.package.build == detection_splunk_artifact.build
+      - _detection_splunk_maintenance.package.architecture == 'amd64'
+      - _detection_splunk_maintenance.package.sha256 is match('^[0-9a-f]{64}$')
+      - _detection_splunk_maintenance.package.sha256 == detection_splunk_artifact.sha256
+      - _detection_splunk_maintenance.startup_paths | type_debug == 'list'
+      - _detection_splunk_maintenance.baseline is none or _detection_splunk_maintenance.baseline is mapping
+      - _detection_splunk_maintenance.state == 'HEALTHY' or _detection_splunk_maintenance.baseline is not none
+      - _detection_splunk_maintenance.journal | type_debug == 'list'
+      - _detection_splunk_maintenance.journal | length > 0
+      - _detection_splunk_maintenance.acceptance is mapping
+    fail_msg: Durable Splunk maintenance state is invalid or does not match this range and artifact
+  when: _detection_splunk_maintenance_stat.stat.exists
+
+- name: Validate durable startup path history
+  ansible.builtin.assert:
+    that:
+      - item is string
+      - item | length > 0
+    fail_msg: Durable Splunk startup paths must be nonempty strings
+  loop: "{{ _detection_splunk_maintenance.startup_paths }}"
+  when: _detection_splunk_maintenance_stat.stat.exists
+
+- name: Validate durable stopped-writer baseline
+  ansible.builtin.assert:
+    that:
+      - _detection_splunk_maintenance.baseline.keys() | sort == ['captured_at', 'paths', 'writers_stopped']
+      - _detection_splunk_maintenance.baseline.captured_at is string
+      - _detection_splunk_maintenance.baseline.captured_at is match('^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$')
+      - _detection_splunk_maintenance.baseline.writers_stopped is sameas true
+      - _detection_splunk_maintenance.baseline.paths | type_debug == 'list'
+    fail_msg: Durable Splunk baseline has an invalid shape or value
+  when:
+    - _detection_splunk_maintenance_stat.stat.exists
+    - _detection_splunk_maintenance.baseline is not none
+
+- name: Validate every durable baseline path record
+  ansible.builtin.assert:
+    that:
+      - item is mapping
+      - item.keys() | sort == ['content_sha256', 'group', 'mode', 'owner', 'path', 'type']
+      - item.path is string
+      - item.path is match('^/.+')
+      - item.type is string
+      - item.type | length > 0
+      - item.owner is string
+      - item.owner | length > 0
+      - item.group is string
+      - item.group | length > 0
+      - item.mode is string
+      - item.mode is match('^[0-7]{4}$')
+      - item.content_sha256 is string
+      - item.content_sha256 is match('^[0-9a-f]{64}$')
+    fail_msg: Durable Splunk baseline path record is invalid
+  loop: "{{ _detection_splunk_maintenance.baseline.paths }}"
+  when:
+    - _detection_splunk_maintenance_stat.stat.exists
+    - _detection_splunk_maintenance.baseline is not none
+
+- name: Validate every durable maintenance journal entry
+  ansible.builtin.assert:
+    that:
+      - item is mapping
+      - item.keys() | sort == ['at', 'from', 'limitation', 'result', 'to']
+      - item.at is string
+      - item.at is match('^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$')
+      - item.from is none or (item.from is string and item.from in ['HEALTHY', 'PREPARED', 'REMOVE_FAILED', 'POSTCHECK_FAILED', 'ABSENT', 'RESTORED_PENDING_ACCEPTANCE'])
+      - item.to is string
+      - item.to in ['HEALTHY', 'PREPARED', 'REMOVE_FAILED', 'POSTCHECK_FAILED', 'ABSENT', 'RESTORED_PENDING_ACCEPTANCE']
+      - item.result is string
+      - item.limitation is string
+    fail_msg: Durable Splunk maintenance journal entry is invalid
+  loop: "{{ _detection_splunk_maintenance.journal }}"
+  when: _detection_splunk_maintenance_stat.stat.exists
+
+- name: Validate durable maintenance journal represents current state
+  ansible.builtin.assert:
+    that:
+      - _detection_splunk_maintenance.journal[-1].to == _detection_splunk_maintenance.state
+    fail_msg: Durable Splunk maintenance journal does not end at the current state
+  when: _detection_splunk_maintenance_stat.stat.exists
+
+- name: Validate durable acceptance reference
+  ansible.builtin.assert:
+    that:
+      - _detection_splunk_maintenance.acceptance.keys() | sort == ['accepted_at', 'run_id', 'summary_sha256']
+      - _detection_splunk_maintenance.acceptance.run_id is none or (_detection_splunk_maintenance.acceptance.run_id is string and _detection_splunk_maintenance.acceptance.run_id | length > 0)
+      - _detection_splunk_maintenance.acceptance.summary_sha256 is none or (_detection_splunk_maintenance.acceptance.summary_sha256 is string and _detection_splunk_maintenance.acceptance.summary_sha256 is match('^[0-9a-f]{64}$'))
+      - _detection_splunk_maintenance.acceptance.accepted_at is none or (_detection_splunk_maintenance.acceptance.accepted_at is string and _detection_splunk_maintenance.acceptance.accepted_at is match('^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'))
+    fail_msg: Durable Splunk acceptance reference is invalid
+  when: _detection_splunk_maintenance_stat.stat.exists
+
+- name: Enforce Splunk maintenance lifecycle guard before package mutation
+  ansible.builtin.assert:
+    that:
+      - >-
+        _detection_splunk_maintenance.state == 'HEALTHY' or
+        (detection_splunk_restore_authorized and
+         _detection_splunk_maintenance.state in ['ABSENT', 'RESTORED_PENDING_ACCEPTANCE'])
+    fail_msg: >-
+      Splunk maintenance state refuses ordinary convergence. Only HEALTHY, or an
+      explicitly authorized ABSENT/pending restoration, may proceed.
+  when: _detection_splunk_maintenance_stat.stat.exists
+
+- name: Inspect protected Splunk bootstrap marker before mutation
+  ansible.builtin.stat:
+    path: "{{ detection_splunk_bootstrap_state_path }}"
+  register: _detection_splunk_bootstrap
+
+- name: Require preserved bootstrap state for every durable lifecycle manifest
+  ansible.builtin.assert:
+    that:
+      - _detection_splunk_bootstrap.stat.exists
+      - _detection_splunk_bootstrap.stat.isreg
+      - _detection_splunk_bootstrap.stat.mode == '0600'
+      - _detection_splunk_bootstrap.stat.pw_name == detection_splunk_root_owner
+      - _detection_splunk_bootstrap.stat.gr_name == detection_splunk_root_group
+    fail_msg: Durable Splunk lifecycle state requires its protected preserved bootstrap marker
+  when: _detection_splunk_maintenance_stat.stat.exists
+
+- name: Inspect protected authenticated-download value
+  ansible.builtin.stat:
+    path: "{{ detection_splunk_download_auth_path }}"
+  register: _detection_splunk_download_auth_stat
+  when: detection_splunk_artifact.download_auth_required
+  no_log: true
+
+- name: Require a root-owned mode-0600 authenticated-download value
+  ansible.builtin.assert:
+    that:
+      - _detection_splunk_download_auth_stat.stat.exists
+      - _detection_splunk_download_auth_stat.stat.isreg
+      - _detection_splunk_download_auth_stat.stat.mode == '0600'
+      - _detection_splunk_download_auth_stat.stat.pw_name == detection_splunk_root_owner
+      - _detection_splunk_download_auth_stat.stat.gr_name == detection_splunk_root_group
+    fail_msg: Authenticated download credential file must be regular, root-owned, and mode 0600
+  when: detection_splunk_artifact.download_auth_required
+
+- name: Read protected authenticated-download value
+  ansible.builtin.slurp:
+    src: "{{ detection_splunk_download_auth_path }}"
+  register: _detection_splunk_download_auth
+  when: detection_splunk_artifact.download_auth_required
+  no_log: true
+
+- name: Create package cache directory
+  ansible.builtin.file:
+    path: "{{ detection_splunk_artifact_path | dirname }}"
+    state: directory
+    owner: "{{ detection_splunk_root_owner }}"
+    group: "{{ detection_splunk_root_group }}"
+    mode: "0750"
+
+- name: Fetch checksum-pinned Splunk Debian package without URL credentials
+  ansible.builtin.get_url:
+    url: "{{ detection_splunk_artifact.url }}"
+    dest: "{{ detection_splunk_artifact_path }}"
+    checksum: "sha256:{{ detection_splunk_artifact.sha256 }}"
+    mode: "0600"
+    headers: >-
+      {{ {'Authorization': (_detection_splunk_download_auth.content | b64decode | trim)}
+         if detection_splunk_artifact.download_auth_required else {} }}
+  no_log: "{{ detection_splunk_artifact.download_auth_required }}"
+
+- name: Read package identity fields
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_splunk_dpkg_deb }}"
+      - --field
+      - "{{ detection_splunk_artifact_path }}"
+      - "{{ item }}"
+  loop:
+    - Package
+    - Version
+    - Architecture
+  register: _detection_splunk_deb_fields
+  changed_when: false
+
+- name: Verify downloaded Debian package identity
+  ansible.builtin.assert:
+    that:
+      - _detection_splunk_deb_fields.results[0].stdout | trim == 'splunk'
+      - _detection_splunk_deb_fields.results[1].stdout | trim == detection_splunk_artifact.version
+      - _detection_splunk_deb_fields.results[2].stdout | trim == 'amd64'
+    fail_msg: Checksum-matched artifact does not have the verified Splunk package identity
+
+- name: Read installed Splunk package status and version
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_splunk_dpkg_query }}"
+      - --show
+      - "--showformat=${Status}\t${Version}"
+      - splunk
+  register: _detection_splunk_installed
+  changed_when: false
+  failed_when: false
+
+- name: Parse installed Splunk package status record
+  ansible.builtin.set_fact:
+    _detection_splunk_package_record: >-
+      {{ _detection_splunk_installed.stdout.split()
+         if _detection_splunk_installed.rc == 0 else [] }}
+
+- name: Classify fully installed Splunk package status
+  ansible.builtin.set_fact:
+    _detection_splunk_package_is_installed: >-
+      {{ _detection_splunk_package_record | length == 4 and
+         _detection_splunk_package_record[0:3] == ['install', 'ok', 'installed'] }}
+
+- name: Refuse implicit Splunk package replacement
+  ansible.builtin.assert:
+    that:
+      - >-
+        not _detection_splunk_package_is_installed or
+        _detection_splunk_package_record[3] == detection_splunk_artifact.version
+    fail_msg: An installed Splunk version differs; explicit reviewed migration is required
+
+- name: Install verified Splunk Debian package
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_splunk_dpkg }}"
+      - -i
+      - "{{ detection_splunk_artifact_path }}"
+  when: not _detection_splunk_package_is_installed
+  register: _detection_splunk_package_install
+  changed_when: true
+
+- name: Create protected Splunk configuration and state directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ detection_splunk_secret_dir }}", owner: "{{ detection_splunk_root_owner }}", group: "{{ detection_splunk_root_group }}", mode: "0700"}
+    - {path: "{{ detection_splunk_maintenance_state_path | dirname }}", owner: "{{ detection_splunk_root_owner }}", group: "{{ detection_splunk_root_group }}", mode: "0750"}
+    - {path: "{{ detection_splunk_provenance_path | dirname }}", owner: "{{ detection_splunk_root_owner }}", group: "{{ detection_splunk_root_group }}", mode: "0750"}
+    - {path: "{{ detection_splunk_indexes_path | dirname }}", owner: "{{ detection_splunk_file_owner }}", group: "{{ detection_splunk_file_group }}", mode: "0750"}
+    - {path: "{{ detection_splunk_hec_input_path | dirname }}", owner: "{{ detection_splunk_file_owner }}", group: "{{ detection_splunk_file_group }}", mode: "0750"}
+
+- name: Bootstrap Splunk without credentials in process arguments
+  when: not _detection_splunk_bootstrap.stat.exists
+  block:
+    - name: Stage protected one-use Splunk admin seed
+      ansible.builtin.copy:
+        dest: "{{ detection_splunk_seed_path }}"
+        owner: "{{ detection_splunk_file_owner }}"
+        group: "{{ detection_splunk_file_group }}"
+        mode: "0600"
+        content: |
+          [user_info]
+          USERNAME = admin
+          PASSWORD = {{ detection_splunk_admin_password }}
+      no_log: true
+
+    - name: Start the user-approved initial trial without secret arguments
+      ansible.builtin.command:
+        argv:
+          - "{{ detection_splunk_cli }}"
+          - start
+          - --accept-license
+          - --answer-yes
+          - --no-prompt
+      register: _detection_splunk_initial_start
+      changed_when: true
+      no_log: true
+
+    - name: Enable the existing Splunk boot-start integration
+      ansible.builtin.command:
+        argv:
+          - "{{ detection_splunk_cli }}"
+          - enable
+          - boot-start
+          - -user
+          - "{{ detection_splunk_file_owner }}"
+          - --accept-license
+          - --answer-yes
+          - --no-prompt
+      changed_when: true
+  always:
+    - name: Remove one-use Splunk admin seed
+      ansible.builtin.file:
+        path: "{{ detection_splunk_seed_path }}"
+        state: absent
+      no_log: true
+
+- name: Generate the workload-only HEC token once without output
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_splunk_python }}"
+      - -c
+      - |
+        import errno, os, re, secrets, stat, sys, tempfile
+        path = sys.argv[1]
+        token_pattern = re.compile(rb"[A-Za-z0-9_-]{64}\n")
+        def validate_existing():
+            metadata = os.lstat(path)
+            if not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600:
+                raise SystemExit(20)
+            with open(path, "rb") as stream:
+                value = stream.read()
+            if token_pattern.fullmatch(value) is None:
+                raise SystemExit(20)
+        if os.path.lexists(path):
+            validate_existing()
+            raise SystemExit(10)
+        parent = os.path.dirname(path)
+        fd, temporary = tempfile.mkstemp(prefix=".hec-token-", dir=parent)
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(secrets.token_urlsafe(48).encode("ascii") + b"\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            try:
+                os.link(temporary, path)
+            except FileExistsError:
+                validate_existing()
+                raise SystemExit(10)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        directory = os.open(parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+      - "{{ detection_splunk_hec_token_path }}"
+  register: _detection_splunk_token_generation
+  changed_when: _detection_splunk_token_generation.rc == 0
+  failed_when: _detection_splunk_token_generation.rc not in [0, 10]
+  no_log: true
+
+- name: Inspect protected HEC token publication
+  ansible.builtin.stat:
+    path: "{{ detection_splunk_hec_token_path }}"
+  register: _detection_splunk_hec_token_stat
+  no_log: true
+
+- name: Validate protected HEC token publication metadata
+  ansible.builtin.assert:
+    that:
+      - _detection_splunk_hec_token_stat.stat.exists
+      - _detection_splunk_hec_token_stat.stat.isreg
+      - _detection_splunk_hec_token_stat.stat.mode == '0600'
+      - _detection_splunk_hec_token_stat.stat.pw_name == detection_splunk_root_owner
+      - _detection_splunk_hec_token_stat.stat.gr_name == detection_splunk_root_group
+    fail_msg: Existing HEC token must be a regular configured-root-owned mode-0600 file
+  no_log: true
+
+- name: Read protected HEC token for local configuration
+  ansible.builtin.slurp:
+    src: "{{ detection_splunk_hec_token_path }}"
+  register: _detection_splunk_hec_token_raw
+  no_log: true
+
+- name: Hold HEC token only in a non-cacheable runtime fact
+  ansible.builtin.set_fact:
+    _detection_splunk_hec_token: "{{ _detection_splunk_hec_token_raw.content | b64decode | trim }}"
+    cacheable: false
+  no_log: true
+
+- name: Render non-secret Splunk configuration
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: "{{ detection_splunk_file_owner }}"
+    group: "{{ detection_splunk_file_group }}"
+    mode: "0640"
+  loop:
+    - {src: indexes.conf.j2, dest: "{{ detection_splunk_indexes_path }}"}
+    - {src: inputs.conf.j2, dest: "{{ detection_splunk_inputs_path }}"}
+    - {src: web.conf.j2, dest: "{{ detection_splunk_web_path }}"}
+  notify: Restart Splunk
+
+- name: Render protected workload HEC input
+  ansible.builtin.template:
+    src: hec-input.conf.j2
+    dest: "{{ detection_splunk_hec_input_path }}"
+    owner: "{{ detection_splunk_file_owner }}"
+    group: "{{ detection_splunk_file_group }}"
+    mode: "0600"
+  notify: Restart Splunk
+  no_log: true
+
+- name: Write non-secret verified install provenance
+  ansible.builtin.template:
+    src: install-provenance.yml.j2
+    dest: "{{ detection_splunk_provenance_path }}"
+    owner: "{{ detection_splunk_root_owner }}"
+    group: "{{ detection_splunk_root_group }}"
+    mode: "0644"
+
+- name: Apply Splunk configuration before lifecycle transition
+  ansible.builtin.meta: flush_handlers
+
+- name: Inspect Splunk service enablement
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_splunk_systemctl }}"
+      - is-enabled
+      - "{{ detection_splunk_service_name }}"
+  register: _detection_splunk_service_enabled
+  changed_when: false
+  failed_when: false
+
+- name: Enable Splunk service at boot
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_splunk_systemctl }}"
+      - enable
+      - "{{ detection_splunk_service_name }}"
+  when: _detection_splunk_service_enabled.rc != 0
+  changed_when: true
+
+- name: Inspect Splunk service activity
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_splunk_systemctl }}"
+      - is-active
+      - --quiet
+      - "{{ detection_splunk_service_name }}"
+  register: _detection_splunk_service_active
+  changed_when: false
+  failed_when: false
+
+- name: Start Splunk service when inactive
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_splunk_systemctl }}"
+      - start
+      - "{{ detection_splunk_service_name }}"
+  when: _detection_splunk_service_active.rc != 0
+  changed_when: true
+
+- name: Verify Splunk reports running after complete configuration
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_splunk_cli }}"
+      - status
+  register: _detection_splunk_status
+  changed_when: false
+
+- name: Persist bootstrap completion only after successful configuration
+  ansible.builtin.copy:
+    dest: "{{ detection_splunk_bootstrap_state_path }}"
+    content: "configured\n"
+    owner: "{{ detection_splunk_root_owner }}"
+    group: "{{ detection_splunk_root_group }}"
+    mode: "0600"
+    force: false
+
+- name: Build append-only pending-restoration state
+  ansible.builtin.set_fact:
+    _detection_splunk_pending: >-
+      {{ _detection_splunk_maintenance | combine({
+           'state': 'RESTORED_PENDING_ACCEPTANCE',
+           'journal': _detection_splunk_maintenance.journal + [{
+             'at': now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ'),
+             'from': 'ABSENT',
+             'to': 'RESTORED_PENDING_ACCEPTANCE',
+             'result': 'Splunk package and configuration restored; live acceptance required',
+             'limitation': 'Role convergence never establishes HEALTHY'
+           }]
+         }, recursive=false) }}
+  when:
+    - _detection_splunk_maintenance_stat.stat.exists
+    - _detection_splunk_maintenance.state == 'ABSENT'
+    - detection_splunk_restore_authorized
+
+- name: Stage pending-restoration manifest in the authority directory
+  ansible.builtin.copy:
+    dest: "{{ detection_splunk_maintenance_state_path }}.pending"
+    content: "{{ _detection_splunk_pending | to_nice_json }}\n"
+    owner: "{{ detection_splunk_root_owner }}"
+    group: "{{ detection_splunk_root_group }}"
+    mode: "0600"
+  when: _detection_splunk_pending is defined
+
+- name: Atomically fsync pending-restoration manifest
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_splunk_python }}"
+      - -c
+      - |
+        import os, sys
+        source, destination = sys.argv[1:]
+        descriptor = os.open(source, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.replace(source, destination)
+        directory = os.open(os.path.dirname(destination), os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+      - "{{ detection_splunk_maintenance_state_path }}.pending"
+      - "{{ detection_splunk_maintenance_state_path }}"
+  when: _detection_splunk_pending is defined
+  changed_when: true
+
+- name: Clear secret runtime facts
+  ansible.builtin.set_fact:
+    _detection_splunk_hec_token: null
+    _detection_splunk_hec_token_raw: null
+    _detection_splunk_download_auth: null
+    cacheable: false
+  no_log: true

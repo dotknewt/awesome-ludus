@@ -1,0 +1,17 @@
+[splunktcp://9997]
+disabled = false
+
+[monitor:///var/log/auth.log]
+disabled = false
+index = de_linux
+sourcetype = linux:auth
+
+[monitor:///var/log/syslog]
+disabled = false
+index = de_linux
+sourcetype = linux:system
+
+[monitor:///var/log/detection-engineering/audit-safe.jsonl]
+disabled = false
+index = de_linux
+sourcetype = linux:audit:safe
