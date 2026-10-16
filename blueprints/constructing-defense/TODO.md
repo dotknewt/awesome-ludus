@@ -1,5 +1,13 @@
 # Roles
 
+## First-deploy Docker access and range setup
+
+- [ ] Review `ludus_install_docker`, `ludus_install_minikube`, `role_k8s_telemetry_collection`, `ludus_install_malcolm`, and this blueprint's `range-config.yml` for first-deploy ordering and Docker access fixes.
+  - Observed 2026-10-16: Minikube startup on `linuxv` and Malcolm image pulls on `pcap` failed with Docker socket permission denied; rerunning `ludus deploy` resolved both. Root cause remains unconfirmed.
+  - Check provisioning order, configured users, effective Ansible/become supplementary groups, connection resets, and Docker socket readiness; capture evidence during a fresh deployment before selecting a fix.
+  - Review the Minikube command's folded YAML/backslashes and audit-policy home directory consistency.
+  - Acceptance: both services deploy successfully on a fresh range without a second deployment, and a rerun remains convergent.
+
 ## role_gpo_deploy
 ansible/roles/role_gpo_deploy/tasks/main.yml is a single big script; "convert" script to ansible using 
 
