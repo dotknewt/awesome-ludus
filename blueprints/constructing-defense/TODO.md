@@ -34,3 +34,7 @@ Debian 12/13 compatibility is not proven until every item in the role's
    `C:\Shares\Share1..15`, and SMB shares `Logs1..15`.
 2. `kerberoast-telemetry.ps1` — creates `OU=Kerberoast` and users with SPNs so Kerberoasting
    generates telemetry.
+
+## ludus_gitlab_ce
+
+- [ ] The initial gitlab admin password is written to `/etc/gitlab/initial_root_password`; Place a note of it in the motd/login banner telling the user to run `sudo cat /etc/gitlab/initial_root_password` to get the password
