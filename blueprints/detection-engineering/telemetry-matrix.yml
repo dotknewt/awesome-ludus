@@ -1,0 +1,169 @@
+---
+schema_version: 1
+sources:
+  - &source_defaults
+    id: gitlab-auth
+    boundary: host
+    vm_role: gitlab
+    class: os_authentication
+    path_or_input: /var/log/auth.log
+    reader: forwarder
+    index: de_linux
+    sourcetype: linux:auth
+    safe_fields: [_time, host, source, sourcetype, message]
+    negative_fields: [password, token, authorization, request_body, response_body]
+    required: true
+    capability_gate: null
+  - <<: *source_defaults
+    id: gitlab-system
+    class: system
+    path_or_input: /var/log/syslog
+    sourcetype: linux:system
+  - <<: *source_defaults
+    id: gitlab-audit-safe
+    class: audit_process
+    path_or_input: /var/log/detection-engineering/audit-safe.jsonl
+    sourcetype: linux:audit:safe
+    capability_gate: capabilities.audit_dispatch
+  - <<: *source_defaults
+    id: runner-auth
+    vm_role: runner
+  - <<: *source_defaults
+    id: runner-system
+    vm_role: runner
+    class: system
+    path_or_input: /var/log/syslog
+    sourcetype: linux:system
+  - <<: *source_defaults
+    id: runner-audit-safe
+    vm_role: runner
+    class: audit_process
+    path_or_input: /var/log/detection-engineering/audit-safe.jsonl
+    sourcetype: linux:audit:safe
+    capability_gate: capabilities.audit_dispatch
+  - <<: *source_defaults
+    id: workload-auth
+    vm_role: workload
+  - <<: *source_defaults
+    id: workload-system
+    vm_role: workload
+    class: system
+    path_or_input: /var/log/syslog
+    sourcetype: linux:system
+  - <<: *source_defaults
+    id: workload-audit-safe
+    vm_role: workload
+    class: audit_process
+    path_or_input: /var/log/detection-engineering/audit-safe.jsonl
+    sourcetype: linux:audit:safe
+    capability_gate: capabilities.audit_dispatch
+  - <<: *source_defaults
+    id: splunk-auth
+    vm_role: splunk
+    reader: splunk_local
+  - <<: *source_defaults
+    id: splunk-system
+    vm_role: splunk
+    class: system
+    path_or_input: /var/log/syslog
+    reader: splunk_local
+    sourcetype: linux:system
+  - <<: *source_defaults
+    id: splunk-audit-safe
+    vm_role: splunk
+    class: audit_process
+    path_or_input: /var/log/detection-engineering/audit-safe.jsonl
+    reader: splunk_local
+    sourcetype: linux:audit:safe
+    capability_gate: capabilities.audit_dispatch
+  - <<: *source_defaults
+    id: gitlab-access
+    class: gitlab_access
+    path_or_input: /var/log/gitlab/nginx/gitlab_access.log
+    index: de_gitlab
+    sourcetype: gitlab:access
+    capability_gate: capabilities.gitlab_ce_logs
+  - <<: *source_defaults
+    id: gitlab-application
+    class: gitlab_application
+    path_or_input: capabilities.gitlab_ce_logs.observed.paths.application
+    index: de_gitlab
+    sourcetype: gitlab:application
+    capability_gate: capabilities.gitlab_ce_logs
+  - <<: *source_defaults
+    id: gitlab-audit
+    class: gitlab_audit
+    path_or_input: capabilities.gitlab_ce_logs.observed.paths.audit
+    index: de_gitlab
+    sourcetype: gitlab:audit
+    capability_gate: capabilities.gitlab_ce_logs
+  - <<: *source_defaults
+    id: runner-service
+    vm_role: runner
+    class: runner_service
+    path_or_input: systemd:gitlab-runner
+    index: de_runner
+    sourcetype: gitlab:runner
+  - <<: *source_defaults
+    id: runner-registration
+    vm_role: runner
+    class: runner_registration
+    path_or_input: /var/log/detection-engineering/runner-registration.jsonl
+    index: de_runner
+    sourcetype: gitlab:runner:registration
+    capability_gate: capabilities.runner_api
+  - <<: *source_defaults
+    id: splunk-internal
+    vm_role: splunk
+    class: splunk_service
+    path_or_input: $SPLUNK_HOME/var/log/splunk/*.log
+    reader: splunk_local
+    index: _internal
+    sourcetype: splunk:native
+    capability_gate: capabilities.splunk
+  - <<: *source_defaults
+    id: workload-docker-daemon
+    vm_role: workload
+    class: docker_daemon
+    path_or_input: systemd:dockerd
+    index: de_runtime
+    sourcetype: docker:daemon
+  - <<: *source_defaults
+    id: workload-docker-container
+    vm_role: workload
+    class: docker_container
+    path_or_input: /var/lib/docker/containers/*/*-json.log
+    reader: otel_host
+    index: de_runtime
+    sourcetype: docker:container
+    capability_gate: capabilities.otel
+  - <<: *source_defaults
+    id: minikube-api-audit
+    boundary: node
+    vm_role: workload
+    class: kubernetes_audit
+    path_or_input: capabilities.otel.observed.audit_path
+    reader: otel_cluster
+    index: de_runtime
+    sourcetype: kube:audit
+    capability_gate: capabilities.otel
+  - <<: *source_defaults
+    id: minikube-node-service
+    boundary: node
+    vm_role: workload
+    class: kubernetes_node
+    path_or_input: systemd:kubelet
+    reader: otel_cluster
+    index: de_runtime
+    sourcetype: kube:node
+    capability_gate: capabilities.otel
+  - <<: *source_defaults
+    id: minikube-container
+    boundary: node
+    vm_role: workload
+    class: kubernetes_container
+    path_or_input: /var/log/containers/*.log
+    reader: otel_cluster
+    index: de_runtime
+    sourcetype: kube:container
+    capability_gate: capabilities.otel

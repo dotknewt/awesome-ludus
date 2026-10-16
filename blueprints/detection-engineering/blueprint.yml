@@ -1,0 +1,17 @@
+---
+manifest_version: 1
+id: detection-engineering
+name: Detection Engineering
+description: >-
+  Staged offline contract for a future five-VM detection-engineering blueprint.
+  Task 8 owns production wiring; deployment remains blocked until its factual
+  gates and new-range predeployment requirements are satisfied.
+version: 0.1.0
+config: range-config.yml
+tags:
+  - detection-engineering
+  - gitlab
+  - kubernetes
+  - malcolm
+  - splunk
+min_ludus_version: "2.0.0"

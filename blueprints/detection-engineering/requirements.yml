@@ -1,0 +1,4 @@
+---
+# Task 1 intentionally has no external collection dependency. Add only exact,
+# primary-source-verified collection pins when production role wiring is added.
+collections: []

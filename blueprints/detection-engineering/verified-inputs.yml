@@ -1,0 +1,233 @@
+---
+schema_version: 1
+verified_at: "2026-10-16T20:02:27Z"
+user_supplied_candidates:
+  splunk_10_6_1_1:
+    status: VERIFIED
+    source:
+      url: https://download.splunk.com/products/splunk/releases/10.6.1.1/linux/splunk-10.6.1.1-b2ae2962645c-linux-amd64.deb
+      observed_at: "2026-10-16T19:27:55Z"
+    observed:
+      provenance: USER_SUPPLIED_UNVERIFIED
+      version: 10.6.1.1
+      build: b2ae2962645c
+      enterprise_deb_url: https://download.splunk.com/products/splunk/releases/10.6.1.1/linux/splunk-10.6.1.1-b2ae2962645c-linux-amd64.deb
+      forwarder_deb_url: https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/linux/splunkforwarder-10.6.1.1-b2ae2962645c-linux-amd64.deb
+      forwarder_tgz_reference_url: https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/linux/splunkforwarder-10.6.1.1-b2ae2962645c-linux-amd64.tgz
+      windows_msi_reference_url: https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/windows/splunkforwarder-10.6.1.1-b2ae2962645c-windows-x64.msi
+    limitation: >-
+      Only provenance, version/build, and verbatim candidate URLs are verified
+      against the canonical user-supplied table; artifact contents are unverified.
+    stops: []
+  splunk_initial_trial:
+    record_type: USER_CONFIRMATION
+    status: CONFIRMED
+    source:
+      kind: USER_CONFIRMATION
+      recorded_at: "2026-10-16T19:42:19Z"
+    observed:
+      initial_mode: ENTERPRISE_60_DAY_TRIAL
+      trial_days_user_confirmed: 60
+      terms_confirmation: USER_CONFIRMED_NOT_INDEPENDENTLY_VERIFIED
+    limitation: >-
+      User intent only; this is not independent package, license, expiry, HEC,
+      search, or authentication evidence.
+    stops: []
+templates:
+  gitlab: &blocked_template
+    status: BLOCKED
+    source:
+      url: https://docs.ludus.cloud/docs/templates/list
+      observed_at: "2026-10-16T19:24:19Z"
+    observed: null
+    limitation: >-
+      Target inventory is unavailable; collect the exact template name and
+      inherited disk size through MCP at predeployment. This does not block
+      offline contract validation or role development.
+    stops: [10]
+  runner: *blocked_template
+  malcolm: *blocked_template
+  splunk: *blocked_template
+  workload: *blocked_template
+capacity:
+  status: BLOCKED
+  source:
+    url: https://docs.ludus.cloud/docs/quick-start/install-ludus
+    observed_at: "2026-10-16T19:24:19Z"
+  observed: null
+  limitation: >-
+    Target inventory is unavailable; collect physical/logical CPUs, allocations,
+    and free storage through MCP at predeployment. The user-stated 128 GB RAM is
+    not a full capacity record. This does not block offline contract validation
+    or role development.
+  stops: [10]
+network:
+  status: BLOCKED
+  source:
+    url: https://docs.ludus.cloud/docs/configuration/range-config
+    observed_at: "2026-10-16T19:24:19Z"
+  observed: null
+  limitation: >-
+    Collect target management/VPN/lab CIDRs, interfaces, service-port allowances,
+    and public probe source through MCP at predeployment. Validated fixtures may
+    drive offline role development, but unresolved values block deployment.
+  stops: [10]
+apt:
+  gitlab: &blocked_gitlab_apt
+    status: BLOCKED
+    source:
+      url: https://packages.gitlab.com/gitlab/gitlab-ce
+      observed_at: "2026-10-16T19:24:19Z"
+    observed: null
+    limitation: Exact package version, repository, signing-key URL, and fingerprint are not primary-source verified.
+    stops: [5, 8, 9, 10]
+  runner:
+    <<: *blocked_gitlab_apt
+    source:
+      url: https://packages.gitlab.com/runner/gitlab-runner
+      observed_at: "2026-10-16T19:24:19Z"
+    stops: [6, 8, 9, 10]
+  docker: &blocked_docker_apt
+    status: BLOCKED
+    source:
+      url: https://download.docker.com/linux/debian/
+      observed_at: "2026-10-16T19:24:19Z"
+    observed: null
+    limitation: Exact package versions, repository, signing-key URL, and fingerprint are not primary-source verified.
+    stops: [7, 8, 9, 10]
+  containerd: *blocked_docker_apt
+  docker_plugins: *blocked_docker_apt
+downloads:
+  splunk:
+    status: BLOCKED
+    source:
+      url: https://download.splunk.com/products/splunk/releases/10.6.1.1/linux/splunk-10.6.1.1-b2ae2962645c-linux-amd64.deb
+      observed_at: "2026-10-16T19:27:55Z"
+    observed: null
+    limitation: >-
+      HTTP HEAD returned 200 and Content-Length 1420151880, but SHA-256,
+      package identity/scripts, download authentication, and OS compatibility are unverified.
+    stops: [3, 4, 7, 8, 9, 10]
+  forwarder:
+    status: BLOCKED
+    source:
+      url: https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/linux/splunkforwarder-10.6.1.1-b2ae2962645c-linux-amd64.deb
+      observed_at: "2026-10-16T19:27:55Z"
+    observed: null
+    limitation: >-
+      HTTP HEAD returned 200 and Content-Length 116437450, but SHA-256,
+      package identity/scripts, download authentication, and OS compatibility are unverified.
+    stops: [4, 8, 9, 10]
+  minikube: &blocked_runtime_download
+    status: BLOCKED
+    source:
+      url: https://github.com/kubernetes/minikube/releases
+      observed_at: "2026-10-16T19:24:19Z"
+    observed: null
+    limitation: Exact compatible version, immutable URL, and SHA-256 are not primary-source verified.
+    stops: [7, 8, 9, 10]
+  kubectl:
+    <<: *blocked_runtime_download
+    source:
+      url: https://kubernetes.io/releases/download/
+      observed_at: "2026-10-16T19:24:19Z"
+  helm:
+    <<: *blocked_runtime_download
+    source:
+      url: https://github.com/helm/helm/releases
+      observed_at: "2026-10-16T19:24:19Z"
+git:
+  malcolm:
+    status: BLOCKED
+    source:
+      url: https://github.com/cisagov/Malcolm
+      observed_at: "2026-10-16T19:24:19Z"
+    observed: null
+    limitation: Existing role tag and commit have not been reverified against primary upstream sources.
+    stops: [7, 8, 9, 10]
+charts:
+  otel:
+    status: BLOCKED
+    source:
+      url: https://github.com/open-telemetry/opentelemetry-helm-charts
+      observed_at: "2026-10-16T19:24:19Z"
+    observed: null
+    limitation: Exact chart version and immutable digest are not primary-source verified.
+    stops: [7, 8, 9, 10]
+capabilities:
+  splunk:
+    status: BLOCKED
+    source:
+      url: https://help.splunk.com/en/splunk-enterprise/administer/admin-manual/10.4/welcome-to-splunk-enterprise-administration
+      observed_at: "2026-10-16T19:24:19Z"
+    observed: null
+    limitation: >-
+      Exact-version trial expiry, HEC, search API, and authentication behavior
+      need independent evidence. User intent is recorded separately and is not
+      promoted into this capability gate.
+    stops: [3, 4, 7, 8, 9, 10]
+  splunk_free:
+    status: UNVERIFIED
+    source:
+      url: https://help.splunk.com/en/splunk-enterprise/administer/admin-manual/10.4/configure-splunk-licenses/about-splunk-free
+      observed_at: "2026-10-16T19:24:19Z"
+    observed: null
+    limitation: Future Free compatibility is unverified and does not block an otherwise verified initial trial.
+  splunk_uninstall:
+    status: BLOCKED
+    source:
+      url: https://help.splunk.com/en/splunk-enterprise/administer/install-and-upgrade/10.4/uninstall-splunk-enterprise/uninstall-splunk-enterprise
+      observed_at: "2026-10-16T19:24:19Z"
+    observed: null
+    limitation: >-
+      Exact 10.6.1.1 package metadata/scripts and a disposable preservation test
+      are missing; 10.4 guidance cannot prove safe in-place preservation.
+    stops: [11]
+  gitlab_ce_logs:
+    status: BLOCKED
+    source:
+      url: https://docs.gitlab.com/administration/logs/
+      observed_at: "2026-10-16T19:24:19Z"
+    observed: null
+    limitation: Installed CE version paths, safe producer fields, and unavailable event classes are unverified.
+    stops: [4, 5, 6, 8, 9, 10]
+  runner_api:
+    status: BLOCKED
+    source:
+      url: https://docs.gitlab.com/api/runners/
+      observed_at: "2026-10-16T19:24:19Z"
+    observed: null
+    limitation: Exact-version paused-at-creation and minimum local registration semantics are unverified.
+    stops: [5, 6, 8, 9, 10]
+  audit_dispatch:
+    status: BLOCKED
+    source:
+      url: https://github.com/linux-audit/audit-documentation
+      observed_at: "2026-10-16T19:24:19Z"
+    observed: null
+    limitation: Package version and fail-closed dispatcher protocol contract are unverified.
+    stops: [2, 8, 9, 10]
+  otel:
+    status: BLOCKED
+    source:
+      url: https://opentelemetry.io/docs/platforms/kubernetes/collector/components/
+      observed_at: "2026-10-16T19:24:19Z"
+    observed: null
+    limitation: Secret provider, exact inputs, metadata-only audit path, and least-privilege RBAC are unverified.
+    stops: [7, 8, 9, 10]
+test_tools:
+  status: VERIFIED
+  source:
+    url: https://pypi.org/
+    observed_at: "2026-10-16T19:24:19Z"
+  observed:
+    pytest: 9.1.1
+    PyYAML: 6.0.3
+    jsonschema: 4.26.0
+    ansible-core: 2.21.5
+    ansible-lint: 26.10.1
+    yamllint: 1.38.0
+  limitation: >-
+    PyPI metadata was checked and all exact pins installed on Python 3.14.8;
+    imports succeeded. yamllint lacks a 3.14 classifier but ran successfully.
+  stops: [1, 2, 3, 4, 5, 6, 7, 8, 9]

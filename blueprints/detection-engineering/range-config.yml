@@ -1,0 +1,405 @@
+# yaml-language-server: $schema=https://docs.ludus.cloud/schemas/range-config.json
+---
+# Refusal-safe Task 1 skeleton: unresolved templates and network facts are kept
+# out of deployable fields. Task 8 owns full production wiring after gates clear.
+ludus: []
+ludus_extensions:
+  detection_engineering_contract:
+    stage: TASK_1_OFFLINE_CONTRACT
+    offline_contract_status: READY_FOR_ROLE_DEVELOPMENT
+    deployment_readiness: BLOCKED
+    deployment_blocked: true
+    gate_file: verified-inputs.yml
+    telemetry_matrix: telemetry-matrix.yml
+    target_inventory_policy:
+      collection_method: MCP
+      collection_stage: PREDEPLOYMENT
+      required_for:
+        - DEPLOYMENT
+      not_required_for:
+        - OFFLINE_CONTRACT_VALIDATION
+        - ROLE_DEVELOPMENT
+      automatic_action: false
+    new_range_requirement:
+      required: true
+      stage: PREDEPLOYMENT
+      existing_range_reuse: FORBIDDEN
+      creation_authorized: false
+      automatic_action: false
+    cluster_name_template: "{{ range_id }}-minikube"
+    planned_vms:
+      - identity_suffix: gitlab
+        vm_name_template: "{{ range_id }}-gitlab"
+        host_id_template: "{{ range_id }}-gitlab"
+        ram_gb: 8
+        cpus: 4
+        vlan: 10
+        ip_last_octet: 11
+      - identity_suffix: runner
+        vm_name_template: "{{ range_id }}-runner"
+        host_id_template: "{{ range_id }}-runner"
+        ram_gb: 8
+        cpus: 4
+        vlan: 10
+        ip_last_octet: 12
+      - identity_suffix: malcolm
+        vm_name_template: "{{ range_id }}-malcolm"
+        host_id_template: "{{ range_id }}-malcolm"
+        ram_gb: 64
+        cpus: 8
+        vlan: 10
+        ip_last_octet: 13
+      - identity_suffix: splunk
+        vm_name_template: "{{ range_id }}-splunk"
+        host_id_template: "{{ range_id }}-splunk"
+        ram_gb: 12
+        cpus: 4
+        vlan: 10
+        ip_last_octet: 14
+      - identity_suffix: workload
+        vm_name_template: "{{ range_id }}-workload"
+        host_id_template: "{{ range_id }}-workload"
+        ram_gb: 16
+        cpus: 6
+        vlan: 10
+        ip_last_octet: 15
+    mapping_source_schema:
+      planned_vm:
+        identity_suffix:
+          type: enum[gitlab,runner,malcolm,splunk,workload]
+        host_id_template:
+          type: range_template[str]
+        ip_last_octet:
+          type: int
+        provisioning_user:
+          type: linux_user
+          required_at: TASK_8_MATERIALIZATION
+          source: MCP_TEMPLATE_DISCOVERY
+        lab_ip:
+          type: str
+          derive:
+            operation: derive_lab_ip
+            inputs:
+              - verified_inputs.network.observed.lab_cidr
+              - planned_vm.ip_last_octet
+        dependencies:
+          gitlab:
+            host_id_template:
+              type: range_template[str]
+              derive:
+                operation: lookup_dependency_host
+                role: gitlab
+          splunk:
+            host_id_template:
+              type: range_template[str]
+              derive:
+                operation: lookup_dependency_host
+                role: splunk
+            hec_url:
+              type: url
+              derive:
+                operation: build_dependency_url
+                role: splunk
+                scheme: http
+                port: 8088
+                path: /services/collector
+    firewall_policy:
+      management:
+        destinations: all
+        ports: [22]
+      vpn:
+        gitlab:
+          ports: [80]
+        splunk:
+          ports: [8000, 8089]
+        malcolm:
+          ports_source: verified_inputs.network.observed.service_ports.malcolm
+      peers:
+        - sources: [runner]
+          destination: gitlab
+          ports: [80]
+        - sources: [gitlab, runner, workload]
+          destination: splunk
+          ports: [9997]
+        - sources: [workload]
+          destination: splunk
+          ports: [8088]
+    role_variable_contracts:
+      guest_firewall:
+        detection_firewall_profile:
+          source: planned_vm.identity_suffix
+          type: enum[gitlab,runner,malcolm,splunk,workload]
+        detection_firewall_lab_ip:
+          operation: derive_lab_ip
+          inputs:
+            lab_cidr:
+              source: verified_inputs.network.observed.lab_cidr
+            ip_last_octet:
+              source: planned_vm.ip_last_octet
+          type: str
+        detection_firewall_management_cidrs:
+          source: verified_inputs.network.observed.management_cidrs
+          type: list[str]
+        detection_firewall_vpn_cidrs:
+          source: verified_inputs.network.observed.vpn_cidrs
+          type: list[str]
+        detection_firewall_docker_bridges:
+          source: verified_inputs.network.observed.docker_bridge_interfaces
+          type: list[str]
+        detection_firewall_allowed_tcp:
+          operation: assemble_firewall_rules
+          inputs:
+            lab_cidr:
+              source: verified_inputs.network.observed.lab_cidr
+            management_cidrs:
+              source: verified_inputs.network.observed.management_cidrs
+            vpn_cidrs:
+              source: verified_inputs.network.observed.vpn_cidrs
+            planned_vms:
+              source: contract.planned_vms
+            policy:
+              source: contract.firewall_policy
+            profile:
+              source: planned_vm.identity_suffix
+            service_ports:
+              source: verified_inputs.network.observed.service_ports
+          type: list[FirewallRule]
+      linux_logging:
+        detection_linux_host_id:
+          source: planned_vm.host_id_template
+          type: range_template[str]
+        detection_audit_dispatch:
+          source: verified_inputs.capabilities.audit_dispatch.observed
+          type: AuditDispatch
+      splunk:
+        detection_splunk_artifact:
+          source: verified_inputs.downloads.splunk.observed
+          type: Artifact
+        detection_splunk_download_auth_path:
+          source: runtime_secret.splunk_download_auth_path
+          type: str|null
+        detection_splunk_license:
+          source: verified_inputs.capabilities.splunk.observed
+          type: SplunkTrialCapability
+        detection_splunk_hec_supported:
+          source: verified_inputs.capabilities.splunk.observed.hec
+          type: bool
+        detection_splunk_search_api_supported:
+          source: verified_inputs.capabilities.splunk.observed.search_api
+          type: bool
+        detection_splunk_bind_ip:
+          operation: derive_lab_ip
+          inputs:
+            lab_cidr:
+              source: verified_inputs.network.observed.lab_cidr
+            ip_last_octet:
+              source: planned_vm.ip_last_octet
+          type: str
+        detection_splunk_admin_password:
+          source: runtime_secret.splunk_admin_password
+          type: str
+        detection_splunk_restore_authorized:
+          value: false
+          type: bool
+        detection_splunk_maintenance_state_path:
+          value: /var/lib/detection-engineering/splunk-maintenance-state.json
+          type: absolute_path
+      forwarder:
+        detection_forwarder_artifact:
+          source: verified_inputs.downloads.forwarder.observed
+          type: Artifact
+        detection_forwarder_download_auth_path:
+          source: runtime_secret.forwarder_download_auth_path
+          type: str|null
+        detection_forwarder_profile:
+          source: planned_vm.identity_suffix
+          type: enum[gitlab,runner,workload]
+        detection_forwarder_inputs:
+          operation: project_forwarder_inputs
+          inputs:
+            telemetry_sources:
+              source: contract.telemetry_matrix.sources
+            profile:
+              source: planned_vm.identity_suffix
+          type: list[ForwarderInput]
+        detection_splunk_receiver_host:
+          operation: lookup_dependency_host
+          inputs:
+            planned_vms:
+              source: contract.planned_vms
+            role:
+              value: splunk
+          type: range_template[str]
+        detection_splunk_receiver_port:
+          value: 9997
+          type: int
+      gitlab:
+        detection_gitlab_packages:
+          source: verified_inputs.apt.gitlab.observed.packages
+          type: list[PackagePin]
+        detection_gitlab_repository_url:
+          source: verified_inputs.apt.gitlab.observed.repository_url
+          type: https_url
+        detection_gitlab_signing_key_url:
+          source: verified_inputs.apt.gitlab.observed.signing_key_url
+          type: https_url
+        detection_gitlab_signing_key_fingerprint:
+          source: verified_inputs.apt.gitlab.observed.signing_key_fingerprint
+          type: str
+        detection_gitlab_log_contract:
+          source: verified_inputs.capabilities.gitlab_ce_logs.observed
+          type: GitLabLogContract
+        detection_runner_api_contract:
+          source: verified_inputs.capabilities.runner_api.observed
+          type: RunnerApiContract
+        detection_gitlab_root_password:
+          source: runtime_secret.gitlab_root_password
+          type: str
+      runner:
+        detection_runner_packages:
+          source: verified_inputs.apt.runner.observed.packages
+          type: list[PackagePin]
+        detection_runner_repository_url:
+          source: verified_inputs.apt.runner.observed.repository_url
+          type: https_url
+        detection_runner_signing_key_url:
+          source: verified_inputs.apt.runner.observed.signing_key_url
+          type: https_url
+        detection_runner_signing_key_fingerprint:
+          source: verified_inputs.apt.runner.observed.signing_key_fingerprint
+          type: str
+        detection_runner_description:
+          source: planned_vm.host_id_template
+          type: range_template[str]
+        detection_gitlab_host:
+          operation: lookup_dependency_host
+          inputs:
+            planned_vms:
+              source: contract.planned_vms
+            role:
+              value: gitlab
+          type: range_template[str]
+        detection_runner_api_contract:
+          source: verified_inputs.capabilities.runner_api.observed
+          type: RunnerApiContract
+      workload:
+        detection_docker_packages:
+          source: verified_inputs.apt.docker.observed.packages
+          type: list[PackagePin]
+        detection_docker_repository_url:
+          source: verified_inputs.apt.docker.observed.repository_url
+          type: https_url
+        detection_docker_signing_key_url:
+          source: verified_inputs.apt.docker.observed.signing_key_url
+          type: https_url
+        detection_docker_signing_key_fingerprint:
+          source: verified_inputs.apt.docker.observed.signing_key_fingerprint
+          type: str
+        detection_minikube_artifact:
+          operation: project_runtime_artifact
+          inputs:
+            artifact:
+              source: verified_inputs.downloads.minikube.observed
+          type: RuntimeArtifact
+        detection_kubectl_artifact:
+          operation: project_runtime_artifact
+          inputs:
+            artifact:
+              source: verified_inputs.downloads.kubectl.observed
+          type: RuntimeArtifact
+        detection_helm_artifact:
+          operation: project_runtime_artifact
+          inputs:
+            artifact:
+              source: verified_inputs.downloads.helm.observed
+          type: RuntimeArtifact
+        detection_otel_chart:
+          source: verified_inputs.charts.otel.observed
+          type: HelmChartPin
+        detection_otel_contract:
+          source: verified_inputs.capabilities.otel.observed
+          type: OtelContract
+        detection_workload_user:
+          value: deworkload
+          type: linux_user
+        detection_cluster_name:
+          source: contract.cluster_name_template
+          type: range_template[str]
+        detection_splunk_hec_url:
+          operation: build_dependency_url
+          inputs:
+            planned_vms:
+              source: contract.planned_vms
+            role:
+              value: splunk
+            scheme:
+              value: http
+            port:
+              value: 8088
+            path:
+              value: /services/collector
+          type: url
+        detection_runtime_token_state:
+          source: runtime_secret.hec_workload.state
+          type: enum[present,absent]
+      malcolm:
+        ludus_install_malcolm_user:
+          source: planned_vm.provisioning_user
+          type: linux_user
+        ludus_install_malcolm_install_dir:
+          source: role_defaults.ludus_install_malcolm.install_dir
+          type: absolute_path
+        ludus_install_malcolm_version:
+          source: verified_inputs.git.malcolm.observed.tag
+          type: str
+        ludus_install_malcolm_commit:
+          source: verified_inputs.git.malcolm.observed.commit
+          type: hex40
+        ludus_install_malcolm_venv_dir:
+          source: role_defaults.ludus_install_malcolm.venv_dir
+          type: absolute_path
+        ludus_install_malcolm_admin_username:
+          source: runtime_secret.malcolm_admin_username
+          type: str
+        ludus_install_malcolm_admin_password:
+          source: runtime_secret.malcolm_admin_password
+          type: str
+        ludus_install_malcolm_capture_enabled:
+          value: true
+          type: bool
+        ludus_install_malcolm_capture_interface:
+          source: verified_inputs.network.observed.guest_interface
+          type: str
+        ludus_install_malcolm_capture_filter:
+          source: role_defaults.ludus_install_malcolm.capture_filter
+          type: str
+        ludus_install_malcolm_capture_rotation_megabytes:
+          source: role_defaults.ludus_install_malcolm.capture_rotation_megabytes
+          type: int
+        ludus_install_malcolm_capture_rotation_minutes:
+          source: role_defaults.ludus_install_malcolm.capture_rotation_minutes
+          type: int
+        ludus_install_malcolm_image_pull_timeout_seconds:
+          source: role_defaults.ludus_install_malcolm.image_pull_timeout_seconds
+          type: int
+        ludus_install_malcolm_start_timeout_seconds:
+          source: role_defaults.ludus_install_malcolm.start_timeout_seconds
+          type: int
+        ludus_install_malcolm_stop_timeout_seconds:
+          source: role_defaults.ludus_install_malcolm.stop_timeout_seconds
+          type: int
+        ludus_install_malcolm_readiness_timeout_seconds:
+          source: role_defaults.ludus_install_malcolm.readiness_timeout_seconds
+          type: int
+        ludus_install_malcolm_health_poll_interval_seconds:
+          source: role_defaults.ludus_install_malcolm.health_poll_interval_seconds
+          type: int
+        ludus_install_malcolm_tls_dhparam_size:
+          source: role_defaults.ludus_install_malcolm.tls_dhparam_size
+          type: int
+        ludus_install_malcolm_systemd_unit_path:
+          source: role_defaults.ludus_install_malcolm.systemd_unit_path
+          type: absolute_path
+        ludus_install_malcolm_tcp_retries2:
+          source: role_defaults.ludus_install_malcolm.tcp_retries2
+          type: int|null
