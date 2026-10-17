@@ -1,0 +1,26 @@
+---
+- name: Require a bounded selected-version readiness contract
+  ansible.builtin.assert:
+    that:
+      - detection_gitlab_readiness_contract.keys() | list | sort == ['attempts', 'delay_seconds', 'endpoint', 'method', 'success_statuses']
+      - detection_gitlab_readiness_contract.endpoint is match('^/[^?\s]+$')
+      - detection_gitlab_readiness_contract.method == 'GET'
+      - detection_gitlab_readiness_contract.success_statuses is sequence
+      - detection_gitlab_readiness_contract.success_statuses is not string
+      - detection_gitlab_readiness_contract.success_statuses | length > 0
+      - detection_gitlab_readiness_contract.success_statuses | unique | length == detection_gitlab_readiness_contract.success_statuses | length
+      - detection_gitlab_readiness_contract.attempts is integer
+      - detection_gitlab_readiness_contract.attempts >= 1
+      - detection_gitlab_readiness_contract.attempts <= 60
+      - detection_gitlab_readiness_contract.delay_seconds is integer
+      - detection_gitlab_readiness_contract.delay_seconds >= 0
+      - detection_gitlab_readiness_contract.delay_seconds <= 30
+    fail_msg: "BLOCKED: selected-version bounded GitLab readiness contract is mandatory"
+
+- name: Require unique valid readiness success statuses
+  ansible.builtin.assert:
+    that:
+      - item is integer
+      - item >= 100
+      - item <= 599
+  loop: "{{ detection_gitlab_readiness_contract.success_statuses }}"

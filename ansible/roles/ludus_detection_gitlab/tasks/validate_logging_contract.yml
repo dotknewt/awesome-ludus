@@ -1,0 +1,31 @@
+---
+- name: Require exhaustive producer-safe GitLab log classification
+  ansible.builtin.assert:
+    that:
+      - detection_gitlab_log_contract.keys() | list | sort == ['paths', 'producer_safe_fields', 'query_and_auth_excluded', 'unavailable_classes']
+      - detection_gitlab_log_contract.query_and_auth_excluded | bool
+      - detection_gitlab_log_contract.paths is mapping
+      - detection_gitlab_log_contract.producer_safe_fields is mapping
+      - detection_gitlab_log_contract.producer_safe_fields.access | default([]) | sort == ['identity', 'method', 'path', 'status', 'time'] | sort
+      - detection_gitlab_log_contract.unavailable_classes is sequence
+      - detection_gitlab_log_contract.unavailable_classes is not string
+      - detection_gitlab_log_contract.unavailable_classes | unique | length == detection_gitlab_log_contract.unavailable_classes | length
+      - detection_gitlab_log_contract.paths.keys() | list | difference(['application', 'audit']) | length == 0
+      - detection_gitlab_log_contract.unavailable_classes | difference(['application', 'audit']) | length == 0
+      - "('application' in detection_gitlab_log_contract.paths) != ('application' in detection_gitlab_log_contract.unavailable_classes)"
+      - "('audit' in detection_gitlab_log_contract.paths) != ('audit' in detection_gitlab_log_contract.unavailable_classes)"
+      - detection_gitlab_log_contract.producer_safe_fields.keys() | list | sort == (['access'] + (detection_gitlab_log_contract.paths.keys() | list)) | sort
+    fail_msg: "BLOCKED: application and audit must each be exactly available-safe or an explicit CE gap"
+
+- name: Require safe concrete paths and nonempty producer field sets
+  ansible.builtin.assert:
+    that:
+      - item.key in detection_gitlab_log_contract.producer_safe_fields
+      - item.key not in detection_gitlab_log_contract.unavailable_classes
+      - item.value is match('^/[^\s*?]+$')
+      - detection_gitlab_log_contract.producer_safe_fields[item.key] is sequence
+      - detection_gitlab_log_contract.producer_safe_fields[item.key] is not string
+      - detection_gitlab_log_contract.producer_safe_fields[item.key] | length > 0
+      - detection_gitlab_log_contract.producer_safe_fields[item.key] | unique | length == detection_gitlab_log_contract.producer_safe_fields[item.key] | length
+    fail_msg: "BLOCKED: {{ item.key }} lacks a unique nonempty producer-safe field contract"
+  loop: "{{ detection_gitlab_log_contract.paths | dict2items }}"
