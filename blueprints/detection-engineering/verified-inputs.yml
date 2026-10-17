@@ -118,6 +118,17 @@ downloads:
       HTTP HEAD returned 200 and Content-Length 116437450, but SHA-256,
       package identity/scripts, download authentication, and OS compatibility are unverified.
     stops: [4, 8, 9, 10]
+  laurel:
+    status: BLOCKED
+    source:
+      url: https://github.com/threathunters-io/laurel/releases/tag/v0.6.3
+      observed_at: "2026-10-17T00:00:00Z"
+    observed: null
+    limitation: >-
+      ConstructingDefense's v0.6.3 is only the V1 starting version. An immutable
+      artifact URL, SHA-256, archive layout, and target compatibility remain
+      unverified; installation is BLOCKED and no checksum is fabricated.
+    stops: [8, 9, 10]
   minikube: &blocked_runtime_download
     status: BLOCKED
     source:
@@ -222,14 +233,6 @@ capabilities:
     observed: null
     limitation: Exact-version paused-at-creation and minimum local registration semantics are unverified.
     stops: [5, 6, 8, 9, 10]
-  audit_dispatch:
-    status: BLOCKED
-    source:
-      url: https://github.com/linux-audit/audit-documentation
-      observed_at: "2026-10-16T19:24:19Z"
-    observed: null
-    limitation: Package version and fail-closed dispatcher protocol contract are unverified.
-    stops: [2, 8, 9, 10]
   otel:
     status: BLOCKED
     source:

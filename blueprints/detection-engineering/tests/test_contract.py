@@ -36,7 +36,13 @@ EXPECTED_ROLE_VARIABLES = {
         "detection_firewall_docker_bridges",
         "detection_firewall_allowed_tcp",
     },
-    "linux_logging": {"detection_linux_host_id", "detection_audit_dispatch"},
+    "linux_logging": {
+        "detection_linux_host_id",
+        "detection_laurel_artifact",
+        "detection_laurel_read_user",
+        "detection_laurel_rotate_size",
+        "detection_laurel_rotate_generations",
+    },
     "splunk": {
         "detection_splunk_artifact",
         "detection_splunk_download_auth_path",
@@ -53,7 +59,6 @@ EXPECTED_ROLE_VARIABLES = {
         "detection_forwarder_download_auth_path",
         "detection_forwarder_profile",
         "detection_forwarder_inputs",
-        "detection_forwarder_producer_contract",
         "detection_splunk_receiver_host",
         "detection_splunk_receiver_port",
     },
@@ -282,6 +287,33 @@ def test_every_manifest_value_maps_to_exact_role_var(blueprint_root, read_yaml):
         assert actual["workload"][name]["operation"] == "project_runtime_artifact"
 
 
+def test_native_laurel_contract_is_bounded_by_host_role(blueprint_root, read_yaml):
+    config = _load(blueprint_root, read_yaml, "range-config.yml")
+    mappings = config["ludus_extensions"]["detection_engineering_contract"][
+        "role_variable_contracts"
+    ]
+    linux = mappings["linux_logging"]
+    assert linux["detection_laurel_read_user"] == {
+        "operation": "map_laurel_read_user",
+        "inputs": {"profile": {"source": "planned_vm.identity_suffix"}},
+        "type": "enum[splunkfwd,splunk]",
+    }
+    assert linux["detection_laurel_artifact"]["operation"] == "project_runtime_artifact"
+    assert linux["detection_laurel_rotate_size"] == {"value": 5000000, "type": "int"}
+    assert linux["detection_laurel_rotate_generations"] == {"value": 10, "type": "int"}
+    for role in mappings.values():
+        assert "detection_linux_forwarder_access" not in role
+        assert "detection_log_reader_group" not in role
+        assert "detection_forwarder_producer_contract" not in role
+
+    for profile in ("gitlab", "runner", "workload"):
+        assert support.map_laurel_read_user(profile) == "splunkfwd"
+    assert support.map_laurel_read_user("splunk") == "splunk"
+    for unsupported in ("malcolm", "unknown", ""):
+        with pytest.raises(ValueError, match="Laurel host profile"):
+            support.map_laurel_read_user(unsupported)
+
+
 def test_every_matrix_input_has_one_reader(blueprint_root, read_yaml):
     matrix = _load(blueprint_root, read_yaml, "telemetry-matrix.yml")
     assert set(matrix) == {"schema_version", "sources"}
@@ -297,28 +329,41 @@ def test_every_matrix_input_has_one_reader(blueprint_root, read_yaml):
         assert source["reader"] in {"forwarder", "splunk_local", "otel_host", "otel_cluster"}
         assert source["required"] is True
         assert source["safe_fields"]
-        assert source["negative_fields"]
         ids.append(source["id"])
         inputs.append((source["boundary"], source["vm_role"], source["path_or_input"]))
     assert len(ids) == len(set(ids))
     assert len(inputs) == len(set(inputs))
     assert len(ids) == 18
 
+    expected_negative_fields = {source_id: [] for source_id in ids}
+    expected_negative_fields["minikube-api-audit"] = ["request_body", "response_body"]
+    assert {
+        source["id"]: source["negative_fields"] for source in matrix["sources"]
+    } == expected_negative_fields
+    support.validate_telemetry_negative_fields(matrix["sources"])
+
+    blanket_redaction = copy.deepcopy(matrix["sources"])
+    next(row for row in blanket_redaction if row["id"] == "gitlab-auth")[
+        "negative_fields"
+    ] = ["password", "token", "authorization"]
+    with pytest.raises(ValueError, match="blanket telemetry redaction"):
+        support.validate_telemetry_negative_fields(blanket_redaction)
+
     expected = {
         source_id: values
         for source_id, values in [
             ("gitlab-auth", ("host", "gitlab", "/var/log/auth.log", "forwarder", "de_linux", "linux:auth", None)),
             ("gitlab-system", ("host", "gitlab", "/var/log/syslog", "forwarder", "de_linux", "linux:system", None)),
-            ("gitlab-audit-safe", ("host", "gitlab", "/var/log/detection-engineering/audit-safe.jsonl", "forwarder", "de_linux", "linux:audit:safe", "capabilities.audit_dispatch")),
+            ("gitlab-audit-laurel", ("host", "gitlab", "/var/log/laurel/audit.log", "forwarder", "de_linux", "linux:audit:laurel", None)),
             ("runner-auth", ("host", "runner", "/var/log/auth.log", "forwarder", "de_linux", "linux:auth", None)),
             ("runner-system", ("host", "runner", "/var/log/syslog", "forwarder", "de_linux", "linux:system", None)),
-            ("runner-audit-safe", ("host", "runner", "/var/log/detection-engineering/audit-safe.jsonl", "forwarder", "de_linux", "linux:audit:safe", "capabilities.audit_dispatch")),
+            ("runner-audit-laurel", ("host", "runner", "/var/log/laurel/audit.log", "forwarder", "de_linux", "linux:audit:laurel", None)),
             ("workload-auth", ("host", "workload", "/var/log/auth.log", "forwarder", "de_linux", "linux:auth", None)),
             ("workload-system", ("host", "workload", "/var/log/syslog", "forwarder", "de_linux", "linux:system", None)),
-            ("workload-audit-safe", ("host", "workload", "/var/log/detection-engineering/audit-safe.jsonl", "forwarder", "de_linux", "linux:audit:safe", "capabilities.audit_dispatch")),
+            ("workload-audit-laurel", ("host", "workload", "/var/log/laurel/audit.log", "forwarder", "de_linux", "linux:audit:laurel", None)),
             ("splunk-auth", ("host", "splunk", "/var/log/auth.log", "splunk_local", "de_linux", "linux:auth", None)),
             ("splunk-system", ("host", "splunk", "/var/log/syslog", "splunk_local", "de_linux", "linux:system", None)),
-            ("splunk-audit-safe", ("host", "splunk", "/var/log/detection-engineering/audit-safe.jsonl", "splunk_local", "de_linux", "linux:audit:safe", "capabilities.audit_dispatch")),
+            ("splunk-audit-laurel", ("host", "splunk", "/var/log/laurel/audit.log", "splunk_local", "de_linux", "linux:audit:laurel", None)),
             ("runner-registration", ("host", "runner", "/var/log/detection-engineering/runner-registration.jsonl", "forwarder", "de_runner", "gitlab:runner:registration", "capabilities.runner_api")),
             ("splunk-internal", ("host", "splunk", "$SPLUNK_HOME/var/log/splunk/*.log", "splunk_local", "_internal", "splunk:native", "capabilities.splunk")),
             ("workload-docker-container", ("host", "workload", "/var/lib/docker/containers/*/*-json.log", "otel_host", "de_runtime", "docker:container", "capabilities.otel")),
@@ -356,7 +401,7 @@ def test_splunk_candidate_record_matches_spec_urls_verbatim(blueprint_root, read
     assert record["observed"]["forwarder_tgz_reference_url"].endswith(".tgz")
     assert record["observed"]["windows_msi_reference_url"].endswith(".msi")
     assert set(inputs["downloads"]) == {
-        "splunk", "forwarder", "minikube", "kubectl", "helm", "otel_host"
+        "splunk", "forwarder", "laurel", "minikube", "kubectl", "helm", "otel_host"
     }
 
 
@@ -504,12 +549,6 @@ def test_mapping_contract_resolves_explicit_synthetic_sources(blueprint_root, re
         "search_api": True,
         "auth_behavior": "synthetic-auth",
     }
-    audit_dispatch = {
-        "package_version": "1.2.3-1",
-        "plugin_protocol": "builtin_af_unix",
-        "write_logs_false": True,
-        "fail_closed": True,
-    }
     runner_api = {
         "bootstrap_auth": {
             "credential_type": "synthetic-access-token",
@@ -547,7 +586,6 @@ def test_mapping_contract_resolves_explicit_synthetic_sources(blueprint_root, re
         "version": "1.2.3",
         "digest": "sha256:" + "c" * 64,
     }
-    audit_gate = _synthetic_gate(audit_dispatch, [2, 8, 9, 10])
     package_observed = {
         "repository_url": "https://example.invalid/docker",
         "signing_key_url": "https://example.invalid/docker-key",
@@ -598,10 +636,9 @@ def test_mapping_contract_resolves_explicit_synthetic_sources(blueprint_root, re
             "workload": [22],
         },
         "verified_inputs.network.observed.guest_interface": "eth0",
-        "verified_inputs.capabilities.audit_dispatch.observed": audit_dispatch,
-        "verified_inputs.capabilities.audit_dispatch": audit_gate,
         "verified_inputs.downloads.splunk.observed": artifact,
         "verified_inputs.downloads.forwarder.observed": artifact,
+        "verified_inputs.downloads.laurel.observed": artifact,
         "verified_inputs.downloads.minikube.observed": artifact,
         "verified_inputs.downloads.kubectl.observed": artifact,
         "verified_inputs.downloads.helm.observed": artifact,
@@ -666,11 +703,15 @@ def test_mapping_contract_resolves_explicit_synthetic_sources(blueprint_root, re
         "ports": [22],
     }]
     assert resolved["forwarder"]["detection_splunk_receiver_host"] == "{{ range_id }}-splunk"
+    assert resolved["linux_logging"]["detection_laurel_artifact"] == {
+        "version": "1.2.3",
+        "url": "https://example.invalid/tool",
+        "sha256": "a" * 64,
+        "download_auth_required": False,
+    }
+    assert resolved["linux_logging"]["detection_laurel_read_user"] == "splunkfwd"
     assert resolved["forwarder"]["detection_forwarder_inputs"][0].keys() == {"path", "index", "sourcetype", "safe_fields"}
     assert len(resolved["forwarder"]["detection_forwarder_inputs"]) == 3
-    assert set(resolved["forwarder"]["detection_forwarder_producer_contract"]) == {
-        "schema_version", "audit_dispatch"
-    }
     assert resolved["workload"]["detection_minikube_artifact"] == {
         "version": "1.2.3",
         "url": "https://example.invalid/tool",
@@ -761,11 +802,6 @@ def test_mapping_contract_resolves_explicit_synthetic_sources(blueprint_root, re
     invalid_runner_api["manager"]["pause_at_create"] = False
     invalid_complex_sources = [
         (
-            "verified_inputs.capabilities.audit_dispatch.observed",
-            {**audit_dispatch, "fail_closed": False},
-            "AuditDispatch",
-        ),
-        (
             "verified_inputs.capabilities.splunk.observed",
             {**trial, "initial_mode": "SYNTHETIC_WRONG_MODE"},
             "SplunkTrialCapability",
@@ -802,63 +838,48 @@ def test_mapping_contract_resolves_explicit_synthetic_sources(blueprint_root, re
     with pytest.raises(ValueError, match="service_ports.*list"):
         support.assemble_firewall_rules(contract["firewall_policy"], wrong_type, "malcolm")
 
+    unknown_reader_contract = copy.deepcopy(contract)
+    unknown_reader_contract["role_variable_contracts"]["linux_logging"][
+        "detection_laurel_read_user"
+    ] = {"value": "root", "type": "enum[splunkfwd,splunk]"}
+    with pytest.raises(ValueError, match="must be one of"):
+        support.resolve_role_variable_contracts(unknown_reader_contract, sources)
 
-def test_forwarder_producer_contract_projects_linux_only_profiles(blueprint_root, read_yaml):
+
+def test_forwarder_projects_native_laurel_profiles_without_producer_proof(blueprint_root, read_yaml):
     config = _load(blueprint_root, read_yaml, "range-config.yml")
     contract = config["ludus_extensions"]["detection_engineering_contract"]
     policy = contract["forwarder_source_policy"]
     matrix = _load(blueprint_root, read_yaml, "telemetry-matrix.yml")["sources"]
-    audit = _synthetic_gate(
-        {
-            "package_version": "1.2.3-1",
-            "plugin_protocol": "builtin_af_unix",
-            "write_logs_false": True,
-            "fail_closed": True,
-        },
-        [2, 8, 9, 10],
-    )
-    gates = {"audit_dispatch": audit}
-
     expected_paths = {
         "gitlab": {
             "/var/log/auth.log", "/var/log/syslog",
-            "/var/log/detection-engineering/audit-safe.jsonl",
+            "/var/log/laurel/audit.log",
         },
         "runner": {
             "/var/log/auth.log", "/var/log/syslog",
-            "/var/log/detection-engineering/audit-safe.jsonl",
+            "/var/log/laurel/audit.log",
             "/var/log/detection-engineering/runner-registration.jsonl",
         },
         "workload": {
             "/var/log/auth.log", "/var/log/syslog",
-            "/var/log/detection-engineering/audit-safe.jsonl",
+            "/var/log/laurel/audit.log",
         },
     }
     for profile in ("gitlab", "runner", "workload"):
-        producer = support.build_forwarder_producer_contract(gates)
-        projected = support.project_forwarder_profile(profile, matrix, producer, policy)
-        assert set(producer) == {"schema_version", "audit_dispatch"}
-        assert producer["schema_version"] == 1
-        assert producer["audit_dispatch"] is audit
+        projected = support.project_forwarder_profile(profile, matrix, policy)
         assert {item["path"] for item in projected} == expected_paths[profile]
         assert len(projected) == {"gitlab": 3, "runner": 4, "workload": 3}[profile]
         assert all(set(item) == {"path", "index", "sourcetype", "safe_fields"} for item in projected)
 
     wrong_path = copy.deepcopy(matrix)
     next(row for row in wrong_path if row["id"] == "runner-registration")["path_or_input"] = "/tmp/arbitrary.log"
-    producer = support.build_forwarder_producer_contract(gates)
     with pytest.raises(ValueError, match="canonical.*runner-registration"):
-        support.project_forwarder_profile("runner", wrong_path, producer, policy)
+        support.project_forwarder_profile("runner", wrong_path, policy)
 
     missing_common = [row for row in matrix if row["id"] != "workload-auth"]
-    producer = support.build_forwarder_producer_contract(gates)
     with pytest.raises(ValueError, match="common.*coverage"):
-        support.project_forwarder_profile("workload", missing_common, producer, policy)
-
-    malformed_audit = copy.deepcopy(gates)
-    malformed_audit["audit_dispatch"]["observed"]["fail_closed"] = False
-    with pytest.raises(ValueError, match="fail closed"):
-        support.build_forwarder_producer_contract(malformed_audit)
+        support.project_forwarder_profile("workload", missing_common, policy)
 
 
 def test_removed_service_contracts_cannot_be_reintroduced(blueprint_root, read_yaml):
@@ -872,10 +893,21 @@ def test_removed_service_contracts_cannot_be_reintroduced(blueprint_root, read_y
     }
     removed_capabilities = {
         "gitlab_ce_logs", "runner_service_log", "docker_daemon_log",
+        "audit_dispatch",
     }
     assert removed_ids.isdisjoint({row["id"] for row in matrix})
     assert removed_capabilities.isdisjoint(inputs["capabilities"])
     assert "detection_gitlab_log_contract" not in contract["role_variable_contracts"]["gitlab"]
+    serialized = "\n".join(
+        (blueprint_root / name).read_text(encoding="utf-8")
+        for name in ("range-config.yml", "verified-inputs.yml", "telemetry-matrix.yml")
+    )
+    for removed in (
+        "audit-safe.jsonl", "linux:audit:safe", "audit_dispatch",
+        "managed_root_v1", "detection-forwarder-readers",
+        "detection_forwarder_producer_contract",
+    ):
+        assert removed not in serialized
 
     legal_gate = _synthetic_gate(
         {
@@ -891,20 +923,6 @@ def test_removed_service_contracts_cannot_be_reintroduced(blueprint_root, read_y
     with pytest.raises(ValueError, match="verified_inputs.capabilities"):
         support.validate_verified_inputs(reintroduced_inputs)
 
-    audit = _synthetic_gate(
-        {
-            "package_version": "1.2.3-1",
-            "plugin_protocol": "builtin_af_unix",
-            "write_logs_false": True,
-            "fail_closed": True,
-        },
-        [2, 8, 9, 10],
-    )
-    with pytest.raises(ValueError, match="canonical producer gates"):
-        support.build_forwarder_producer_contract(
-            {"audit_dispatch": audit, "runner_service_log": legal_gate}
-        )
-
     reintroduced_rows = copy.deepcopy(matrix)
     reintroduced_rows.append({
         "id": "runner-service",
@@ -916,15 +934,55 @@ def test_removed_service_contracts_cannot_be_reintroduced(blueprint_root, read_y
         "index": "de_runner",
         "sourcetype": "gitlab:runner",
         "safe_fields": ["_time", "host", "source", "sourcetype", "message"],
-        "negative_fields": ["password", "token", "authorization"],
+        "negative_fields": [],
         "required": True,
         "capability_gate": None,
     })
-    producer = support.build_forwarder_producer_contract({"audit_dispatch": audit})
     with pytest.raises(ValueError, match="profile coverage"):
         support.project_forwarder_profile(
-            "runner", reintroduced_rows, producer, contract["forwarder_source_policy"]
+            "runner", reintroduced_rows, contract["forwarder_source_policy"]
         )
+
+
+def test_laurel_artifact_and_native_privacy_contract(blueprint_root, read_yaml):
+    inputs = _load(blueprint_root, read_yaml, "verified-inputs.yml")
+    laurel = inputs["downloads"]["laurel"]
+    assert laurel["status"] == "BLOCKED"
+    assert laurel["observed"] is None
+    assert laurel["stops"] == [8, 9, 10]
+    assert laurel["source"]["url"].endswith("/threathunters-io/laurel/releases/tag/v0.6.3")
+    assert "starting" in laurel["limitation"].lower()
+    assert "SHA-256" in laurel["limitation"]
+
+    rows = _load(blueprint_root, read_yaml, "telemetry-matrix.yml")["sources"]
+    audit_rows = [row for row in rows if row["class"] == "audit_process"]
+    assert len(audit_rows) == 4
+    for row in audit_rows:
+        assert row["path_or_input"] == "/var/log/laurel/audit.log"
+        assert row["sourcetype"] == "linux:audit:laurel"
+        assert row["capability_gate"] is None
+        assert row["negative_fields"] == []
+        assert "argv" not in row["safe_fields"]
+        assert "environment" not in row["safe_fields"]
+
+
+def test_laurel_scope_docs_preserve_native_content_and_original_roles(repository_root):
+    spec = (repository_root / "docs/superpowers/specs/2026-10-16-detection-engineering-design.md").read_text(encoding="utf-8")
+    plan = (repository_root / "docs/superpowers/plans/2026-10-16-detection-engineering.md").read_text(encoding="utf-8")
+    combined = spec + plan
+    assert "Native command arguments/environment are not redaction failures" in spec
+    assert "Telemetry redaction is not a V1 goal" in plan
+    assert "Metadata-only Kubernetes audit remains a collection-scope choice" in plan
+    assert "Canary zero-results" not in plan
+    assert "absent from telemetry/evidence" not in plan
+    assert "credential operation and evidence hygiene" in plan
+    for role in (
+        "role_linux_logging", "role_splunk_collector_linuxv",
+        "role_k8s_telemetry_collection",
+    ):
+        assert role in combined
+    assert "read-only" in combined
+    assert "floating TLS-verification-disabled" in combined
 
 
 def test_runtime_layouts_and_combined_packages_are_strictly_bound(blueprint_root, read_yaml):
@@ -1060,13 +1118,13 @@ def test_verified_inputs_strict_schema_rejects_malformed_verified_records(bluepr
         ("network", None),
         ("apt", "gitlab"),
         ("downloads", "splunk"),
+        ("downloads", "laurel"),
         ("artifact_layouts", "helm"),
         ("git", "malcolm"),
         ("charts", "otel"),
         ("capabilities", "splunk"),
         ("capabilities", "splunk_uninstall"),
         ("capabilities", "runner_api"),
-        ("capabilities", "audit_dispatch"),
         ("capabilities", "otel"),
         ("test_tools", None),
     ]

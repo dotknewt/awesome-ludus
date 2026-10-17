@@ -298,14 +298,6 @@ def _runner_api(value: Any, path: str) -> None:
         _fail(f"{path}.manager.pause_at_create", "must be true")
 
 
-def _audit_dispatch(value: Any, path: str) -> None:
-    item = _keys(value, {"package_version", "plugin_protocol", "write_logs_false", "fail_closed"}, path)
-    _string(item["package_version"], f"{path}.package_version")
-    _string(item["plugin_protocol"], f"{path}.plugin_protocol")
-    if item["write_logs_false"] is not True or item["fail_closed"] is not True:
-        _fail(path, "must disable raw writes and fail closed")
-
-
 def _otel(value: Any, path: str) -> None:
     item = _keys(value, {"secret_file_provider", "audit_path", "node_log_inputs", "required_rbac"}, path)
     _boolean(item["secret_file_provider"], f"{path}.secret_file_provider")
@@ -406,8 +398,8 @@ def validate_verified_inputs(inputs: Any) -> None:
     for name, value in apt.items():
         _gate(value, f"verified_inputs.apt.{name}", apt_stops[name], _packages)
 
-    downloads = _keys(root["downloads"], {"splunk", "forwarder", "minikube", "kubectl", "helm", "otel_host"}, "verified_inputs.downloads")
-    download_stops = {"splunk": [3, 4, 7, 8, 9, 10], "forwarder": [4, 8, 9, 10], "minikube": [7, 8, 9, 10], "kubectl": [7, 8, 9, 10], "helm": [7, 8, 9, 10], "otel_host": [7, 8, 9, 10]}
+    downloads = _keys(root["downloads"], {"splunk", "forwarder", "laurel", "minikube", "kubectl", "helm", "otel_host"}, "verified_inputs.downloads")
+    download_stops = {"splunk": [3, 4, 7, 8, 9, 10], "forwarder": [4, 8, 9, 10], "laurel": [8, 9, 10], "minikube": [7, 8, 9, 10], "kubectl": [7, 8, 9, 10], "helm": [7, 8, 9, 10], "otel_host": [7, 8, 9, 10]}
     for name, value in downloads.items():
         _gate(value, f"verified_inputs.downloads.{name}", download_stops[name], _artifact)
     candidate_urls = candidates["splunk_10_6_1_1"]["observed"]
@@ -437,7 +429,7 @@ def validate_verified_inputs(inputs: Any) -> None:
     charts = _keys(root["charts"], {"otel"}, "verified_inputs.charts")
     _gate(charts["otel"], "verified_inputs.charts.otel", [7, 8, 9, 10], _chart)
 
-    capabilities = _keys(root["capabilities"], {"splunk", "splunk_free", "splunk_uninstall", "runner_api", "audit_dispatch", "otel"}, "verified_inputs.capabilities")
+    capabilities = _keys(root["capabilities"], {"splunk", "splunk_free", "splunk_uninstall", "runner_api", "otel"}, "verified_inputs.capabilities")
     _gate(capabilities["splunk"], "verified_inputs.capabilities.splunk", [3, 4, 7, 8, 9, 10], _splunk_capability)
     future = _keys(capabilities["splunk_free"], {"status", "source", "observed", "limitation"}, "verified_inputs.capabilities.splunk_free")
     if future["status"] not in {"UNVERIFIED", "VERIFIED", "INCOMPATIBLE"}:
@@ -454,7 +446,6 @@ def validate_verified_inputs(inputs: Any) -> None:
         _splunk_free(future["observed"], "verified_inputs.capabilities.splunk_free.observed")
     _gate(capabilities["splunk_uninstall"], "verified_inputs.capabilities.splunk_uninstall", [11], _uninstall)
     _gate(capabilities["runner_api"], "verified_inputs.capabilities.runner_api", [5, 6, 8, 9, 10], _runner_api)
-    _gate(capabilities["audit_dispatch"], "verified_inputs.capabilities.audit_dispatch", [2, 8, 9, 10], _audit_dispatch)
     _gate(capabilities["otel"], "verified_inputs.capabilities.otel", [7, 8, 9, 10], _otel)
     _gate(root["test_tools"], "verified_inputs.test_tools", [1, 2, 3, 4, 5, 6, 7, 8, 9], _test_tools)
 
@@ -623,6 +614,36 @@ def _verified_gate_observed(
     return gate["observed"]
 
 
+def validate_telemetry_negative_fields(rows: Any) -> None:
+    """Allow only the explicit Kubernetes audit collection-scope exclusions."""
+
+    if not isinstance(rows, list):
+        _fail("telemetry.sources", "must be a list")
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            _fail(f"telemetry.sources[{index}]", "must be an object")
+        source_id = _string(row.get("id"), f"telemetry.sources[{index}].id")
+        actual = _strings(
+            row.get("negative_fields"),
+            f"telemetry.sources[{index}].negative_fields",
+        )
+        expected = (
+            ["request_body", "response_body"]
+            if source_id == "minikube-api-audit"
+            else []
+        )
+        if actual != expected:
+            if expected:
+                _fail(
+                    f"telemetry.sources[{index}].negative_fields",
+                    "must contain only the Kubernetes audit collection-scope body exclusions",
+                )
+            _fail(
+                f"telemetry.sources[{index}].negative_fields",
+                "blanket telemetry redaction is forbidden",
+            )
+
+
 def _validate_forwarder_policy(policy: Any, path: str) -> None:
     expected = {
         "common": [
@@ -639,10 +660,10 @@ def _validate_forwarder_policy(policy: Any, path: str) -> None:
                 "sourcetype": "linux:system",
             },
             {
-                "id_suffix": "audit-safe",
-                "path": "/var/log/detection-engineering/audit-safe.jsonl",
+                "id_suffix": "audit-laurel",
+                "path": "/var/log/laurel/audit.log",
                 "index": "de_linux",
-                "sourcetype": "linux:audit:safe",
+                "sourcetype": "linux:audit:laurel",
             },
         ],
         "profiles": {
@@ -656,25 +677,6 @@ def _validate_forwarder_policy(policy: Any, path: str) -> None:
     }
     if policy != expected:
         _fail(path, "must equal the canonical forwarder source/profile policy")
-
-
-def build_forwarder_producer_contract(
-    gates: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Build the strict V1 audit-only full-gate producer contract."""
-
-    if set(gates) != {"audit_dispatch"}:
-        _fail("forwarder.gates", "must contain exactly the canonical producer gates")
-    _verified_gate_observed(
-        gates["audit_dispatch"],
-        "forwarder.audit_dispatch",
-        [2, 8, 9, 10],
-        _audit_dispatch,
-    )
-    return {
-        "schema_version": 1,
-        "audit_dispatch": gates["audit_dispatch"],
-    }
 
 
 def _matrix_row(rows: list[dict[str, Any]], source_id: str, path: str) -> dict[str, Any]:
@@ -696,7 +698,6 @@ def _project_input(row: dict[str, Any], path: str) -> dict[str, Any]:
 def project_forwarder_profile(
     profile: str,
     matrix_rows: Any,
-    producer_contract: Mapping[str, Any],
     policy: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
     """Project one canonical Linux-only V1 forwarder profile."""
@@ -704,7 +705,7 @@ def project_forwarder_profile(
     _validate_forwarder_policy(policy, "contract.forwarder_source_policy")
     if not isinstance(matrix_rows, list):
         _fail("forwarder.matrix", "must be a list")
-    _assignable(producer_contract, "ForwarderProducerContract", "forwarder.producer_contract")
+    validate_telemetry_negative_fields(matrix_rows)
     projected: list[dict[str, Any]] = []
     expected_ids = set()
     for common in policy["common"]:
@@ -850,17 +851,12 @@ def _apply_mapping_operation(operation: str, inputs: dict[str, Any], path: str) 
     if operation == "assemble_firewall_rules":
         return _assemble_firewall_policy(inputs, path)
 
-    if operation == "project_forwarder_inputs":
-        producer = build_forwarder_producer_contract(
-            {"audit_dispatch": inputs["audit_dispatch_gate"]}
-        )
-        return project_forwarder_profile(
-            inputs["profile"], inputs["telemetry_sources"], producer, inputs["policy"]
-        )
+    if operation == "map_laurel_read_user":
+        return map_laurel_read_user(inputs["profile"])
 
-    if operation == "build_forwarder_producer_contract":
-        return build_forwarder_producer_contract(
-            {"audit_dispatch": inputs["audit_dispatch_gate"]}
+    if operation == "project_forwarder_inputs":
+        return project_forwarder_profile(
+            inputs["profile"], inputs["telemetry_sources"], inputs["policy"]
         )
 
     if operation == "project_runtime_artifact":
@@ -908,6 +904,16 @@ def _apply_mapping_operation(operation: str, inputs: dict[str, Any], path: str) 
         )
 
     _fail(path, f"unsupported mapping operation {operation!r}")
+
+
+def map_laurel_read_user(profile: Any) -> str:
+    """Map each supported host to its actual native Laurel reader account."""
+
+    if profile in {"gitlab", "runner", "workload"}:
+        return "splunkfwd"
+    if profile == "splunk":
+        return "splunk"
+    _fail("Laurel host profile", "must be gitlab, runner, workload, or splunk")
 
 
 def _assignable(value: Any, type_name: str, path: str) -> None:
@@ -982,8 +988,6 @@ def _assignable(value: Any, type_name: str, path: str) -> None:
         allowed = type_name[5:-1].split(",")
         if value not in allowed:
             _fail(path, f"must be one of {allowed}")
-    elif type_name == "AuditDispatch":
-        _audit_dispatch(value, f"{path}<AuditDispatch>")
     elif type_name == "SplunkTrialCapability":
         _splunk_capability(value, f"{path}<SplunkTrialCapability>")
     elif type_name == "RunnerApiContract":
@@ -992,17 +996,6 @@ def _assignable(value: Any, type_name: str, path: str) -> None:
         _chart(value, f"{path}<HelmChartPin>")
     elif type_name == "OtelContract":
         _otel(value, f"{path}<OtelContract>")
-    elif type_name == "ForwarderProducerContract":
-        item = _keys(
-            value,
-            {"schema_version", "audit_dispatch"},
-            f"{path}<ForwarderProducerContract>",
-        )
-        if item["schema_version"] != 1:
-            _fail(path, "producer contract schema_version must equal 1")
-        _verified_gate_observed(
-            item["audit_dispatch"], f"{path}.audit_dispatch", [2, 8, 9, 10], _audit_dispatch
-        )
     elif type_name == "ArtifactLayoutGateMap":
         if not isinstance(value, dict) or set(value) != {"minikube", "kubectl", "helm", "otel_host"}:
             _fail(path, "must contain four artifact layout gates")

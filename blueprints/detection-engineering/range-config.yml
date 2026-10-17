@@ -134,10 +134,10 @@ ludus_extensions:
           path: /var/log/syslog
           index: de_linux
           sourcetype: linux:system
-        - id_suffix: audit-safe
-          path: /var/log/detection-engineering/audit-safe.jsonl
+        - id_suffix: audit-laurel
+          path: /var/log/laurel/audit.log
           index: de_linux
-          sourcetype: linux:audit:safe
+          sourcetype: linux:audit:laurel
       profiles:
         gitlab:
           required_ids: []
@@ -199,9 +199,24 @@ ludus_extensions:
         detection_linux_host_id:
           source: planned_vm.host_id_template
           type: range_template[str]
-        detection_audit_dispatch:
-          source: verified_inputs.capabilities.audit_dispatch.observed
-          type: AuditDispatch
+        detection_laurel_artifact:
+          operation: project_runtime_artifact
+          inputs:
+            artifact:
+              source: verified_inputs.downloads.laurel.observed
+          type: RuntimeArtifact
+        detection_laurel_read_user:
+          operation: map_laurel_read_user
+          inputs:
+            profile:
+              source: planned_vm.identity_suffix
+          type: enum[splunkfwd,splunk]
+        detection_laurel_rotate_size:
+          value: 5000000
+          type: int
+        detection_laurel_rotate_generations:
+          value: 10
+          type: int
       splunk:
         detection_splunk_artifact:
           source: verified_inputs.downloads.splunk.observed
@@ -254,15 +269,7 @@ ludus_extensions:
               source: contract.forwarder_source_policy
             profile:
               source: planned_vm.identity_suffix
-            audit_dispatch_gate:
-              source: verified_inputs.capabilities.audit_dispatch
           type: list[ForwarderInput]
-        detection_forwarder_producer_contract:
-          operation: build_forwarder_producer_contract
-          inputs:
-            audit_dispatch_gate:
-              source: verified_inputs.capabilities.audit_dispatch
-          type: ForwarderProducerContract
         detection_splunk_receiver_host:
           operation: lookup_dependency_host
           inputs:

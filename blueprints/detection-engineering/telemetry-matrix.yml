@@ -11,7 +11,7 @@ sources:
     index: de_linux
     sourcetype: linux:auth
     safe_fields: [_time, host, source, sourcetype, message]
-    negative_fields: [password, token, authorization, request_body, response_body]
+    negative_fields: []
     required: true
     capability_gate: null
   - <<: *source_defaults
@@ -20,11 +20,12 @@ sources:
     path_or_input: /var/log/syslog
     sourcetype: linux:system
   - <<: *source_defaults
-    id: gitlab-audit-safe
+    id: gitlab-audit-laurel
     class: audit_process
-    path_or_input: /var/log/detection-engineering/audit-safe.jsonl
-    sourcetype: linux:audit:safe
-    capability_gate: capabilities.audit_dispatch
+    path_or_input: /var/log/laurel/audit.log
+    sourcetype: linux:audit:laurel
+    safe_fields: [_time, host, source, sourcetype]
+    negative_fields: []
   - <<: *source_defaults
     id: runner-auth
     vm_role: runner
@@ -35,12 +36,13 @@ sources:
     path_or_input: /var/log/syslog
     sourcetype: linux:system
   - <<: *source_defaults
-    id: runner-audit-safe
+    id: runner-audit-laurel
     vm_role: runner
     class: audit_process
-    path_or_input: /var/log/detection-engineering/audit-safe.jsonl
-    sourcetype: linux:audit:safe
-    capability_gate: capabilities.audit_dispatch
+    path_or_input: /var/log/laurel/audit.log
+    sourcetype: linux:audit:laurel
+    safe_fields: [_time, host, source, sourcetype]
+    negative_fields: []
   - <<: *source_defaults
     id: workload-auth
     vm_role: workload
@@ -51,12 +53,13 @@ sources:
     path_or_input: /var/log/syslog
     sourcetype: linux:system
   - <<: *source_defaults
-    id: workload-audit-safe
+    id: workload-audit-laurel
     vm_role: workload
     class: audit_process
-    path_or_input: /var/log/detection-engineering/audit-safe.jsonl
-    sourcetype: linux:audit:safe
-    capability_gate: capabilities.audit_dispatch
+    path_or_input: /var/log/laurel/audit.log
+    sourcetype: linux:audit:laurel
+    safe_fields: [_time, host, source, sourcetype]
+    negative_fields: []
   - <<: *source_defaults
     id: splunk-auth
     vm_role: splunk
@@ -69,13 +72,14 @@ sources:
     reader: splunk_local
     sourcetype: linux:system
   - <<: *source_defaults
-    id: splunk-audit-safe
+    id: splunk-audit-laurel
     vm_role: splunk
     class: audit_process
-    path_or_input: /var/log/detection-engineering/audit-safe.jsonl
+    path_or_input: /var/log/laurel/audit.log
     reader: splunk_local
-    sourcetype: linux:audit:safe
-    capability_gate: capabilities.audit_dispatch
+    sourcetype: linux:audit:laurel
+    safe_fields: [_time, host, source, sourcetype]
+    negative_fields: []
   - <<: *source_defaults
     id: runner-registration
     vm_role: runner
@@ -111,6 +115,7 @@ sources:
     reader: otel_cluster
     index: de_runtime
     sourcetype: kube:audit
+    negative_fields: [request_body, response_body]
     capability_gate: capabilities.otel
   - <<: *source_defaults
     id: minikube-node-service
