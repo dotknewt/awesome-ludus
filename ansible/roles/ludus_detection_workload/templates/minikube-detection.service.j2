@@ -1,0 +1,16 @@
+[Unit]
+Description=Detection Engineering Minikube
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User={{ detection_workload_user }}
+Environment=HOME={{ detection_workload_home }}
+Environment=KUBECONFIG={{ detection_kubeconfig_path }}
+ExecStart={{ detection_minikube_path }} start --profile={{ detection_cluster_name }} --driver=docker --extra-config=apiserver.audit-policy-file=/etc/kubernetes/audit-policy.yaml --extra-config=apiserver.audit-log-path=/var/log/kubernetes/audit/audit.log
+ExecStop={{ detection_minikube_path }} stop --profile={{ detection_cluster_name }}
+
+[Install]
+WantedBy=multi-user.target

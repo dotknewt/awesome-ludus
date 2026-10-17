@@ -1,0 +1,24 @@
+receivers:
+  filelog/docker_outer:
+    include:
+      - {{ detection_docker_root }}/containers/*/*-json.log
+    include_file_path: true
+    operators:
+      - {id: docker_envelope, type: json_parser, parse_from: body}
+      - {id: docker_message, type: move, from: attributes.log, to: body}
+processors:
+  resource/range:
+    attributes:
+      - {key: detection.range_id, value: "{{ range_id }}", action: upsert}
+exporters:
+  splunk_hec/runtime:
+    endpoint: "{{ detection_splunk_hec_url }}"
+    token: '${file:{{ detection_host_token_path }}}'
+    sourcetype: docker:container
+    index: de_runtime
+service:
+  pipelines:
+    logs:
+      receivers: [filelog/docker_outer]
+      processors: [resource/range]
+      exporters: [splunk_hec/runtime]

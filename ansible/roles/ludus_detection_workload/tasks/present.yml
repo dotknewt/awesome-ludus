@@ -1,0 +1,883 @@
+---
+# Present-state provisioning only; main.yml routes absence before this include.
+# yamllint disable rule:line-length
+- name: Validate workload top-level inputs before mutation
+  ansible.builtin.assert:
+    that:
+      - range_id is string and range_id | length > 0
+      - detection_cluster_name == range_id + '-minikube'
+      - detection_workload_user == 'deworkload'
+      - detection_runtime_token_state in ['present', 'absent']
+      - detection_splunk_hec_url is match('^https?://[^/]+:8088/services/collector/event$')
+      - detection_docker_repository_url is match('^https://')
+      - detection_docker_signing_key_url is match('^https://')
+      - detection_docker_signing_key_fingerprint is match('^[0-9A-F]{40}$')
+      - detection_docker_packages is sequence and detection_docker_packages | length > 0
+      - detection_runtime_artifact_layouts is mapping
+      - detection_runtime_artifact_layouts.keys() | sort == ['helm', 'kubectl', 'minikube', 'otel_host']
+      - detection_otel_contract is mapping
+      - detection_otel_contract.keys() | sort == ['audit_path', 'node_log_inputs', 'required_rbac', 'secret_file_provider']
+      - detection_otel_contract.secret_file_provider is sameas true
+      - detection_otel_contract.audit_path == '/var/log/kubernetes/audit/audit.log'
+      - detection_otel_contract.node_log_inputs is sequence
+      - detection_otel_contract.required_rbac is mapping
+      - detection_otel_chart is mapping
+      - detection_otel_chart.keys() | sort == ['chart', 'digest', 'repository', 'version']
+      - detection_otel_chart.repository is match('^https://')
+      - detection_otel_chart.chart is match('^[a-z0-9-]+$')
+      - detection_otel_chart.version is string and detection_otel_chart.version | length > 0
+      - detection_otel_chart.digest is match('^sha256:[0-9a-f]{64}$')
+    fail_msg: Refusing workload mutation without complete verified runtime, telemetry, and scoped HEC inputs
+
+- name: Validate every exact package pin
+  ansible.builtin.assert:
+    that:
+      - item is mapping
+      - item.keys() | sort == ['name', 'version']
+      - item.name is match('^[a-z0-9][a-z0-9+.-]+$')
+      - item.version is string and item.version | length > 0
+      - item.version is not search('[*<>~^]')
+  loop: "{{ detection_docker_packages }}"
+  loop_control:
+    label: "{{ item.name | default('invalid') }}"
+
+- name: Reject conflicting versions for one package name
+  ansible.builtin.assert:
+    that:
+      - detection_docker_packages | selectattr('name', 'equalto', item.name) | map(attribute='version') | unique | list | length == 1
+    fail_msg: "Conflicting exact versions were supplied for {{ item.name }}"
+  loop: "{{ detection_docker_packages | unique(attribute='name') }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Normalize identical package pins
+  ansible.builtin.set_fact:
+    _detection_docker_packages: "{{ detection_docker_packages | unique(attribute='name') }}"
+    cacheable: false
+
+- name: Validate checksum-pinned runtime artifacts
+  ansible.builtin.assert:
+    that:
+      - item.value is mapping
+      - item.value.keys() | sort == ['download_auth_required', 'sha256', 'url', 'version']
+      - item.value.version is string and item.value.version | length > 0
+      - item.value.url is match('^https://')
+      - item.value.sha256 is match('^[0-9a-f]{64}$')
+      - item.value.download_auth_required is sameas false
+    fail_msg: Runtime tools require complete unauthenticated checksum-pinned artifacts
+  loop:
+    - {name: minikube, value: "{{ detection_minikube_artifact }}"}
+    - {name: kubectl, value: "{{ detection_kubectl_artifact }}"}
+    - {name: helm, value: "{{ detection_helm_artifact }}"}
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Validate checksum-pinned host collector artifact
+  ansible.builtin.assert:
+    that:
+      - detection_otel_host_artifact is mapping
+      - detection_otel_host_artifact.keys() | sort == ['build', 'download_auth_required', 'sha256', 'url', 'version']
+      - detection_otel_host_artifact.version is string and detection_otel_host_artifact.version | length > 0
+      - detection_otel_host_artifact.build is none or detection_otel_host_artifact.build is string
+      - detection_otel_host_artifact.url is match('^https://')
+      - detection_otel_host_artifact.sha256 is match('^[0-9a-f]{64}$')
+      - detection_otel_host_artifact.download_auth_required is sameas false
+    fail_msg: Host collector requires the added complete Artifact input; it is never inferred from the chart
+
+- name: Validate verified artifact layout gates and checksum bindings
+  ansible.builtin.assert:
+    that:
+      - item.value is mapping
+      - item.value.keys() | sort == ['limitation', 'observed', 'source', 'status', 'stops']
+      - item.value.status == 'VERIFIED'
+      - item.value.source is mapping
+      - item.value.source.keys() | sort == ['observed_at', 'url']
+      - item.value.source.url is match('^https://')
+      - item.value.source.observed_at is match('^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$')
+      - item.value.limitation is string
+      - item.value.limitation | length > 0
+      - item.value.stops == [7, 8, 9, 10]
+      - item.value.observed is mapping
+      - item.value.observed.keys() | sort == ['artifact_sha256', 'format', 'member']
+      - item.value.observed.artifact_sha256 == _detection_layout_artifacts[item.key].sha256
+      - item.value.observed.format in ['raw', 'tar.gz']
+      - (item.value.observed.format == 'raw' and item.value.observed.member is none) or (item.value.observed.format == 'tar.gz' and item.value.observed.member is string and item.value.observed.member is match('^(?!/)(?!.*(?:^|/)\.\.(?:/|$))[A-Za-z0-9._/-]+$'))
+    fail_msg: Every runtime artifact requires a VERIFIED checksum-bound safe layout
+  vars:
+    _detection_layout_artifacts:
+      minikube: "{{ detection_minikube_artifact }}"
+      kubectl: "{{ detection_kubectl_artifact }}"
+      helm: "{{ detection_helm_artifact }}"
+      otel_host: "{{ detection_otel_host_artifact }}"
+  loop: "{{ detection_runtime_artifact_layouts | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Validate exact node RBAC contract entries
+  ansible.builtin.assert:
+    that:
+      - item.key is match('^[a-z0-9./-]+$')
+      - item.value | sort == ['get', 'list', 'watch']
+  loop: "{{ detection_otel_contract.required_rbac | dict2items }}"
+
+- name: Inspect Docker signing key
+  ansible.builtin.stat:
+    path: "{{ detection_docker_keyring_path }}"
+  register: _detection_docker_key
+
+- name: Create cache and repository directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ detection_root_owner }}"
+    group: "{{ detection_root_group }}"
+    mode: "0755"
+  loop:
+    - "{{ detection_cache_dir }}"
+    - "{{ detection_docker_keyring_path | dirname }}"
+    - "{{ detection_docker_source_path | dirname }}"
+
+- name: Fetch Docker signing key when absent
+  ansible.builtin.get_url:
+    url: "{{ detection_docker_signing_key_url }}"
+    dest: "{{ detection_docker_keyring_path }}"
+    owner: "{{ detection_root_owner }}"
+    group: "{{ detection_root_group }}"
+    mode: "0644"
+  when: not _detection_docker_key.stat.exists
+
+- name: Read Docker signing key fingerprint
+  ansible.builtin.command:
+    argv: ["{{ detection_gpg }}", --show-keys, --with-colons, --fingerprint, "{{ detection_docker_keyring_path }}"]
+  register: _detection_docker_key_info
+  changed_when: false
+
+- name: Require exactly one approved primary Docker signing key
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_python }}"
+      - -c
+      - |
+        import sys
+        expected = sys.argv[1]
+        primaries = []
+        awaiting = False
+        for line in sys.stdin.read().splitlines():
+            kind = line.split(':', 1)[0]
+            if kind == 'pub':
+                awaiting = True
+            elif kind == 'fpr' and awaiting:
+                primaries.append(line.split(':')[9].upper())
+                awaiting = False
+            elif kind in {'sub', 'sec', 'ssb'}:
+                awaiting = False
+        if primaries != [expected]:
+            raise SystemExit(20)
+      - "{{ detection_docker_signing_key_fingerprint }}"
+    stdin: "{{ _detection_docker_key_info.stdout }}"
+  changed_when: false
+
+- name: Read target distribution codename for the Docker repository suite
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_python }}"
+      - -c
+      - |
+        import pathlib, sys
+        values = {}
+        for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+            if "=" in line:
+                key, value = line.split("=", 1)
+                values[key] = value.strip().strip('"')
+        codename = values.get("VERSION_CODENAME", "")
+        if not codename:
+            raise SystemExit(20)
+        print(codename)
+      - "{{ detection_os_release_path }}"
+  register: _detection_distribution_codename
+  changed_when: false
+
+- name: Require a safe explicit target distribution codename
+  ansible.builtin.assert:
+    that:
+      - _detection_distribution_codename.stdout | trim is match('^[a-z0-9][a-z0-9.-]*$')
+    fail_msg: Docker repository suite cannot be selected without a target VERSION_CODENAME
+
+- name: Configure the verified Docker repository
+  ansible.builtin.copy:
+    dest: "{{ detection_docker_source_path }}"
+    owner: "{{ detection_root_owner }}"
+    group: "{{ detection_root_group }}"
+    mode: "0644"
+    content: |
+      Types: deb
+      URIs: {{ detection_docker_repository_url }}
+      Suites: {{ _detection_distribution_codename.stdout | trim }}
+      Components: stable
+      Signed-By: {{ detection_docker_keyring_path }}
+  register: _detection_docker_repository
+
+- name: Update package metadata only when repository changes
+  ansible.builtin.command:
+    argv: ["{{ detection_apt_get }}", update]
+  when: _detection_docker_repository.changed
+  changed_when: true
+
+- name: Inspect installed exact Docker package versions
+  ansible.builtin.command:
+    argv: ["{{ detection_dpkg_query }}", --show, "--showformat=${Version}", "{{ item.name }}"]
+  loop: "{{ _detection_docker_packages }}"
+  register: _detection_installed_packages
+  changed_when: false
+  failed_when: false
+
+- name: Install only exact combined Docker, containerd, and plugin versions
+  ansible.builtin.command:
+    argv: "{{ [detection_apt_get, 'install', '--yes'] + _detection_pinned_packages }}"
+  vars:
+    _detection_pinned_packages: >-
+      {{ _detection_docker_packages | map(attribute='name')
+         | zip(_detection_docker_packages | map(attribute='version'))
+         | map('join', '=') | list }}
+  when: >-
+    _detection_installed_packages.results | selectattr('rc', 'ne', 0) | list | length > 0 or
+    _detection_installed_packages.results | map(attribute='stdout') | map('trim') | list !=
+    _detection_docker_packages | map(attribute='version') | list
+  changed_when: true
+
+- name: Inspect workload and collector users
+  ansible.builtin.command:
+    argv: ["{{ detection_id }}", -u, "{{ item }}"]
+  loop: ["{{ detection_workload_user }}", deotel]
+  register: _detection_users
+  changed_when: false
+  failed_when: false
+
+- name: Create missing non-login workload users
+  ansible.builtin.command:
+    argv: ["{{ detection_useradd }}", --system, --create-home, --shell, /usr/sbin/nologin, "{{ item.item }}"]
+  loop: "{{ _detection_users.results }}"
+  when: item.rc != 0
+  changed_when: true
+
+- name: Inspect workload supplementary groups
+  ansible.builtin.command:
+    argv: ["{{ detection_id }}", -nG, "{{ detection_workload_user }}"]
+  register: _detection_workload_groups_before
+  changed_when: false
+
+- name: Add workload user to Docker group only when absent
+  ansible.builtin.command:
+    argv: ["{{ detection_usermod }}", -aG, docker, "{{ detection_workload_user }}"]
+  when: "'docker' not in _detection_workload_groups_before.stdout.split()"
+  changed_when: true
+
+- name: Prove fresh-process Docker group readiness
+  ansible.builtin.command:
+    argv: ["{{ detection_runuser }}", -u, "{{ detection_workload_user }}", --, id, -nG]
+  register: _detection_workload_groups
+  changed_when: false
+
+- name: Require Docker group in a fresh workload process
+  ansible.builtin.assert:
+    that: "'docker' in _detection_workload_groups.stdout.split()"
+
+- name: Prove fresh non-root Docker engine access
+  ansible.builtin.command:
+    argv: ["{{ detection_runuser }}", -u, "{{ detection_workload_user }}", --, env, "HOME={{ detection_workload_home }}", "{{ detection_docker_cli }}", info]
+  changed_when: false
+
+- name: Inspect collector supplementary groups
+  ansible.builtin.command:
+    argv: ["{{ detection_id }}", -nG, deotel]
+  register: _detection_otel_groups_before
+  changed_when: false
+
+- name: Stage role-owned safe artifact installer
+  ansible.builtin.copy:
+    src: install_runtime_artifact.py
+    dest: "{{ detection_artifact_installer_path }}"
+    owner: "{{ detection_root_owner }}"
+    group: "{{ detection_root_group }}"
+    mode: "0700"
+
+- name: Download checksum-pinned runtime artifacts into private cache
+  ansible.builtin.get_url:
+    url: "{{ item.artifact.url }}"
+    dest: "{{ item.artifact_path }}"
+    checksum: "sha256:{{ item.artifact.sha256 }}"
+    owner: "{{ detection_root_owner }}"
+    group: "{{ detection_root_group }}"
+    mode: "0600"
+  loop:
+    - {name: minikube, artifact: "{{ detection_minikube_artifact }}", artifact_path: "{{ detection_minikube_artifact_path }}"}
+    - {name: kubectl, artifact: "{{ detection_kubectl_artifact }}", artifact_path: "{{ detection_kubectl_artifact_path }}"}
+    - {name: helm, artifact: "{{ detection_helm_artifact }}", artifact_path: "{{ detection_helm_artifact_path }}"}
+    - {name: otel_host, artifact: "{{ detection_otel_host_artifact }}", artifact_path: "{{ detection_otel_host_artifact_path }}"}
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Install only the checksum-bound safe artifact member
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_python }}"
+      - "{{ detection_artifact_installer_path }}"
+      - "{{ item.name }}"
+      - "{{ item.artifact_path }}"
+      - "{{ item.artifact.sha256 }}"
+      - "{{ detection_runtime_artifact_layouts[item.name].observed.format }}"
+      - "{{ detection_runtime_artifact_layouts[item.name].observed.member | default('-', true) }}"
+      - "{{ item.path }}"
+      - "0755"
+  loop:
+    - {name: minikube, artifact: "{{ detection_minikube_artifact }}", artifact_path: "{{ detection_minikube_artifact_path }}", path: "{{ detection_minikube_path }}"}
+    - {name: kubectl, artifact: "{{ detection_kubectl_artifact }}", artifact_path: "{{ detection_kubectl_artifact_path }}", path: "{{ detection_kubectl_path }}"}
+    - {name: helm, artifact: "{{ detection_helm_artifact }}", artifact_path: "{{ detection_helm_artifact_path }}", path: "{{ detection_helm_path }}"}
+    - {name: otel_host, artifact: "{{ detection_otel_host_artifact }}", artifact_path: "{{ detection_otel_host_artifact_path }}", path: "{{ detection_otel_host_path }}"}
+  register: _detection_artifact_install
+  changed_when: _detection_artifact_install.rc == 0
+  failed_when: _detection_artifact_install.rc not in [0, 10]
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Verify installed runtime tool versions with role-owned commands
+  ansible.builtin.command:
+    argv: "{{ item.argv }}"
+  environment: "{{ item.environment | default({}) }}"
+  loop:
+    - name: minikube
+      argv: ["{{ detection_runuser }}", -u, "{{ detection_workload_user }}", --, env, "HOME={{ detection_workload_home }}", "KUBECONFIG={{ detection_kubeconfig_path }}", "{{ detection_minikube_path }}", version, --short]
+      expected: "{{ detection_minikube_artifact.version }}"
+    - name: kubectl
+      argv: ["{{ detection_runuser }}", -u, "{{ detection_workload_user }}", --, env, "HOME={{ detection_workload_home }}", "KUBECONFIG={{ detection_kubeconfig_path }}", "{{ detection_kubectl_path }}", "--context={{ detection_cluster_name }}", version, --client=true, --output=yaml]
+      expected: "{{ detection_kubectl_artifact.version }}"
+    - name: helm
+      argv: ["{{ detection_runuser }}", -u, "{{ detection_workload_user }}", --, env, "HOME={{ detection_workload_home }}", "KUBECONFIG={{ detection_kubeconfig_path }}", "{{ detection_helm_path }}", "--kube-context={{ detection_cluster_name }}", version, --short]
+      expected: "{{ detection_helm_artifact.version }}"
+    - name: otel_host
+      argv: ["{{ detection_otel_host_path }}", --version]
+      expected: "{{ detection_otel_host_artifact.version }}"
+  register: _detection_runtime_versions
+  changed_when: false
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Require exact parsed runtime tool versions
+  ansible.builtin.assert:
+    that:
+      - _detection_runtime_versions.results[0].stdout | trim == 'v' + detection_minikube_artifact.version
+      - _detection_runtime_versions.results[1].stdout | from_yaml is mapping
+      - (_detection_runtime_versions.results[1].stdout | from_yaml).clientVersion is mapping
+      - (_detection_runtime_versions.results[1].stdout | from_yaml).clientVersion.gitVersion | default('') == 'v' + detection_kubectl_artifact.version
+      - _detection_runtime_versions.results[2].stdout | trim is match('^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?\+g[0-9a-f]+$')
+      - _detection_runtime_versions.results[2].stdout | trim | regex_replace('^v', '') | regex_replace('\+g[0-9a-f]+$', '') == detection_helm_artifact.version
+      - _detection_runtime_versions.results[3].stdout | trim == 'otelcol-contrib version ' + detection_otel_host_artifact.version
+    fail_msg: Installed runtime tool version differs from its checksum-pinned artifact
+
+- name: Create protected runtime directories and audit staging parent
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ detection_etc_dir }}", owner: "{{ detection_root_owner }}", group: "{{ detection_otel_group }}", mode: "0750"}
+    - {path: "{{ detection_secret_dir }}", owner: "{{ detection_root_owner }}", group: "{{ detection_otel_group }}", mode: "0750"}
+    - {path: "{{ detection_workload_config_dir }}", owner: "{{ detection_root_owner }}", group: "{{ detection_otel_group }}", mode: "0750"}
+    - {path: "{{ detection_audit_policy_stage_path | dirname }}", owner: "{{ detection_workload_owner }}", group: "{{ detection_workload_group }}", mode: "0750"}
+    - {path: "{{ detection_kubeconfig_path | dirname }}", owner: "{{ detection_workload_owner }}", group: "{{ detection_workload_group }}", mode: "0700"}
+    - {path: "{{ detection_systemd_dir }}", owner: "{{ detection_root_owner }}", group: "{{ detection_root_group }}", mode: "0755"}
+
+- name: Stage metadata-only audit policy before any Minikube start
+  ansible.builtin.template:
+    src: audit-policy.yaml.j2
+    dest: "{{ detection_audit_policy_stage_path }}"
+    owner: "{{ detection_workload_owner }}"
+    group: "{{ detection_workload_group }}"
+    mode: "0640"
+
+- name: Render durable Minikube unit
+  ansible.builtin.template:
+    src: minikube-detection.service.j2
+    dest: "{{ detection_systemd_dir }}/minikube-detection.service"
+    owner: "{{ detection_root_owner }}"
+    group: "{{ detection_root_group }}"
+    mode: "0644"
+  register: _detection_minikube_unit
+
+- name: Reload systemd for changed Minikube unit
+  ansible.builtin.command:
+    argv: ["{{ detection_systemctl }}", daemon-reload]
+  when: _detection_minikube_unit.changed
+  changed_when: true
+
+- name: Inspect range-scoped Minikube state
+  ansible.builtin.command:
+    argv: ["{{ detection_runuser }}", -u, "{{ detection_workload_user }}", --, env, "HOME={{ detection_workload_home }}", "KUBECONFIG={{ detection_kubeconfig_path }}", "{{ detection_minikube_path }}", status, --profile, "{{ detection_cluster_name }}"]
+  register: _detection_minikube_status
+  changed_when: false
+  failed_when: false
+
+- name: Start Minikube once with exact audit flags
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_runuser }}"
+      - -u
+      - "{{ detection_workload_user }}"
+      - --
+      - env
+      - "HOME={{ detection_workload_home }}"
+      - "KUBECONFIG={{ detection_kubeconfig_path }}"
+      - "{{ detection_minikube_path }}"
+      - start
+      - "--profile={{ detection_cluster_name }}"
+      - --driver=docker
+      - --extra-config=apiserver.audit-policy-file=/etc/kubernetes/audit-policy.yaml
+      - --extra-config=apiserver.audit-log-path=/var/log/kubernetes/audit/audit.log
+  when: _detection_minikube_status.rc != 0
+  changed_when: true
+
+- name: Inspect durable Minikube service enablement
+  ansible.builtin.command:
+    argv: ["{{ detection_systemctl }}", is-enabled, minikube-detection.service]
+  register: _detection_minikube_enabled
+  changed_when: false
+  failed_when: false
+
+- name: Enable durable Minikube service without restarting it
+  ansible.builtin.command:
+    argv: ["{{ detection_systemctl }}", enable, minikube-detection.service]
+  when: _detection_minikube_enabled.rc != 0
+  changed_when: true
+
+- name: Inspect outer Docker root ACL
+  ansible.builtin.command:
+    argv: ["{{ detection_getfacl }}", --absolute-names, --omit-header, "{{ detection_docker_root }}"]
+  register: _detection_docker_root_acl
+  changed_when: false
+
+- name: Configure outer Docker root traversal ACL when absent
+  ansible.builtin.command:
+    argv: ["{{ detection_setfacl }}", -m, 'u:deotel:--x', "{{ detection_docker_root }}"]
+  when: "'user:deotel:--x' not in _detection_docker_root_acl.stdout_lines"
+  changed_when: true
+
+- name: Inspect outer Docker containers ACL
+  ansible.builtin.command:
+    argv: ["{{ detection_getfacl }}", --absolute-names, --omit-header, "{{ detection_docker_root }}/containers"]
+  register: _detection_docker_containers_acl
+  changed_when: false
+
+- name: Configure existing outer Docker container ACLs when absent
+  ansible.builtin.command:
+    argv: ["{{ detection_setfacl }}", -Rm, 'u:deotel:r-X', "{{ detection_docker_root }}/containers"]
+  when: "'user:deotel:r-x' not in _detection_docker_containers_acl.stdout_lines"
+  changed_when: true
+
+- name: Configure inherited outer Docker container ACL when absent
+  ansible.builtin.command:
+    argv: ["{{ detection_setfacl }}", -m, 'd:u:deotel:r-X', "{{ detection_docker_root }}/containers"]
+  when: "'default:user:deotel:r-x' not in _detection_docker_containers_acl.stdout_lines"
+  changed_when: true
+
+- name: Select one representative outer Docker JSON log
+  ansible.builtin.command:
+    argv: ["{{ detection_find }}", "{{ detection_docker_root }}/containers", -type, f, -name, '*-json.log', -print, -quit]
+  register: _detection_docker_log_probe
+  changed_when: false
+
+- name: Require a representative Docker JSON log for collector permission proof
+  ansible.builtin.assert:
+    that:
+      - _detection_docker_log_probe.stdout | trim | length > 0
+      - _detection_docker_log_probe.stdout | trim is match('^' + detection_docker_root | regex_escape + '/containers/[^/]+/[^/]+-json\.log$')
+
+- name: Verify representative Docker log traversal and read as actual deotel identity
+  ansible.builtin.command:
+    argv: ["{{ detection_runuser }}", -u, deotel, --, test, -r, "{{ _detection_docker_log_probe.stdout | trim }}"]
+  changed_when: false
+
+- name: Render non-secret collector configurations and exact RBAC
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ detection_workload_config_dir }}/{{ item.dest }}"
+    owner: "{{ detection_root_owner }}"
+    group: "{{ detection_otel_group }}"
+    mode: "0640"
+  loop:
+    - {src: otel-host.yaml.j2, dest: otel-host.yaml}
+    - {src: otel-values.yaml.j2, dest: otel-values.yaml}
+    - {src: otel-rbac.yaml.j2, dest: otel-rbac.yaml}
+  register: _detection_collector_configs
+
+- name: Render hardened host collector unit
+  ansible.builtin.template:
+    src: otel-host.service.j2
+    dest: "{{ detection_systemd_dir }}/otel-host.service"
+    owner: "{{ detection_root_owner }}"
+    group: "{{ detection_root_group }}"
+    mode: "0644"
+  register: _detection_host_unit
+
+- name: Inspect rendered host collector unit checksum
+  ansible.builtin.stat:
+    path: "{{ detection_systemd_dir }}/otel-host.service"
+    checksum_algorithm: sha256
+  register: _detection_host_unit_stat
+
+- name: Inspect rendered host collector configuration checksum
+  ansible.builtin.stat:
+    path: "{{ detection_workload_config_dir }}/otel-host.yaml"
+    checksum_algorithm: sha256
+  register: _detection_host_config_stat
+
+- name: Inspect collector remediation proof
+  ansible.builtin.stat:
+    path: "{{ detection_workload_config_dir }}/.otel-host-remediation-v1"
+  register: _detection_collector_remediation_marker
+
+- name: Read collector remediation proof
+  ansible.builtin.slurp:
+    src: "{{ detection_workload_config_dir }}/.otel-host-remediation-v1"
+  when: _detection_collector_remediation_marker.stat.exists
+  register: _detection_collector_remediation_marker_content
+
+- name: Derive intended collector remediation proof
+  ansible.builtin.set_fact:
+    _detection_collector_expected_proof: "{{ _detection_host_unit_stat.stat.checksum }}:{{ _detection_host_config_stat.stat.checksum }}"
+    _detection_collector_applied_proof: "{{ (_detection_collector_remediation_marker_content.content | b64decode | trim) if _detection_collector_remediation_marker.stat.exists else '' }}"
+    cacheable: false
+
+- name: Inspect collector unit load state
+  ansible.builtin.command:
+    argv: ["{{ detection_systemctl }}", show, --property=LoadState, --value, otel-host.service]
+  register: _detection_host_load_state
+  changed_when: false
+  failed_when: _detection_host_load_state.rc != 0 or _detection_host_load_state.stdout | trim not in ['loaded', 'not-found']
+
+- name: Inspect collector activity with recognized systemd state
+  ansible.builtin.command:
+    argv: ["{{ detection_systemctl }}", is-active, otel-host.service]
+  when: _detection_host_load_state.stdout | trim == 'loaded'
+  register: _detection_host_active_before_remediation
+  changed_when: false
+  failed_when: >-
+    not (
+      (_detection_host_active_before_remediation.rc == 0 and _detection_host_active_before_remediation.stdout | trim == 'active') or
+      (_detection_host_active_before_remediation.rc == 3 and _detection_host_active_before_remediation.stdout | trim in ['inactive', 'failed'])
+    )
+
+- name: Inspect active collector main process
+  ansible.builtin.command:
+    argv: ["{{ detection_systemctl }}", show, --property=MainPID, --value, otel-host.service]
+  when:
+    - _detection_host_load_state.stdout | trim == 'loaded'
+    - _detection_host_active_before_remediation.stdout | trim == 'active'
+  register: _detection_host_main_pid
+  changed_when: false
+  failed_when: _detection_host_main_pid.rc != 0 or _detection_host_main_pid.stdout | trim is not match('^[1-9][0-9]*$')
+
+- name: Inspect active collector process supplementary groups
+  ansible.builtin.command:
+    argv: ["{{ detection_ps }}", -o, supgrp=, -p, "{{ _detection_host_main_pid.stdout | trim }}"]
+  when:
+    - _detection_host_load_state.stdout | trim == 'loaded'
+    - _detection_host_active_before_remediation.stdout | trim == 'active'
+  register: _detection_host_process_groups
+  changed_when: false
+
+- name: Determine whether collector process remediation is required
+  ansible.builtin.set_fact:
+    _detection_collector_was_active: "{{ _detection_host_load_state.stdout | trim == 'loaded' and _detection_host_active_before_remediation.stdout | default('') | trim == 'active' }}"
+    _detection_collector_process_has_docker: "{{ _detection_host_load_state.stdout | trim == 'loaded' and _detection_host_active_before_remediation.stdout | default('') | trim == 'active' and 'docker' in ((_detection_host_process_groups.stdout | default('') | regex_replace(',', ' ')).split()) }}"
+    _detection_collector_remediation_required: "{{ _detection_host_unit.changed or _detection_collector_configs.changed or _detection_collector_applied_proof != _detection_collector_expected_proof or 'docker' in _detection_otel_groups_before.stdout.split() or (_detection_host_load_state.stdout | trim == 'loaded' and _detection_host_active_before_remediation.stdout | default('') | trim == 'active' and 'docker' in ((_detection_host_process_groups.stdout | default('') | regex_replace(',', ' ')).split())) }}"
+    cacheable: false
+
+- name: Stop active collector before remediation
+  ansible.builtin.command:
+    argv: ["{{ detection_systemctl }}", stop, otel-host.service]
+  when:
+    - _detection_collector_remediation_required
+    - _detection_collector_was_active
+  changed_when: true
+
+- name: Invalidate collector remediation proof before mutation
+  ansible.builtin.file:
+    path: "{{ detection_workload_config_dir }}/.otel-host-remediation-v1"
+    state: absent
+  when: _detection_collector_remediation_required
+
+- name: Remove forbidden collector Docker group membership
+  ansible.builtin.command:
+    argv: ["{{ detection_gpasswd }}", -d, deotel, docker]
+  when: "'docker' in _detection_otel_groups_before.stdout.split()"
+  changed_when: true
+
+- name: Verify collector account has no Docker supplementary membership
+  ansible.builtin.command:
+    argv: ["{{ detection_id }}", -nG, deotel]
+  register: _detection_otel_groups_after
+  changed_when: false
+
+- name: Refuse a Docker-privileged collector account
+  ansible.builtin.assert:
+    that: "'docker' not in _detection_otel_groups_after.stdout.split()"
+
+- name: Reload systemd before every required collector remediation
+  ansible.builtin.command:
+    argv: ["{{ detection_systemctl }}", daemon-reload]
+  when: _detection_collector_remediation_required
+  changed_when: true
+
+- name: Diff namespace and exact collector RBAC as workload identity
+  ansible.builtin.command:
+    argv: ["{{ detection_runuser }}", -u, "{{ detection_workload_user }}", --, env, "HOME={{ detection_workload_home }}", "KUBECONFIG={{ detection_kubeconfig_path }}", "{{ detection_kubectl_path }}", "--context={{ detection_cluster_name }}", diff, -f, -]
+    stdin: "{{ lookup('ansible.builtin.file', detection_workload_config_dir + '/otel-rbac.yaml') }}"
+  register: _detection_rbac_diff
+  changed_when: false
+  failed_when: _detection_rbac_diff.rc not in [0, 1]
+
+- name: Apply changed namespace and exact collector RBAC as workload identity
+  ansible.builtin.command:
+    argv: ["{{ detection_runuser }}", -u, "{{ detection_workload_user }}", --, env, "HOME={{ detection_workload_home }}", "KUBECONFIG={{ detection_kubeconfig_path }}", "{{ detection_kubectl_path }}", "--context={{ detection_cluster_name }}", apply, -f, -]
+    stdin: "{{ lookup('ansible.builtin.file', detection_workload_config_dir + '/otel-rbac.yaml') }}"
+  when: _detection_rbac_diff.rc == 1
+  changed_when: true
+
+- name: Install or revoke the scoped runtime token
+  block:
+    - name: Inspect protected Splunk HEC token source
+      ansible.builtin.stat:
+        path: "{{ detection_splunk_hec_handoff.source_path }}"
+      delegate_to: "{{ detection_splunk_hec_handoff.delegate_host }}"
+      register: _detection_hec_source_stat
+      no_log: true
+
+    - name: Require protected mode-0600 Splunk token source
+      ansible.builtin.assert:
+        that:
+          - _detection_hec_source_stat.stat.exists
+          - _detection_hec_source_stat.stat.isreg
+          - _detection_hec_source_stat.stat.mode == '0600'
+          - _detection_hec_source_stat.stat.pw_name == detection_root_owner
+          - _detection_hec_source_stat.stat.gr_name == detection_root_group
+      no_log: true
+
+    - name: Read protected scoped token from Splunk host
+      ansible.builtin.slurp:
+        src: "{{ detection_splunk_hec_handoff.source_path }}"
+      delegate_to: "{{ detection_splunk_hec_handoff.delegate_host }}"
+      register: _detection_hec_source
+      no_log: true
+
+    - name: Hold scoped token only in a non-cacheable fact
+      ansible.builtin.set_fact:
+        _detection_hec_token: "{{ _detection_hec_source.content | b64decode | trim }}"
+        cacheable: false
+      no_log: true
+
+    - name: Publish protected deotel-readable host token
+      ansible.builtin.copy:
+        dest: "{{ detection_host_token_path }}"
+        content: "{{ _detection_hec_token }}\n"
+        owner: "{{ detection_root_owner }}"
+        group: "{{ detection_otel_group }}"
+        mode: "0640"
+      no_log: true
+
+    - name: Verify host token readability as deotel
+      ansible.builtin.command:
+        argv: ["{{ detection_runuser }}", -u, deotel, --, test, -r, "{{ detection_host_token_path }}"]
+      changed_when: false
+      no_log: true
+
+    - name: Reconcile Kubernetes token Secret with status-only output
+      ansible.builtin.command:
+        argv: ["{{ detection_runuser }}", -u, "{{ detection_workload_user }}", --, env, "HOME={{ detection_workload_home }}", "KUBECONFIG={{ detection_kubeconfig_path }}", "{{ detection_kubectl_path }}", "--context={{ detection_cluster_name }}", apply, -f, -]
+        stdin: |
+          apiVersion: v1
+          kind: Secret
+          metadata: {name: splunk-hec, namespace: otel-system}
+          type: Opaque
+          data: {token: "{{ _detection_hec_token | b64encode }}"}
+      register: _detection_secret_apply
+      changed_when: _detection_secret_apply.rc == 0 and _detection_secret_apply.stdout | trim is match('^secret/splunk-hec (created|configured)$')
+      failed_when: _detection_secret_apply.rc != 0 or _detection_secret_apply.stdout | trim is not match('^secret/splunk-hec (created|configured|unchanged)$')
+      no_log: true
+
+    - name: Record successful scoped Secret management
+      ansible.builtin.copy:
+        dest: "{{ detection_workload_config_dir }}/.splunk-hec-secret-managed"
+        content: "otel-system/splunk-hec\n"
+        owner: "{{ detection_root_owner }}"
+        group: "{{ detection_otel_group }}"
+        mode: "0640"
+  when: detection_runtime_token_state == 'present'
+
+- name: Inspect pinned chart archive
+  ansible.builtin.stat:
+    path: "{{ detection_otel_chart_archive_path }}"
+    checksum_algorithm: sha256
+  register: _detection_chart_archive
+
+- name: Pull the exact chart version when absent
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_runuser }}"
+      - -u
+      - "{{ detection_workload_user }}"
+      - --
+      - env
+      - "HOME={{ detection_workload_home }}"
+      - "KUBECONFIG={{ detection_kubeconfig_path }}"
+      - "{{ detection_helm_path }}"
+      - "--kube-context={{ detection_cluster_name }}"
+      - pull
+      - "{{ detection_otel_chart.chart }}"
+      - --repo
+      - "{{ detection_otel_chart.repository }}"
+      - --version
+      - "{{ detection_otel_chart.version }}"
+      - --destination
+      - "{{ detection_cache_dir }}"
+  when: not _detection_chart_archive.stat.exists
+  changed_when: true
+
+- name: Inspect chart archive after pull
+  ansible.builtin.stat:
+    path: "{{ detection_otel_chart_archive_path }}"
+    checksum_algorithm: sha256
+  register: _detection_chart_verified
+
+- name: Enforce immutable chart digest before Helm mutation
+  ansible.builtin.assert:
+    that:
+      - _detection_chart_verified.stat.exists
+      - _detection_chart_verified.stat.checksum == detection_otel_chart.digest | regex_replace('^sha256:', '')
+
+- name: Inspect scoped Helm collector release as workload identity
+  ansible.builtin.command:
+    argv: ["{{ detection_runuser }}", -u, "{{ detection_workload_user }}", --, env, "HOME={{ detection_workload_home }}", "KUBECONFIG={{ detection_kubeconfig_path }}", "{{ detection_helm_path }}", "--kube-context={{ detection_cluster_name }}", status, otel-runtime, --namespace, otel-system, --output, json]
+  register: _detection_helm_status
+  changed_when: false
+  failed_when: "_detection_helm_status.rc != 0 and 'release: not found' not in _detection_helm_status.stderr"
+
+- name: Read scoped Helm release values for drift detection
+  ansible.builtin.command:
+    argv: ["{{ detection_runuser }}", -u, "{{ detection_workload_user }}", --, env, "HOME={{ detection_workload_home }}", "KUBECONFIG={{ detection_kubeconfig_path }}", "{{ detection_helm_path }}", "--kube-context={{ detection_cluster_name }}", get, values, otel-runtime, --namespace, otel-system, --output, yaml]
+  when: _detection_helm_status.rc == 0
+  register: _detection_helm_values
+  changed_when: false
+
+- name: Reconcile missing or drifted pinned in-node collector
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_runuser }}"
+      - -u
+      - "{{ detection_workload_user }}"
+      - --
+      - env
+      - "HOME={{ detection_workload_home }}"
+      - "KUBECONFIG={{ detection_kubeconfig_path }}"
+      - "{{ detection_helm_path }}"
+      - "--kube-context={{ detection_cluster_name }}"
+      - upgrade
+      - --install
+      - otel-runtime
+      - "{{ detection_otel_chart_archive_path }}"
+      - --namespace
+      - otel-system
+      - --values
+      - "{{ detection_workload_config_dir }}/otel-values.yaml"
+  when:
+    - detection_runtime_token_state == 'present'
+    - >-
+      _detection_helm_status.rc != 0 or
+      (_detection_helm_status.stdout | from_json).chart != detection_otel_chart.chart + '-' + detection_otel_chart.version or
+      (_detection_helm_values.stdout | from_yaml) != (lookup('ansible.builtin.file', detection_workload_config_dir + '/otel-values.yaml') | from_yaml)
+  changed_when: true
+
+- name: Record successful scoped Helm release management
+  ansible.builtin.copy:
+    dest: "{{ detection_workload_config_dir }}/.otel-runtime-managed"
+    content: "{{ detection_otel_chart.chart }}:{{ detection_otel_chart.version }}:{{ detection_otel_chart.digest }}\n"
+    owner: "{{ detection_root_owner }}"
+    group: "{{ detection_otel_group }}"
+    mode: "0640"
+
+- name: Inspect host collector enablement for present state
+  ansible.builtin.command:
+    argv: ["{{ detection_systemctl }}", is-enabled, otel-host.service]
+  register: _detection_host_enabled
+  changed_when: false
+  failed_when: >-
+    not (
+      (_detection_host_enabled.rc == 0 and _detection_host_enabled.stdout | trim == 'enabled') or
+      (_detection_host_enabled.rc == 1 and _detection_host_enabled.stdout | trim in ['disabled', 'static', 'indirect'])
+    )
+
+- name: Enable host collector service only for present state
+  ansible.builtin.command:
+    argv: ["{{ detection_systemctl }}", enable, otel-host.service]
+  when:
+    - _detection_host_enabled.rc != 0
+  changed_when: true
+
+- name: Inspect host collector activity before final start
+  ansible.builtin.command:
+    argv: ["{{ detection_systemctl }}", is-active, otel-host.service]
+  register: _detection_host_active_before_start
+  changed_when: false
+  failed_when: >-
+    not (
+      (_detection_host_active_before_start.rc == 0 and _detection_host_active_before_start.stdout | trim == 'active') or
+      (_detection_host_active_before_start.rc == 3 and _detection_host_active_before_start.stdout | trim in ['inactive', 'failed'])
+    )
+
+- name: Start inactive host collector with token present
+  ansible.builtin.command:
+    argv: ["{{ detection_systemctl }}", start, otel-host.service]
+  when:
+    - _detection_host_active_before_start.stdout | trim != 'active'
+  changed_when: true
+
+- name: Verify host collector is active after intended-state start
+  ansible.builtin.command:
+    argv: ["{{ detection_systemctl }}", is-active, otel-host.service]
+  register: _detection_host_active_verified
+  changed_when: false
+  failed_when: _detection_host_active_verified.rc != 0 or _detection_host_active_verified.stdout | trim != 'active'
+
+- name: Inspect verified collector main process
+  ansible.builtin.command:
+    argv: ["{{ detection_systemctl }}", show, --property=MainPID, --value, otel-host.service]
+  register: _detection_host_verified_pid
+  changed_when: false
+  failed_when: _detection_host_verified_pid.rc != 0 or _detection_host_verified_pid.stdout | trim is not match('^[1-9][0-9]*$')
+
+- name: Verify active collector process supplementary groups
+  ansible.builtin.command:
+    argv: ["{{ detection_ps }}", -o, supgrp=, -p, "{{ _detection_host_verified_pid.stdout | trim }}"]
+  register: _detection_host_verified_process_groups
+  changed_when: false
+
+- name: Refuse a Docker-privileged active collector process
+  ansible.builtin.assert:
+    that: "'docker' not in ((_detection_host_verified_process_groups.stdout | regex_replace(',', ' ')).split())"
+
+- name: Record collector remediation proof only after verified fresh state
+  ansible.builtin.copy:
+    dest: "{{ detection_workload_config_dir }}/.otel-host-remediation-v1"
+    content: "{{ _detection_collector_expected_proof }}\n"
+    owner: "{{ detection_root_owner }}"
+    group: "{{ detection_otel_group }}"
+    mode: "0640"
+
+- name: Clear transient runtime token facts
+  ansible.builtin.set_fact:
+    _detection_hec_token: null
+    _detection_hec_source: null
+    _detection_hec_source_stat: null
+    cacheable: false
+  no_log: true
