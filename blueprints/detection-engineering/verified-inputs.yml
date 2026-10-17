@@ -1,6 +1,6 @@
 ---
 schema_version: 1
-verified_at: "2026-10-16T20:02:27Z"
+verified_at: "2026-10-17T13:18:58Z"
 user_supplied_candidates:
   splunk_10_6_1_1:
     status: VERIFIED
@@ -136,6 +136,37 @@ downloads:
     source:
       url: https://github.com/helm/helm/releases
       observed_at: "2026-10-16T19:24:19Z"
+  otel_host:
+    <<: *blocked_runtime_download
+    source:
+      url: https://github.com/open-telemetry/opentelemetry-collector-releases/releases
+      observed_at: "2026-10-17T00:00:00Z"
+artifact_layouts:
+  minikube: &blocked_artifact_layout
+    status: BLOCKED
+    source:
+      url: https://github.com/kubernetes/minikube/releases
+      observed_at: "2026-10-17T00:00:00Z"
+    observed: null
+    limitation: >-
+      Artifact bytes have not been checksum-bound to a reviewed raw or tar.gz
+      layout and exact regular member.
+    stops: [7, 8, 9, 10]
+  kubectl:
+    <<: *blocked_artifact_layout
+    source:
+      url: https://kubernetes.io/releases/download/
+      observed_at: "2026-10-17T00:00:00Z"
+  helm:
+    <<: *blocked_artifact_layout
+    source:
+      url: https://github.com/helm/helm/releases
+      observed_at: "2026-10-17T00:00:00Z"
+  otel_host:
+    <<: *blocked_artifact_layout
+    source:
+      url: https://github.com/open-telemetry/opentelemetry-collector-releases/releases
+      observed_at: "2026-10-17T00:00:00Z"
 git:
   malcolm:
     status: BLOCKED
@@ -207,6 +238,26 @@ capabilities:
     observed: null
     limitation: Package version and fail-closed dispatcher protocol contract are unverified.
     stops: [2, 8, 9, 10]
+  runner_service_log:
+    status: BLOCKED
+    source:
+      url: https://www.freedesktop.org/software/systemd/man/latest/journalctl.html
+      observed_at: "2026-10-17T00:00:00Z"
+    observed: null
+    limitation: >-
+      The reserved runner service output is a design constant; no verified
+      systemd producer adapter or native-field contract exists yet.
+    stops: [4, 8, 9, 10]
+  docker_daemon_log:
+    status: BLOCKED
+    source:
+      url: https://www.freedesktop.org/software/systemd/man/latest/journalctl.html
+      observed_at: "2026-10-17T00:00:00Z"
+    observed: null
+    limitation: >-
+      The reserved Docker daemon output is a design constant; no verified
+      systemd producer adapter or native-field contract exists yet.
+    stops: [4, 8, 9, 10]
   otel:
     status: BLOCKED
     source:

@@ -124,6 +124,46 @@ ludus_extensions:
         - sources: [workload]
           destination: splunk
           ports: [8088]
+    forwarder_source_policy:
+      downstream_time_field: _time
+      native_time_fields:
+        gitlab_access: time
+        systemd: __REALTIME_TIMESTAMP
+      common:
+        - id_suffix: auth
+          path: /var/log/auth.log
+          index: de_linux
+          sourcetype: linux:auth
+        - id_suffix: system
+          path: /var/log/syslog
+          index: de_linux
+          sourcetype: linux:system
+        - id_suffix: audit-safe
+          path: /var/log/detection-engineering/audit-safe.jsonl
+          index: de_linux
+          sourcetype: linux:audit:safe
+      profiles:
+        gitlab:
+          required_ids: [gitlab-access, gitlab-application, gitlab-audit]
+          access_path: /var/log/gitlab/nginx/gitlab_access.log
+          access_native_fields: [time, identity, method, path, status]
+          gap_classes: [application, audit]
+        runner:
+          required_ids: [runner-service, runner-registration]
+          registration_path: /var/log/detection-engineering/runner-registration.jsonl
+          service_output_path: /var/log/detection-engineering/runner-service.jsonl
+        workload:
+          required_ids: [workload-docker-daemon]
+          daemon_output_path: /var/log/detection-engineering/docker-daemon.jsonl
+    artifact_layout_policy:
+      formats: [raw, tar.gz]
+      raw_member: null
+      tar_member_match: exact_one_regular
+      reject_member_types: [symlink, hardlink, device, fifo, socket]
+      reject_member_paths: [absolute, traversal, duplicate]
+      staging: private_stream_selected_member
+      extractall: false
+      version_verification: role_owned_command_and_parser
     role_variable_contracts:
       guest_firewall:
         detection_firewall_profile:
@@ -219,9 +259,35 @@ ludus_extensions:
           inputs:
             telemetry_sources:
               source: contract.telemetry_matrix.sources
+            policy:
+              source: contract.forwarder_source_policy
             profile:
               source: planned_vm.identity_suffix
+            audit_dispatch_gate:
+              source: verified_inputs.capabilities.audit_dispatch
+            gitlab_logs_gate:
+              source: verified_inputs.capabilities.gitlab_ce_logs
+            runner_service_log_gate:
+              source: verified_inputs.capabilities.runner_service_log
+            docker_daemon_log_gate:
+              source: verified_inputs.capabilities.docker_daemon_log
           type: list[ForwarderInput]
+        detection_forwarder_producer_contract:
+          operation: build_forwarder_producer_contract
+          inputs:
+            policy:
+              source: contract.forwarder_source_policy
+            profile:
+              source: planned_vm.identity_suffix
+            audit_dispatch_gate:
+              source: verified_inputs.capabilities.audit_dispatch
+            gitlab_logs_gate:
+              source: verified_inputs.capabilities.gitlab_ce_logs
+            runner_service_log_gate:
+              source: verified_inputs.capabilities.runner_service_log
+            docker_daemon_log_gate:
+              source: verified_inputs.capabilities.docker_daemon_log
+          type: ForwarderProducerContract
         detection_splunk_receiver_host:
           operation: lookup_dependency_host
           inputs:
@@ -284,16 +350,35 @@ ludus_extensions:
           type: RunnerApiContract
       workload:
         detection_docker_packages:
-          source: verified_inputs.apt.docker.observed.packages
+          operation: combine_apt_package_gates
+          inputs: &combined_apt_gate_inputs
+            docker_gate:
+              source: verified_inputs.apt.docker
+            containerd_gate:
+              source: verified_inputs.apt.containerd
+            docker_plugins_gate:
+              source: verified_inputs.apt.docker_plugins
           type: list[PackagePin]
         detection_docker_repository_url:
-          source: verified_inputs.apt.docker.observed.repository_url
+          operation: project_combined_apt_field
+          inputs:
+            <<: *combined_apt_gate_inputs
+            field:
+              value: repository_url
           type: https_url
         detection_docker_signing_key_url:
-          source: verified_inputs.apt.docker.observed.signing_key_url
+          operation: project_combined_apt_field
+          inputs:
+            <<: *combined_apt_gate_inputs
+            field:
+              value: signing_key_url
           type: https_url
         detection_docker_signing_key_fingerprint:
-          source: verified_inputs.apt.docker.observed.signing_key_fingerprint
+          operation: project_combined_apt_field
+          inputs:
+            <<: *combined_apt_gate_inputs
+            field:
+              value: signing_key_fingerprint
           type: str
         detection_minikube_artifact:
           operation: project_runtime_artifact
@@ -313,6 +398,29 @@ ludus_extensions:
             artifact:
               source: verified_inputs.downloads.helm.observed
           type: RuntimeArtifact
+        detection_otel_host_artifact:
+          source: verified_inputs.downloads.otel_host.observed
+          type: Artifact
+        detection_runtime_artifact_layouts:
+          operation: bind_artifact_layouts
+          inputs:
+            minikube_artifact_gate:
+              source: verified_inputs.downloads.minikube
+            kubectl_artifact_gate:
+              source: verified_inputs.downloads.kubectl
+            helm_artifact_gate:
+              source: verified_inputs.downloads.helm
+            otel_host_artifact_gate:
+              source: verified_inputs.downloads.otel_host
+            minikube_layout_gate:
+              source: verified_inputs.artifact_layouts.minikube
+            kubectl_layout_gate:
+              source: verified_inputs.artifact_layouts.kubectl
+            helm_layout_gate:
+              source: verified_inputs.artifact_layouts.helm
+            otel_host_layout_gate:
+              source: verified_inputs.artifact_layouts.otel_host
+          type: ArtifactLayoutGateMap
         detection_otel_chart:
           source: verified_inputs.charts.otel.observed
           type: HelmChartPin
