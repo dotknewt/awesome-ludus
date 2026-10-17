@@ -1,0 +1,8 @@
+---
+- name: Syntax-check the forwarder pipeline role
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Include the pipeline production entrypoint
+      ansible.builtin.include_role:
+        name: ludus_detection_forwarder_pipeline

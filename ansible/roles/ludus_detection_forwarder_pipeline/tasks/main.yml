@@ -1,0 +1,23 @@
+---
+- name: Guard the shared forwarder pipeline contract before mutation
+  ansible.builtin.assert:
+    that:
+      - detection_forwarder_profile in ['gitlab', 'runner', 'workload']
+      - detection_laurel_read_user == 'splunkfwd'
+    fail_msg: >-
+      The pipeline requires detection_forwarder_profile to be gitlab, runner,
+      or workload and detection_laurel_read_user to equal splunkfwd
+
+- name: Prepare the package-owned forwarder reader
+  ansible.builtin.include_role:
+    name: ludus_detection_forwarder
+    tasks_from: prepare
+
+- name: Produce native Linux audit telemetry
+  ansible.builtin.include_role:
+    name: ludus_detection_linux_logging
+
+- name: Activate the forwarder after producer readiness
+  ansible.builtin.include_role:
+    name: ludus_detection_forwarder
+    tasks_from: activate
