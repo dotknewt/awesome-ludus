@@ -5,9 +5,8 @@ from __future__ import annotations
 import json
 import os
 import pwd
-import re
 import stat
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -16,10 +15,6 @@ from support import REPOSITORY_ROOT, run_production_include
 
 
 ROLE = "ludus_detection_gitlab"
-CANARY_QUERY = "query-canary-secret"
-CANARY_AUTH = "authorization-canary-secret"
-
-
 def _contract() -> dict:
     """Clearly synthetic selected-version contract, never vendor evidence."""
 
@@ -64,18 +59,6 @@ def _readiness_contract() -> dict:
     }
 
 
-def _log_contract() -> dict:
-    return {
-        "paths": {"application": "/var/log/gitlab/gitlab-rails/application_json.log"},
-        "producer_safe_fields": {
-            "access": ["time", "identity", "method", "path", "status"],
-            "application": ["time", "severity", "correlation_id", "message"],
-        },
-        "query_and_auth_excluded": True,
-        "unavailable_classes": ["audit"],
-    }
-
-
 @pytest.fixture
 def fake_gitlab(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     fake_bin = tmp_path / "bin"
@@ -94,6 +77,9 @@ from pathlib import Path
 p = Path(os.environ['DETECTION_FAKE_GITLAB_STATE']); s = json.loads(p.read_text())
 operation = sys.stdin.read()
 s.setdefault('rails_calls', []).append({'argv': sys.argv[1:], 'stdin': operation})
+if 'user.password =' in operation:
+    s['root_password_updates'] = s.get('root_password_updates', 0) + 1
+    p.write_text(json.dumps(s)); raise SystemExit(0)
 failure = s.get('rails_persist_failure')
 exclusive_before_pat = operation.index('File.open') < operation.index('personal_access_tokens.create!')
 out = Path(os.environ['DETECTION_RUNNER_API_BOOTSTRAP_PATH'])
@@ -195,8 +181,12 @@ def _preflight_variables(tmp_path: Path) -> dict:
         "detection_gitlab_signing_key_url": "https://packages.synthetic.invalid/key.gpg",
         "detection_gitlab_signing_key_fingerprint": "A" * 40,
         "detection_gitlab_root_password": "synthetic-not-a-real-password",
-        "detection_gitlab_log_contract": _log_contract(),
         "detection_gitlab_readiness_contract": _readiness_contract(),
+        "detection_gitlab_fixture_mode": True,
+        "detection_gitlab_apply_reconfigure": False,
+        "detection_gitlab_config_path": str(tmp_path / "gitlab.rb"),
+        "detection_gitlab_capability_path": str(tmp_path / "removed-gitlab-capabilities.json"),
+        "detection_gitlab_readiness_path": str(tmp_path / "gitlab-readiness.json"),
     }
 
 
@@ -406,19 +396,10 @@ def test_nonexact_or_duplicate_bootstrap_scopes_are_rejected_before_mint(tmp_pat
     assert json.loads(state_path.read_text())["active_pats"] == []
 
 
-@pytest.mark.parametrize("mutation", [
-    "missing_classification", "duplicate_unavailable", "field_key_mismatch",
-    "missing_statuses", "empty_statuses", "duplicate_statuses",
-])
-def test_preflight_reuses_exhaustive_log_and_readiness_validation(tmp_path, fake_gitlab, mutation) -> None:
+@pytest.mark.parametrize("mutation", ["missing_statuses", "empty_statuses", "duplicate_statuses"])
+def test_preflight_reuses_exhaustive_readiness_validation(tmp_path, fake_gitlab, mutation) -> None:
     fake_bin, _ = fake_gitlab; variables = _preflight_variables(tmp_path)
-    if mutation == "missing_classification":
-        variables["detection_gitlab_log_contract"]["unavailable_classes"] = []
-    elif mutation == "duplicate_unavailable":
-        variables["detection_gitlab_log_contract"]["unavailable_classes"] = ["audit", "audit"]
-    elif mutation == "field_key_mismatch":
-        variables["detection_gitlab_log_contract"]["producer_safe_fields"]["audit"] = ["time"]
-    elif mutation == "missing_statuses":
+    if mutation == "missing_statuses":
         variables["detection_gitlab_readiness_contract"].pop("success_statuses")
     elif mutation == "empty_statuses":
         variables["detection_gitlab_readiness_contract"]["success_statuses"] = []
@@ -436,6 +417,38 @@ def test_real_main_stops_malformed_contract_before_install_or_mutation(tmp_path,
     state = json.loads(state_path.read_text())
     assert state.get("rails_calls", []) == []
     assert state["calls"] == []
+
+
+def test_real_main_fresh_and_convergent_without_gitlab_logging_contract(tmp_path, fake_gitlab) -> None:
+    fake_bin, state_path = fake_gitlab
+    variables = _preflight_variables(tmp_path)
+
+    first = run_production_include(ROLE, "main", variables, fake_bin)
+    assert first.returncode == 0, first.stdout + first.stderr
+    config = Path(variables["detection_gitlab_config_path"])
+    assert config.read_text() == (
+        "# Range-local GitLab configuration. Plain HTTP is accepted only inside the\n"
+        "# isolated lab/VPN boundary; Task 8 firewall policy prevents public ingress.\n"
+        'external_url "http://gitlab.synthetic.invalid"\n'
+    )
+    assert "nginx['log_format']" not in config.read_text()
+    assert not Path(variables["detection_gitlab_capability_path"]).exists()
+
+    manager = Path(variables["detection_runner_auth_path"])
+    stable_manager = manager.read_bytes()
+    bootstrap = Path(variables["detection_runner_api_bootstrap_path"])
+    bootstrap.unlink()  # models Task 6 successful revocation then handle cleanup
+    state = json.loads(state_path.read_text())
+    state["active_pats"] = []
+    state_path.write_text(json.dumps(state))
+
+    second = run_production_include(ROLE, "main", variables, fake_bin)
+    assert second.returncode == 0, second.stdout + second.stderr
+    state = json.loads(state_path.read_text())
+    assert len(state["identities"]) == 1
+    assert manager.read_bytes() == stable_manager
+    assert "nginx['log_format']" not in config.read_text()
+    assert not Path(variables["detection_gitlab_capability_path"]).exists()
 
 
 def test_cleanup_pending_bootstrap_handle_is_preserved_and_refuses_remint(tmp_path, fake_gitlab) -> None:
@@ -473,63 +486,6 @@ def test_retry_after_task6_cleanup_preserves_identity_and_manager_token(tmp_path
         "token": "bootstrap-canary-2",
         "expires_on": (datetime.now(UTC).date() + timedelta(days=1)).isoformat(),
     }]
-
-
-@pytest.mark.parametrize("mutation", ["missing_application", "missing_audit", "conflicting_audit", "unknown_class"])
-def test_application_and_audit_classes_are_totally_exclusively_classified(tmp_path, fake_gitlab, mutation) -> None:
-    fake_bin, _ = fake_gitlab; contract = _log_contract()
-    if mutation == "missing_application":
-        contract["paths"].pop("application")
-    elif mutation == "missing_audit":
-        contract["unavailable_classes"] = []
-    elif mutation == "conflicting_audit":
-        contract["paths"]["audit"] = "/var/log/gitlab/audit.log"
-        contract["producer_safe_fields"]["audit"] = ["time", "message"]
-    else:
-        contract["unavailable_classes"].append("mystery")
-    result = run_production_include(ROLE, "configure", {
-        "detection_gitlab_log_contract": contract,
-        "detection_gitlab_nginx_config_path": str(tmp_path / "unused.conf"),
-        "detection_gitlab_config_path": str(tmp_path / "gitlab.rb"),
-        "detection_gitlab_capability_path": str(tmp_path / "capability.json"),
-        "detection_gitlab_external_url": "http://gitlab.synthetic.invalid",
-        "detection_gitlab_apply_reconfigure": False,
-    }, fake_bin)
-    assert result.returncode != 0
-
-
-def test_effective_gitlab_rb_transforms_canary_request_to_safe_useful_event(tmp_path, fake_gitlab) -> None:
-    fake_bin, _ = fake_gitlab; gitlab_rb = tmp_path / "gitlab.rb"; capability = tmp_path / "capability.json"
-    result = run_production_include(ROLE, "configure", {
-        "detection_gitlab_log_contract": _log_contract(),
-        "detection_gitlab_nginx_config_path": str(tmp_path / "format-reference.conf"),
-        "detection_gitlab_config_path": str(gitlab_rb),
-        "detection_gitlab_capability_path": str(capability),
-        "detection_gitlab_external_url": "http://gitlab.synthetic.invalid",
-        "detection_gitlab_apply_reconfigure": False,
-    }, fake_bin)
-    assert result.returncode == 0, result.stdout + result.stderr
-    rendered = gitlab_rb.read_text()
-    match = re.search(r"nginx\['log_format'\] = (\".*\")", rendered)
-    assert match
-    log_format = json.loads(match.group(1))
-    request = {
-        "$time_iso8601": "2026-10-17T12:00:00+00:00", "$remote_addr": "10.10.10.44",
-        "$request_method": "GET", "$uri": "/safe/path",
-        "$request_uri": f"/safe/path?secret={CANARY_QUERY}", "$status": "204",
-        "$http_authorization": f"Bearer {CANARY_AUTH}",
-    }
-    event = log_format
-    for variable, value in request.items():
-        event = event.replace(variable, value)
-    assert event == (
-        "time=2026-10-17T12:00:00+00:00 identity=10.10.10.44 "
-        "method=GET path=/safe/path status=204"
-    )
-    assert CANARY_QUERY not in event and CANARY_AUTH not in event
-    facts = json.loads(capability.read_text())
-    assert facts["available"]["application"].endswith("application_json.log")
-    assert facts["unavailable"] == ["audit"]
 
 
 @pytest.mark.parametrize("gpg_output", [

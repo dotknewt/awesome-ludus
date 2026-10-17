@@ -1,40 +1,11 @@
 ---
-- name: Validate the exhaustive producer-safe log contract
-  ansible.builtin.include_tasks: validate_logging_contract.yml
-
-- name: Render the auditable producer-safe nginx format
-  ansible.builtin.template:
-    src: gitlab-safe-nginx.conf.j2
-    dest: "{{ detection_gitlab_nginx_config_path }}"
-    mode: '0644'
-
 - name: Render the range-specific GitLab configuration
   ansible.builtin.template:
     src: gitlab-detection.rb.j2
     dest: "{{ detection_gitlab_config_path }}"
     mode: '0600'
-  when: detection_gitlab_external_url is defined
 
-- name: Ensure the GitLab capability directory exists
-  ansible.builtin.file:
-    path: "{{ detection_gitlab_capability_path | dirname }}"
-    state: directory
-    mode: '0755'
-
-- name: Write factual CE availability and gap JSON
-  ansible.builtin.copy:
-    dest: "{{ detection_gitlab_capability_path }}"
-    mode: '0644'
-    content: >-
-      {{ {
-        'schema_version': 1,
-        'available': {'access': '/var/log/gitlab/nginx/gitlab_access.log'} | combine(detection_gitlab_log_contract.paths),
-        'unavailable': detection_gitlab_log_contract.unavailable_classes,
-        'producer_safe_fields': detection_gitlab_log_contract.producer_safe_fields,
-        'query_and_auth_excluded': detection_gitlab_log_contract.query_and_auth_excluded
-      } | to_nice_json }}
-
-- name: Apply producer-safe GitLab configuration
+- name: Apply range-specific GitLab configuration
   ansible.builtin.command: gitlab-ctl reconfigure
   changed_when: true
   when: detection_gitlab_apply_reconfigure | bool

@@ -1,11 +1,8 @@
 ---
-- name: Validate complete log contract before installation
-  ansible.builtin.include_tasks: validate_logging_contract.yml
-
 - name: Validate complete readiness contract before installation
   ansible.builtin.include_tasks: validate_readiness_contract.yml
 
-- name: Refuse missing or unsafe GitLab package and telemetry contracts
+- name: Refuse missing or unsafe GitLab package and bootstrap contracts
   ansible.builtin.assert:
     that:
       - range_id is string
@@ -51,8 +48,8 @@
       - detection_runner_api_contract.manager.response_token_field is string
       - detection_runner_api_contract.manager.response_token_field | length > 0
     fail_msg: >-
-      BLOCKED: exact verified GitLab package, producer-safe log, and runner API
-      contracts are mandatory; raw GitLab logs and guessed API behavior are refused.
+      BLOCKED: exact verified GitLab package and runner API contracts are
+      mandatory; guessed package or API behavior is refused.
 
 - name: Refuse unpinned or unexpected GitLab packages
   ansible.builtin.assert:

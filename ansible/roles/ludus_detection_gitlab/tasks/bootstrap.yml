@@ -187,6 +187,7 @@
   no_log: true
 
 - name: Execute paused runner identity transaction
+  no_log: true
   block:
     - name: Pre-create protected API response files
       ansible.builtin.file:
@@ -385,4 +386,3 @@
         - "{{ detection_gitlab_create_response_path }}"
         - "{{ detection_gitlab_detail_response_path }}"
         - "{{ detection_gitlab_update_response_path }}"
-  no_log: true

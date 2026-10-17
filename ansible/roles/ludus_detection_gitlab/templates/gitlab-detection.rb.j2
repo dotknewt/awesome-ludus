@@ -1,7 +1,3 @@
 # Range-local GitLab configuration. Plain HTTP is accepted only inside the
 # isolated lab/VPN boundary; Task 8 firewall policy prevents public ingress.
 external_url {{ detection_gitlab_external_url | to_json }}
-
-# Selected-version capability evidence must establish this Omnibus producer
-# setting before the role runs. Query strings and Authorization are omitted.
-{% include 'gitlab-safe-nginx.conf.j2' %}

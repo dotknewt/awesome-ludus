@@ -4,8 +4,9 @@
 
 - name: Install pinned GitLab CE
   ansible.builtin.include_tasks: install.yml
+  when: not detection_gitlab_fixture_mode | bool
 
-- name: Configure producer-safe GitLab telemetry
+- name: Configure range-specific GitLab settings
   ansible.builtin.include_tasks: configure.yml
 
 - name: Prove selected-version GitLab readiness before credential mutations
