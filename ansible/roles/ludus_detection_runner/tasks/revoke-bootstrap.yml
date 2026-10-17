@@ -1,0 +1,113 @@
+---
+- name: Inspect delegated bootstrap revocation handle
+  ansible.builtin.stat:
+    path: "{{ detection_runner_bootstrap_path }}"
+  register: detection_runner_revoke_handle_stat
+  delegate_to: "{{ detection_gitlab_delegate_host }}"
+  no_log: true
+
+- name: Require a protected valid revocation handle before deletion
+  ansible.builtin.assert:
+    that:
+      - detection_runner_revoke_handle_stat.stat.exists
+      - detection_runner_revoke_handle_stat.stat.isreg
+      - detection_runner_revoke_handle_stat.stat.mode == '0600'
+      - detection_runner_revoke_handle_stat.stat.uid == detection_runner_expected_source_uid
+      - detection_runner_revoke_handle_stat.stat.pw_name == detection_runner_expected_source_owner
+    fail_msg: >-
+      BLOCKED: bootstrap handle is absent or unsafe; refusing deletion or
+      guessed revocation pending explicit disposition
+  no_log: true
+
+- name: Read delegated protected bootstrap credential
+  ansible.builtin.slurp:
+    src: "{{ detection_runner_bootstrap_path }}"
+  register: detection_runner_revoke_slurp
+  delegate_to: "{{ detection_gitlab_delegate_host }}"
+  no_log: true
+
+- name: Hold only a non-cacheable valid bootstrap credential
+  ansible.builtin.set_fact:
+    detection_runner_bootstrap_token: "{{ detection_runner_revoke_slurp.content | b64decode }}"
+    cacheable: false
+  no_log: true
+
+- name: Reject malformed bootstrap handles without deletion
+  ansible.builtin.assert:
+    that:
+      - detection_runner_bootstrap_token is match('^[^\\s\\x00]+$')
+    fail_msg: >-
+      BLOCKED: malformed bootstrap handle may be Task 5 partial persistence;
+      refusing deletion, revocation guessing, or token minting pending explicit disposition
+  no_log: true
+
+- name: Create protected delegated revocation work directory
+  ansible.builtin.file:
+    path: "{{ detection_runner_revoke_work_dir }}"
+    state: directory
+    owner: "{{ detection_runner_expected_source_owner }}"
+    mode: '0700'
+  delegate_to: "{{ detection_gitlab_delegate_host }}"
+  no_log: true
+
+- name: Pre-create protected delegated revocation response
+  ansible.builtin.file:
+    path: "{{ detection_runner_revoke_work_dir }}/revoke.json"
+    state: touch
+    owner: "{{ detection_runner_expected_source_owner }}"
+    mode: '0600'
+  delegate_to: "{{ detection_gitlab_delegate_host }}"
+  no_log: true
+
+- name: Revoke bootstrap credential with exactly three total tries
+  ansible.builtin.command:
+    argv: [curl, --config, '-']
+    stdin: |
+      silent
+      show-error
+      url = "{{ detection_runner_gitlab_url | regex_replace('/+$', '') }}{{ detection_runner_api_contract.bootstrap_auth.revoke_endpoint }}"
+      request = "{{ detection_runner_api_contract.bootstrap_auth.revoke_method }}"
+      header = "Authorization: Bearer {{ detection_runner_bootstrap_token }}"
+      output = "{{ detection_runner_revoke_work_dir }}/revoke.json"
+      write-out = "%{http_code}"
+  register: detection_runner_revoke_result
+  retries: 2
+  delay: 0
+  until:
+    - detection_runner_revoke_result.rc == 0
+    - detection_runner_revoke_result.stdout | int in [200, 204, 404]
+  changed_when: detection_runner_revoke_result.rc == 0 and detection_runner_revoke_result.stdout | int in [200, 204]
+  failed_when: false
+  delegate_to: "{{ detection_gitlab_delegate_host }}"
+  no_log: true
+
+- name: Record confirmed revocation outcome
+  ansible.builtin.set_fact:
+    detection_runner_revocation_confirmed: >-
+      {{ detection_runner_revoke_result.rc == 0 and
+         detection_runner_revoke_result.stdout | int in [200, 204, 404] }}
+    cacheable: false
+  no_log: true
+
+- name: Delete only a confirmed revoked valid credential handle
+  ansible.builtin.file:
+    path: "{{ detection_runner_bootstrap_path }}"
+    state: absent
+  when: detection_runner_revocation_confirmed | bool
+  delegate_to: "{{ detection_gitlab_delegate_host }}"
+  no_log: true
+
+- name: Remove delegated revocation response
+  ansible.builtin.file:
+    path: "{{ detection_runner_revoke_work_dir }}/revoke.json"
+    state: absent
+  delegate_to: "{{ detection_gitlab_delegate_host }}"
+  failed_when: false
+  no_log: true
+
+- name: Clear delegated bootstrap material from facts
+  ansible.builtin.set_fact:
+    detection_runner_bootstrap_token: null
+    detection_runner_revoke_slurp: null
+    cacheable: false
+  no_log: true

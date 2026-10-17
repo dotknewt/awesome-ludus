@@ -1,0 +1,50 @@
+---
+- name: Inspect delegated Task 5 bootstrap credential without following links
+  ansible.builtin.stat:
+    path: "{{ detection_runner_bootstrap_path }}"
+    follow: false
+  register: detection_runner_bootstrap_stat
+  delegate_to: "{{ detection_gitlab_delegate_host }}"
+  no_log: true
+
+- name: Require protected bootstrap credential identity
+  ansible.builtin.assert:
+    that:
+      - detection_runner_bootstrap_stat.stat.exists
+      - detection_runner_bootstrap_stat.stat.isreg
+      - not detection_runner_bootstrap_stat.stat.islnk
+      - detection_runner_bootstrap_stat.stat.mode == '0600'
+      - detection_runner_bootstrap_stat.stat.uid == detection_runner_expected_source_uid
+      - detection_runner_bootstrap_stat.stat.pw_name == detection_runner_expected_source_owner
+    fail_msg: >-
+      BLOCKED: bootstrap handle is missing or unsafe; explicit disposition is
+      required and Task 6 will not delete, revoke, or replace it
+  no_log: true
+
+- name: Read delegated Task 5 bootstrap credential for classification
+  ansible.builtin.slurp:
+    src: "{{ detection_runner_bootstrap_path }}"
+  register: detection_runner_bootstrap_slurp
+  delegate_to: "{{ detection_gitlab_delegate_host }}"
+  no_log: true
+
+- name: Hold classified bootstrap credential only as a non-cacheable fact
+  ansible.builtin.set_fact:
+    detection_runner_bootstrap_token: "{{ detection_runner_bootstrap_slurp.content | b64decode }}"
+    cacheable: false
+  no_log: true
+
+- name: Reject malformed bootstrap handle without deletion or guessed revocation
+  ansible.builtin.assert:
+    that:
+      - detection_runner_bootstrap_token is match('^[^\\s\\x00]+$')
+    fail_msg: >-
+      BLOCKED: malformed bootstrap handle may be Task 5 partial persistence;
+      explicit disposition is required before Task 6 can continue
+  no_log: true
+
+- name: Mark bootstrap handle valid for mandatory finalization
+  ansible.builtin.set_fact:
+    detection_runner_bootstrap_handle_valid: true
+    cacheable: false
+  no_log: true

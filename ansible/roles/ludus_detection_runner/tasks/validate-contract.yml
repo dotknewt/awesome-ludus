@@ -1,0 +1,81 @@
+---
+- name: Require exact selected-version runner inputs
+  ansible.builtin.assert:
+    that:
+      - range_id is string
+      - range_id | length > 0
+      - detection_runner_description == range_id ~ '-runner'
+      - detection_gitlab_host is string
+      - detection_gitlab_host is match('^(https?://)?[^/?\\s:]+(?::[0-9]+)?$')
+      - detection_runner_gitlab_url is match('^https?://[^?\\s]+$')
+      - detection_runner_packages is sequence
+      - detection_runner_packages is not string
+      - detection_runner_packages | length == 1
+      - detection_runner_packages[0].keys() | list | sort == ['name', 'version']
+      - detection_runner_packages[0].name == 'gitlab-runner'
+      - detection_runner_packages[0].version is string
+      - detection_runner_packages[0].version | length > 0
+      - detection_runner_packages[0].version is not search('[*><~^]')
+      - detection_runner_repository_url is match('^https://[^?\\s]+$')
+      - detection_runner_signing_key_url is match('^https://[^?\\s]+$')
+      - detection_runner_signing_key_fingerprint is match('^[A-Fa-f0-9]{40}$')
+      - detection_runner_api_contract.keys() | list | sort == ['bootstrap_auth', 'manager']
+      - detection_runner_api_contract.bootstrap_auth.keys() | list | sort == ['creation_argv', 'credential_type', 'expiration_days', 'mode', 'protected_path', 'revoke_endpoint', 'revoke_method', 'scopes'] | sort
+      - detection_runner_api_contract.bootstrap_auth.credential_type == 'personal_access_token'
+      - detection_runner_api_contract.bootstrap_auth.creation_argv == ['gitlab-rails', 'runner', '-']
+      - detection_runner_api_contract.bootstrap_auth.expiration_days == 1
+      - detection_runner_api_contract.bootstrap_auth.scopes is sequence
+      - detection_runner_api_contract.bootstrap_auth.scopes is not string
+      - detection_runner_api_contract.bootstrap_auth.scopes | length == 2
+      - detection_runner_api_contract.bootstrap_auth.scopes | unique | length == 2
+      - detection_runner_api_contract.bootstrap_auth.mode == '0600'
+      - detection_runner_api_contract.bootstrap_auth.protected_path == '/etc/detection-engineering/secrets/runner-api-bootstrap.token'
+      - detection_runner_api_contract.bootstrap_auth.revoke_method == 'DELETE'
+      - detection_runner_api_contract.bootstrap_auth.revoke_endpoint is match('^/[^?\\s]+$')
+      - detection_runner_api_contract.manager.keys() | list | sort == ['create_endpoint', 'create_method', 'create_scope', 'detail_endpoint', 'detail_method', 'local_verify_command', 'lookup_endpoint', 'lookup_method', 'manage_scope', 'pause_at_create', 'request_fields', 'response_token_field', 'runner_type', 'update_endpoint', 'update_method'] | sort
+      - detection_runner_api_contract.manager.pause_at_create | bool
+      - detection_runner_api_contract.manager.create_scope != detection_runner_api_contract.manager.manage_scope
+      - detection_runner_api_contract.bootstrap_auth.scopes | sort == [detection_runner_api_contract.manager.create_scope, detection_runner_api_contract.manager.manage_scope] | sort
+      - detection_runner_api_contract.manager.runner_type is string
+      - detection_runner_api_contract.manager.runner_type | length > 0
+      - detection_runner_api_contract.manager.request_fields | sort == ['description', 'paused', 'runner_type'] | sort
+      - detection_runner_api_contract.manager.response_token_field == 'token'
+      - detection_runner_api_contract.manager.create_method == 'POST'
+      - detection_runner_api_contract.manager.lookup_method == 'GET'
+      - detection_runner_api_contract.manager.detail_method == 'GET'
+      - detection_runner_api_contract.manager.update_method == 'PUT'
+      - detection_runner_api_contract.manager.create_endpoint is match('^/[^?\\s]+$')
+      - detection_runner_api_contract.manager.lookup_endpoint is match('^/[^?\\s]+$')
+      - detection_runner_api_contract.manager.detail_endpoint is match('^/[^?\\s]+$')
+      - detection_runner_api_contract.manager.update_endpoint is match('^/[^?\\s]+$')
+      - (':id' in detection_runner_api_contract.manager.detail_endpoint) or ('{id}' in detection_runner_api_contract.manager.detail_endpoint)
+      - (':id' in detection_runner_api_contract.manager.update_endpoint) or ('{id}' in detection_runner_api_contract.manager.update_endpoint)
+      - detection_runner_api_contract.manager.local_verify_command == ['gitlab-runner', 'verify']
+      - detection_runner_jobs_contract.keys() | list | sort == ['endpoint', 'method']
+      - detection_runner_jobs_contract.method == 'GET'
+      - detection_runner_jobs_contract.endpoint is match('^/[^?\\s]+$')
+      - (':id' in detection_runner_jobs_contract.endpoint) or ('{id}' in detection_runner_jobs_contract.endpoint)
+      - detection_gitlab_readiness_contract.keys() | list | sort == ['attempts', 'delay_seconds', 'endpoint', 'method', 'success_statuses']
+      - detection_gitlab_readiness_contract.endpoint is match('^/[^?\\s]+$')
+      - detection_gitlab_readiness_contract.method == 'GET'
+      - detection_gitlab_readiness_contract.success_statuses is sequence
+      - detection_gitlab_readiness_contract.success_statuses is not string
+      - detection_gitlab_readiness_contract.success_statuses | length > 0
+      - detection_gitlab_readiness_contract.success_statuses | unique | length == detection_gitlab_readiness_contract.success_statuses | length
+      - detection_gitlab_readiness_contract.attempts is integer
+      - detection_gitlab_readiness_contract.attempts >= 1
+      - detection_gitlab_readiness_contract.attempts <= 60
+      - detection_gitlab_readiness_contract.delay_seconds is integer
+      - detection_gitlab_readiness_contract.delay_seconds >= 0
+      - detection_gitlab_readiness_contract.delay_seconds <= 30
+    fail_msg: >-
+      BLOCKED: complete selected-version package, API, readiness, safe local
+      handshake, and zero-jobs query contracts are mandatory before install
+
+- name: Require valid readiness success statuses
+  ansible.builtin.assert:
+    that:
+      - item is integer
+      - item >= 100
+      - item <= 599
+  loop: "{{ detection_gitlab_readiness_contract.success_statuses }}"

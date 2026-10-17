@@ -1,0 +1,27 @@
+---
+# Product and API facts intentionally have no defaults. They must come from
+# VERIFIED selected-version inputs before the ordinary install path is reachable.
+detection_gitlab_delegate_host: >-
+  {{ detection_gitlab_host | regex_replace('^https?://', '') | regex_replace('[:/].*$', '') }}
+detection_runner_gitlab_url: >-
+  {{ detection_gitlab_host if detection_gitlab_host is match('^https?://') else 'http://' ~ detection_gitlab_host }}
+detection_runner_bootstrap_path: /etc/detection-engineering/secrets/runner-api-bootstrap.token
+detection_runner_source_manager_path: /etc/detection-engineering/secrets/runner-auth.token
+detection_runner_gitlab_readiness_path: /var/lib/detection-engineering/gitlab-readiness.json
+detection_runner_state_dir: /var/lib/detection-engineering
+detection_runner_registration_failed_marker: "{{ detection_runner_state_dir }}/runner-registration-failed"
+detection_runner_cleanup_failed_marker: "{{ detection_runner_state_dir }}/runner-bootstrap-cleanup-failed"
+detection_runner_registration_log_path: /var/log/detection-engineering/runner-registration.jsonl
+detection_runner_api_work_dir: /run/detection-engineering/runner-manager
+detection_runner_revoke_work_dir: /run/detection-engineering/runner-revoke
+detection_runner_config_path: /etc/gitlab-runner/config.toml
+detection_runner_policy_path: /usr/sbin/policy-rc.d
+detection_runner_policy_transaction_dir: /usr/sbin/.detection-runner-policy
+detection_runner_policy_helper_path: /usr/local/libexec/detection-engineering/runner-policy-transaction
+detection_runner_key_download_path: /usr/share/keyrings/gitlab-runner.asc
+detection_runner_keyring_path: /usr/share/keyrings/gitlab-runner.gpg
+detection_runner_key_verifier_path: /usr/local/libexec/detection-engineering/verify-gpg-primary
+detection_runner_expected_source_owner: root
+detection_runner_expected_source_uid: 0
+detection_runner_expected_local_owner: root
+detection_runner_expected_local_uid: 0

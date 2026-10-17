@@ -1,0 +1,71 @@
+---
+- name: Validate package API and readiness inputs before install
+  ansible.builtin.include_tasks: validate-contract.yml
+
+- name: Inspect factual GitLab readiness handoff
+  ansible.builtin.stat:
+    path: "{{ detection_runner_gitlab_readiness_path }}"
+  register: detection_runner_readiness_stat
+  delegate_to: "{{ detection_gitlab_delegate_host }}"
+
+- name: Require root-owned factual GitLab readiness evidence
+  ansible.builtin.assert:
+    that:
+      - detection_runner_readiness_stat.stat.exists
+      - detection_runner_readiness_stat.stat.isreg
+      - detection_runner_readiness_stat.stat.mode == '0644'
+      - detection_runner_readiness_stat.stat.uid == detection_runner_expected_source_uid
+      - detection_runner_readiness_stat.stat.pw_name == detection_runner_expected_source_owner
+    fail_msg: "BLOCKED: Task 5 factual GitLab readiness handoff is missing or unsafe"
+
+- name: Read factual GitLab readiness evidence
+  ansible.builtin.slurp:
+    src: "{{ detection_runner_gitlab_readiness_path }}"
+  register: detection_runner_readiness_slurp
+  delegate_to: "{{ detection_gitlab_delegate_host }}"
+
+- name: Parse factual GitLab readiness evidence
+  ansible.builtin.set_fact:
+    detection_runner_readiness: "{{ detection_runner_readiness_slurp.content | b64decode | from_json }}"
+    cacheable: false
+
+- name: Require matching factual GitLab readiness evidence
+  ansible.builtin.assert:
+    that:
+      - detection_runner_readiness.keys() | list | sort == ['attempts_used', 'endpoint', 'http_status', 'method', 'schema_version', 'status']
+      - detection_runner_readiness.schema_version == 1
+      - detection_runner_readiness.status == 'READY'
+      - detection_runner_readiness.endpoint == detection_gitlab_readiness_contract.endpoint
+      - detection_runner_readiness.method == detection_gitlab_readiness_contract.method
+      - detection_runner_readiness.http_status in detection_gitlab_readiness_contract.success_statuses
+      - detection_runner_readiness.attempts_used is integer
+      - detection_runner_readiness.attempts_used >= 1
+    fail_msg: "BLOCKED: Task 5 readiness evidence does not match the selected-version contract"
+
+- name: Inspect delegated stable manager token handoff before install
+  ansible.builtin.stat:
+    path: "{{ detection_runner_source_manager_path }}"
+    follow: false
+  register: detection_runner_source_manager_stat
+  delegate_to: "{{ detection_gitlab_delegate_host }}"
+  no_log: true
+
+- name: Require protected regular stable manager token handoff
+  ansible.builtin.assert:
+    that:
+      - detection_runner_source_manager_stat.stat.exists
+      - detection_runner_source_manager_stat.stat.isreg
+      - not detection_runner_source_manager_stat.stat.islnk
+      - detection_runner_source_manager_stat.stat.mode == '0600'
+      - detection_runner_source_manager_stat.stat.uid == detection_runner_expected_source_uid
+      - detection_runner_source_manager_stat.stat.pw_name == detection_runner_expected_source_owner
+    fail_msg: >-
+      BLOCKED: Task 5 stable token handoff is missing or has unsafe
+      ownership; explicit disposition is required
+  no_log: true
+
+- name: Clear preflight secret-bearing facts
+  ansible.builtin.set_fact:
+    detection_runner_readiness_slurp: null
+    cacheable: false
+  no_log: true

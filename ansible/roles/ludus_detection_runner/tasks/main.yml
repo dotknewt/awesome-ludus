@@ -1,0 +1,260 @@
+---
+- name: Inspect cleanup-first marker without following links
+  ansible.builtin.stat:
+    path: "{{ detection_runner_cleanup_failed_marker }}"
+    follow: false
+  register: detection_runner_initial_cleanup_marker
+
+- name: Validate cleanup marker identity before trusting it
+  when: detection_runner_initial_cleanup_marker.stat.exists
+  block:
+    - name: Require authoritative cleanup marker identity
+      ansible.builtin.assert:
+        that:
+          - detection_runner_initial_cleanup_marker.stat.isreg
+          - not detection_runner_initial_cleanup_marker.stat.islnk
+          - detection_runner_initial_cleanup_marker.stat.mode == '0644'
+          - detection_runner_initial_cleanup_marker.stat.uid == detection_runner_expected_local_uid
+          - detection_runner_initial_cleanup_marker.stat.pw_name == detection_runner_expected_local_owner
+        fail_msg: >-
+          BLOCKED: cleanup marker is not an expected-owner regular 0644 file;
+          refusing to trust its content or attempt revocation
+
+  rescue:
+    - name: Enforce service guard after unsafe cleanup marker refusal
+      block:
+        - name: Run unsafe-marker service guard
+          ansible.builtin.include_tasks: service-guard.yml
+      rescue:
+        - name: Record unsafe-marker service guard failure
+          ansible.builtin.set_fact:
+            detection_runner_guard_confirmed: false
+            cacheable: false
+
+    - name: Stop after unsafe cleanup marker refusal
+      ansible.builtin.fail:
+        msg: >-
+          BLOCKED: unsafe cleanup marker preserved; no marker content was trusted
+          and no revocation was attempted
+
+- name: Resolve pending bootstrap cleanup before any registration work
+  when: detection_runner_initial_cleanup_marker.stat.exists
+  block:
+    - name: Run cleanup-first transaction
+      ansible.builtin.include_tasks: cleanup-first.yml
+
+  rescue:
+    - name: Reassert service guard after any cleanup-first failure
+      block:
+        - name: Run cleanup-first failure service guard
+          ansible.builtin.include_tasks: service-guard.yml
+      rescue:
+        - name: Record cleanup-first failure guard result
+          ansible.builtin.set_fact:
+            detection_runner_guard_confirmed: false
+            cacheable: false
+
+    - name: Stop without ordinary registration fallthrough
+      ansible.builtin.fail:
+        msg: "FAIL: cleanup-first did not complete; ordinary registration was not entered"
+
+- name: Classify bootstrap handle before entering ordinary transaction
+  when: not detection_runner_initial_cleanup_marker.stat.exists
+  block:
+    - name: Initialize ordinary transaction as failed
+      ansible.builtin.set_fact:
+        detection_runner_bootstrap_handle_valid: false
+        detection_runner_registration_outcome: failed
+        detection_runner_registration_status: bootstrap_handle_not_validated
+        detection_runner_primary_status: none
+        detection_runner_guard_status: pending
+        detection_runner_revocation_confirmed: false
+        detection_runner_guard_confirmed: false
+        detection_runner_marker_finalized: false
+        detection_runner_secret_clear_failed: false
+        detection_runner_failure_phase: classify_bootstrap_handle_failed
+        cacheable: false
+
+    - name: Classify protected bootstrap handle
+      ansible.builtin.include_tasks: classify-handle.yml
+
+  rescue:
+    - name: Enforce service guard after refused bootstrap classification
+      block:
+        - name: Run service guard for refused bootstrap classification
+          ansible.builtin.include_tasks: service-guard.yml
+      rescue:
+        - name: Record classification service-guard failure
+          ansible.builtin.set_fact:
+            detection_runner_guard_confirmed: false
+            cacheable: false
+
+    - name: Clear any classified secret material after refusal
+      ansible.builtin.include_tasks: clear-secrets.yml
+
+    - name: Stop after preserving malformed or unsafe bootstrap handle
+      ansible.builtin.fail:
+        msg: >-
+          BLOCKED: bootstrap handle classification failed; handle preserved and
+          no revocation or registration was attempted
+
+- name: Run failure-complete ordinary transaction for a valid bootstrap handle
+  when:
+    - not detection_runner_initial_cleanup_marker.stat.exists
+    - detection_runner_bootstrap_handle_valid | default(false) | bool
+  block:
+    - name: Mark initial service guard phase
+      ansible.builtin.set_fact:
+        detection_runner_failure_phase: initial_service_guard_failed
+        cacheable: false
+
+    - name: Enforce inactive masked state before ordinary prerequisites
+      ansible.builtin.include_tasks: service-guard.yml
+
+    - name: Gate package API token and readiness inputs
+      ansible.builtin.set_fact:
+        detection_runner_failure_phase: preflight_failed
+        cacheable: false
+
+    - name: Run ordinary preflight
+      ansible.builtin.include_tasks: preflight.yml
+
+    - name: Mark package installation phase
+      ansible.builtin.set_fact:
+        detection_runner_failure_phase: package_install_failed
+        cacheable: false
+
+    - name: Install the pinned runner while suppressing package autostart
+      ansible.builtin.include_tasks: install.yml
+
+    - name: Mark local setup and registration phase
+      ansible.builtin.set_fact:
+        detection_runner_failure_phase: local_registration_or_postcheck_failed
+        cacheable: false
+
+    - name: Register and verify the paused dispatch-disabled manager
+      ansible.builtin.include_tasks: lifecycle.yml
+      vars:
+        detection_runner_lifecycle_outer_managed: true
+
+    - name: Mark mandatory service proof phase
+      ansible.builtin.set_fact:
+        detection_runner_failure_phase: service_proof_failed
+        cacheable: false
+
+    - name: Prove service guard before registration success
+      ansible.builtin.include_tasks: service-guard.yml
+
+    - name: Establish successful registration only after every proof
+      ansible.builtin.set_fact:
+        detection_runner_registration_outcome: succeeded
+        detection_runner_registration_status: verified_paused_zero_jobs_service_guarded
+        cacheable: false
+
+  rescue:
+    - name: Preserve sanitized primary ordinary failure phase
+      ansible.builtin.set_fact:
+        detection_runner_registration_outcome: failed
+        detection_runner_registration_status: "{{ detection_runner_failure_phase }}"
+        detection_runner_primary_status: "{{ detection_runner_failure_phase }}"
+        cacheable: false
+
+  always:
+    - name: Independently enforce final inactive masked service state
+      block:
+        - name: Run mandatory final service guard
+          ansible.builtin.include_tasks: service-guard.yml
+
+        - name: Record successful final service guard
+          ansible.builtin.set_fact:
+            detection_runner_guard_confirmed: true
+            detection_runner_guard_status: confirmed
+            cacheable: false
+
+      rescue:
+        - name: Record final service-guard failure without skipping cleanup
+          ansible.builtin.set_fact:
+            detection_runner_guard_confirmed: false
+            detection_runner_guard_status: service_guard_failed
+            detection_runner_registration_outcome: failed
+            detection_runner_registration_status: >-
+              {{ 'service_guard_failed' if detection_runner_primary_status == 'none'
+                 else detection_runner_primary_status ~ '+service_guard_failed' }}
+            cacheable: false
+
+    - name: Independently revoke valid bootstrap credential
+      block:
+        - name: Run delegated bootstrap revocation finalizer
+          ansible.builtin.include_tasks: revoke-bootstrap.yml
+
+      rescue:
+        - name: Record revocation finalizer failure without skipping markers
+          ansible.builtin.set_fact:
+            detection_runner_revocation_confirmed: false
+            cacheable: false
+
+    - name: Independently finalize exact lifecycle markers
+      block:
+        - name: Apply lifecycle truth-table marker transition
+          ansible.builtin.include_tasks: finalize-markers.yml
+
+        - name: Record successful marker finalization
+          ansible.builtin.set_fact:
+            detection_runner_marker_finalized: true
+            cacheable: false
+
+      rescue:
+        - name: Record marker finalization failure
+          ansible.builtin.set_fact:
+            detection_runner_marker_finalized: false
+            cacheable: false
+
+    - name: Independently clear secret-bearing facts and transient files
+      block:
+        - name: Run secret clearing finalizer
+          ansible.builtin.include_tasks: clear-secrets.yml
+      rescue:
+        - name: Record secret clearing failure without exposing material
+          ansible.builtin.set_fact:
+            detection_runner_secret_clear_failed: true
+            cacheable: false
+          no_log: true
+
+- name: Append secret-free ordinary transaction telemetry
+  ansible.builtin.lineinfile:
+    path: "{{ detection_runner_registration_log_path }}"
+    create: true
+    owner: "{{ detection_runner_expected_local_owner }}"
+    mode: '0644'
+    line: >-
+      {{ {
+        'registration_outcome': detection_runner_registration_outcome,
+        'status': detection_runner_registration_status,
+        'service_guarded': detection_runner_guard_confirmed | bool,
+        'bootstrap_revoked': detection_runner_revocation_confirmed | bool,
+        'markers_finalized': detection_runner_marker_finalized | bool,
+        'timestamp': now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ')
+      } | to_json }}
+  when:
+    - not detection_runner_initial_cleanup_marker.stat.exists
+    - detection_runner_bootstrap_handle_valid | default(false) | bool
+
+- name: Fail closed after all ordinary finalizers report their results
+  ansible.builtin.fail:
+    msg: >-
+      FAIL: registration={{ detection_runner_registration_outcome }},
+      status={{ detection_runner_registration_status }},
+      primary={{ detection_runner_primary_status }},
+      guard={{ detection_runner_guard_status }},
+      service_guarded={{ detection_runner_guard_confirmed | bool }},
+      bootstrap_revoked={{ detection_runner_revocation_confirmed | bool }},
+      markers_finalized={{ detection_runner_marker_finalized | bool }}
+  when:
+    - not detection_runner_initial_cleanup_marker.stat.exists
+    - detection_runner_bootstrap_handle_valid | default(false) | bool
+    - >-
+      detection_runner_registration_outcome != 'succeeded' or
+      not detection_runner_guard_confirmed | bool or
+      not detection_runner_revocation_confirmed | bool or
+      not detection_runner_marker_finalized | bool or
+      detection_runner_secret_clear_failed | default(false) | bool

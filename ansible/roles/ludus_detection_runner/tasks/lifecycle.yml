@@ -1,0 +1,402 @@
+---
+- name: Validate registration safety contracts
+  ansible.builtin.assert:
+    that:
+      - detection_runner_api_contract.manager.local_verify_command == ['gitlab-runner', 'verify']
+      - detection_runner_api_contract.manager.pause_at_create | bool
+      - detection_runner_api_contract.manager.lookup_method == 'GET'
+      - detection_runner_api_contract.manager.detail_method == 'GET'
+      - detection_runner_api_contract.manager.update_method == 'PUT'
+      - detection_runner_api_contract.bootstrap_auth.revoke_method == 'DELETE'
+      - detection_runner_api_contract.bootstrap_auth.revoke_endpoint is match('^/[^?\\s]+$')
+      - detection_runner_jobs_contract.keys() | list | sort == ['endpoint', 'method']
+      - detection_runner_jobs_contract.method == 'GET'
+      - detection_runner_jobs_contract.endpoint is match('^/[^?\\s]+$')
+      - (':id' in detection_runner_jobs_contract.endpoint) or ('{id}' in detection_runner_jobs_contract.endpoint)
+    fail_msg: >-
+      BLOCKED: missing or unsafe selected-version local verification or
+      zero-jobs capability; refusing to guess a successful handshake
+
+- name: Create local protected registration paths
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ detection_runner_state_dir }}", mode: '0755'}
+    - {path: "{{ detection_runner_api_work_dir }}", mode: '0700'}
+    - {path: "{{ detection_runner_config_path | dirname }}", mode: '0700'}
+    - {path: "{{ detection_runner_registration_log_path | dirname }}", mode: '0755'}
+
+- name: Inspect delegated Task 5 bootstrap credential
+  ansible.builtin.stat:
+    path: "{{ detection_runner_bootstrap_path }}"
+  register: detection_runner_bootstrap_stat
+  delegate_to: "{{ detection_gitlab_delegate_host }}"
+  no_log: true
+
+- name: Require protected bootstrap credential ownership
+  ansible.builtin.assert:
+    that:
+      - detection_runner_bootstrap_stat.stat.exists
+      - detection_runner_bootstrap_stat.stat.isreg
+      - detection_runner_bootstrap_stat.stat.mode == '0600'
+      - detection_runner_bootstrap_stat.stat.uid == detection_runner_expected_source_uid
+      - detection_runner_bootstrap_stat.stat.pw_name == detection_runner_expected_source_owner
+    fail_msg: >-
+      BLOCKED: bootstrap handle is missing or unsafe; explicit disposition is
+      required and Task 6 will not delete or replace it
+  no_log: true
+
+- name: Read delegated Task 5 bootstrap credential
+  ansible.builtin.slurp:
+    src: "{{ detection_runner_bootstrap_path }}"
+  register: detection_runner_bootstrap_slurp
+  delegate_to: "{{ detection_gitlab_delegate_host }}"
+  no_log: true
+
+- name: Hold bootstrap credential only as a non-cacheable fact
+  ansible.builtin.set_fact:
+    detection_runner_bootstrap_token: "{{ detection_runner_bootstrap_slurp.content | b64decode }}"
+    cacheable: false
+  no_log: true
+
+- name: Reject malformed bootstrap handle without deletion or revocation guessing
+  ansible.builtin.assert:
+    that:
+      - detection_runner_bootstrap_token is match('^[^\\s\\x00]+$')
+    fail_msg: >-
+      BLOCKED: malformed bootstrap handle may be Task 5 partial persistence;
+      explicit disposition is required before Task 6 can continue
+  no_log: true
+
+- name: Pre-create protected local API response files
+  ansible.builtin.file:
+    path: "{{ detection_runner_api_work_dir }}/{{ item }}.json"
+    state: touch
+    mode: '0600'
+    access_time: preserve
+    modification_time: preserve
+  loop: [lookup, update, detail, post-detail, jobs]
+  no_log: true
+
+- name: Run registration and post-registration proof
+  block:
+    - name: Look up all runner identities without query credentials or filters
+      ansible.builtin.command:
+        argv: [curl, --config, '-']
+        stdin: |
+          silent
+          show-error
+          fail-with-body
+          url = "{{ detection_runner_gitlab_url | regex_replace('/+$', '') }}{{ detection_runner_api_contract.manager.lookup_endpoint }}"
+          request = "{{ detection_runner_api_contract.manager.lookup_method }}"
+          header = "Authorization: Bearer {{ detection_runner_bootstrap_token }}"
+          output = "{{ detection_runner_api_work_dir }}/lookup.json"
+      changed_when: false
+
+    - name: Read protected identity lookup response
+      ansible.builtin.slurp:
+        src: "{{ detection_runner_api_work_dir }}/lookup.json"
+      register: detection_runner_lookup_slurp
+
+    - name: Select the exact range-scoped identity
+      ansible.builtin.set_fact:
+        detection_runner_identity_matches: >-
+          {{ (detection_runner_lookup_slurp.content | b64decode | from_json)
+             | selectattr('runner_type', 'equalto', detection_runner_api_contract.manager.runner_type)
+             | selectattr('description', 'equalto', detection_runner_description)
+             | list }}
+        cacheable: false
+
+    - name: Require exactly the Task 5 identity and never create another
+      ansible.builtin.assert:
+        that:
+          - detection_runner_identity_matches | length == 1
+          - detection_runner_identity_matches[0].id is integer
+          - detection_runner_identity_matches[0].id > 0
+        fail_msg: "BLOCKED: exact Task 5 runner identity is absent or duplicated"
+
+    - name: Select stable identity ID
+      ansible.builtin.set_fact:
+        detection_runner_identity_id: "{{ detection_runner_identity_matches[0].id }}"
+        cacheable: false
+
+    - name: Write protected pause request
+      ansible.builtin.copy:
+        dest: "{{ detection_runner_api_work_dir }}/pause-request.json"
+        mode: '0600'
+        content: "{{ {'paused': true} | to_json }}"
+      when: not detection_runner_identity_matches[0].paused | bool
+
+    - name: Pause a preexisting unpaused identity before manager-token transfer
+      ansible.builtin.command:
+        argv: [curl, --config, '-']
+        stdin: |
+          silent
+          show-error
+          fail-with-body
+          url = "{{ detection_runner_gitlab_url | regex_replace('/+$', '') }}{{ detection_runner_api_contract.manager.update_endpoint | replace(':id', detection_runner_identity_id | string) | replace('{id}', detection_runner_identity_id | string) }}"
+          request = "{{ detection_runner_api_contract.manager.update_method }}"
+          header = "Authorization: Bearer {{ detection_runner_bootstrap_token }}"
+          header = "Content-Type: application/json"
+          data = "@{{ detection_runner_api_work_dir }}/pause-request.json"
+          output = "{{ detection_runner_api_work_dir }}/update.json"
+      changed_when: true
+      when: not detection_runner_identity_matches[0].paused | bool
+
+    - name: Read exact identity detail before manager-token transfer
+      ansible.builtin.command:
+        argv: [curl, --config, '-']
+        stdin: |
+          silent
+          show-error
+          fail-with-body
+          url = "{{ detection_runner_gitlab_url | regex_replace('/+$', '') }}{{ detection_runner_api_contract.manager.detail_endpoint | replace(':id', detection_runner_identity_id | string) | replace('{id}', detection_runner_identity_id | string) }}"
+          request = "{{ detection_runner_api_contract.manager.detail_method }}"
+          header = "Authorization: Bearer {{ detection_runner_bootstrap_token }}"
+          output = "{{ detection_runner_api_work_dir }}/detail.json"
+      changed_when: false
+
+    - name: Read protected pre-transfer identity detail
+      ansible.builtin.slurp:
+        src: "{{ detection_runner_api_work_dir }}/detail.json"
+      register: detection_runner_detail_slurp
+
+    - name: Parse protected pre-transfer identity detail
+      ansible.builtin.set_fact:
+        detection_runner_identity_detail: "{{ detection_runner_detail_slurp.content | b64decode | from_json }}"
+        cacheable: false
+
+    - name: Prove exact paused identity before manager-token transfer
+      ansible.builtin.assert:
+        that:
+          - detection_runner_identity_detail.id == detection_runner_identity_id | int
+          - detection_runner_identity_detail.runner_type == detection_runner_api_contract.manager.runner_type
+          - detection_runner_identity_detail.description == detection_runner_description
+          - detection_runner_identity_detail.paused | bool
+
+    - name: Inspect stable delegated manager token without changing it
+      ansible.builtin.stat:
+        path: "{{ detection_runner_source_manager_path }}"
+      register: detection_runner_manager_stat
+      delegate_to: "{{ detection_gitlab_delegate_host }}"
+
+    - name: Require protected stable manager token ownership
+      ansible.builtin.assert:
+        that:
+          - detection_runner_manager_stat.stat.exists
+          - detection_runner_manager_stat.stat.isreg
+          - detection_runner_manager_stat.stat.mode == '0600'
+          - detection_runner_manager_stat.stat.uid == detection_runner_expected_source_uid
+          - detection_runner_manager_stat.stat.pw_name == detection_runner_expected_source_owner
+        fail_msg: >-
+          BLOCKED: stable manager token is absent or unsafe; Task 6 never
+          generates, replaces, or repairs it
+
+    - name: Transfer stable manager token only after pause proof
+      ansible.builtin.slurp:
+        src: "{{ detection_runner_source_manager_path }}"
+      register: detection_runner_manager_slurp
+      delegate_to: "{{ detection_gitlab_delegate_host }}"
+
+    - name: Hold stable manager token only as a non-cacheable fact
+      ansible.builtin.set_fact:
+        detection_runner_manager_token: "{{ detection_runner_manager_slurp.content | b64decode }}"
+        cacheable: false
+
+    - name: Reject malformed stable manager token without replacement
+      ansible.builtin.assert:
+        that:
+          - detection_runner_manager_token is match('^[^\\s\\x00]+$')
+        fail_msg: "BLOCKED: malformed stable manager token requires explicit disposition"
+
+    - name: Render minimum local manager configuration
+      ansible.builtin.template:
+        src: runner-config.toml.j2
+        dest: "{{ detection_runner_config_path }}"
+        mode: '0600'
+
+    - name: Execute only the selected-version safe manager verification handshake
+      ansible.builtin.command:
+        argv: "{{ detection_runner_api_contract.manager.local_verify_command }}"
+      changed_when: false
+
+    - name: Re-read exact identity after local verification
+      ansible.builtin.command:
+        argv: [curl, --config, '-']
+        stdin: |
+          silent
+          show-error
+          fail-with-body
+          url = "{{ detection_runner_gitlab_url | regex_replace('/+$', '') }}{{ detection_runner_api_contract.manager.detail_endpoint | replace(':id', detection_runner_identity_id | string) | replace('{id}', detection_runner_identity_id | string) }}"
+          request = "{{ detection_runner_api_contract.manager.detail_method }}"
+          header = "Authorization: Bearer {{ detection_runner_bootstrap_token }}"
+          output = "{{ detection_runner_api_work_dir }}/post-detail.json"
+      changed_when: false
+
+    - name: Query exact runner jobs without query credentials or filters
+      ansible.builtin.command:
+        argv: [curl, --config, '-']
+        stdin: |
+          silent
+          show-error
+          fail-with-body
+          url = "{{ detection_runner_gitlab_url | regex_replace('/+$', '') }}{{ detection_runner_jobs_contract.endpoint | replace(':id', detection_runner_identity_id | string) | replace('{id}', detection_runner_identity_id | string) }}"
+          request = "{{ detection_runner_jobs_contract.method }}"
+          header = "Authorization: Bearer {{ detection_runner_bootstrap_token }}"
+          output = "{{ detection_runner_api_work_dir }}/jobs.json"
+      changed_when: false
+
+    - name: Read protected post-registration responses
+      ansible.builtin.slurp:
+        src: "{{ detection_runner_api_work_dir }}/{{ item }}.json"
+      loop: [post-detail, jobs]
+      register: detection_runner_postcheck_slurps
+
+    - name: Parse post-registration identity and jobs
+      ansible.builtin.set_fact:
+        detection_runner_post_detail: "{{ detection_runner_postcheck_slurps.results[0].content | b64decode | from_json }}"
+        detection_runner_jobs: "{{ detection_runner_postcheck_slurps.results[1].content | b64decode | from_json }}"
+        cacheable: false
+
+    - name: Prove paused matching identity and zero jobs after handshake
+      ansible.builtin.assert:
+        that:
+          - detection_runner_post_detail.id == detection_runner_identity_id | int
+          - detection_runner_post_detail.runner_type == detection_runner_api_contract.manager.runner_type
+          - detection_runner_post_detail.description == detection_runner_description
+          - detection_runner_post_detail.paused | bool
+          - detection_runner_jobs is sequence
+          - detection_runner_jobs is not string
+          - detection_runner_jobs | length == 0
+
+    - name: Record successful local registration outcome in memory
+      ansible.builtin.set_fact:
+        detection_runner_registration_core_succeeded: true
+        detection_runner_registration_outcome: >-
+          {{ 'failed' if detection_runner_lifecycle_outer_managed | default(false) | bool else 'succeeded' }}
+        detection_runner_registration_status: >-
+          {{ 'runner_proofs_complete_service_pending'
+             if detection_runner_lifecycle_outer_managed | default(false) | bool
+             else 'verified_paused_zero_jobs' }}
+        cacheable: false
+
+  rescue:
+    - name: Record failed local registration outcome in memory
+      ansible.builtin.set_fact:
+        detection_runner_registration_core_succeeded: false
+        detection_runner_registration_outcome: failed
+        detection_runner_registration_status: local_registration_or_postcheck_failed
+        cacheable: false
+
+  always:
+    - name: Always revoke the valid temporary bootstrap credential
+      ansible.builtin.include_tasks: revoke-bootstrap.yml
+      when: not (detection_runner_lifecycle_outer_managed | default(false) | bool)
+
+    - name: Remove all transient local API material
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ detection_runner_api_work_dir }}/lookup.json"
+        - "{{ detection_runner_api_work_dir }}/update.json"
+        - "{{ detection_runner_api_work_dir }}/detail.json"
+        - "{{ detection_runner_api_work_dir }}/post-detail.json"
+        - "{{ detection_runner_api_work_dir }}/jobs.json"
+        - "{{ detection_runner_api_work_dir }}/pause-request.json"
+      when: not (detection_runner_lifecycle_outer_managed | default(false) | bool)
+
+    - name: Clear all secret-bearing and response facts
+      ansible.builtin.set_fact:
+        detection_runner_bootstrap_token: null
+        detection_runner_bootstrap_slurp: null
+        detection_runner_manager_token: null
+        detection_runner_manager_slurp: null
+        detection_runner_lookup_slurp: null
+        detection_runner_detail_slurp: null
+        detection_runner_postcheck_slurps: null
+        cacheable: false
+      when: not (detection_runner_lifecycle_outer_managed | default(false) | bool)
+  no_log: true
+
+- name: Apply successful revocation marker transition
+  when:
+    - not (detection_runner_lifecycle_outer_managed | default(false) | bool)
+    - detection_runner_revocation_confirmed | bool
+  block:
+    - name: Remove bootstrap cleanup failure marker after confirmed revocation
+      ansible.builtin.file:
+        path: "{{ detection_runner_cleanup_failed_marker }}"
+        state: absent
+
+    - name: Remove registration failure marker after successful registration
+      ansible.builtin.file:
+        path: "{{ detection_runner_registration_failed_marker }}"
+        state: absent
+      when: detection_runner_registration_outcome == 'succeeded'
+
+    - name: Record registration failure after confirmed bootstrap revocation
+      ansible.builtin.copy:
+        dest: "{{ detection_runner_registration_failed_marker }}"
+        mode: '0644'
+        content: >-
+          {{ {
+            'registration_outcome': 'failed',
+            'status': detection_runner_registration_status,
+            'timestamp': now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ')
+          } | to_nice_json }}
+      when: detection_runner_registration_outcome == 'failed'
+
+- name: Apply failed revocation marker transition
+  when:
+    - not (detection_runner_lifecycle_outer_managed | default(false) | bool)
+    - not detection_runner_revocation_confirmed | bool
+  block:
+    - name: Remove registration marker while cleanup is authoritative
+      ansible.builtin.file:
+        path: "{{ detection_runner_registration_failed_marker }}"
+        state: absent
+
+    - name: Retain only cleanup marker with registration outcome status and time
+      ansible.builtin.copy:
+        dest: "{{ detection_runner_cleanup_failed_marker }}"
+        mode: '0644'
+        content: >-
+          {{ {
+            'registration_outcome': detection_runner_registration_outcome,
+            'status': 'bootstrap_revocation_failed_after_3_tries',
+            'timestamp': now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ')
+          } | to_nice_json }}
+
+- name: Append secret-free registration telemetry
+  ansible.builtin.lineinfile:
+    path: "{{ detection_runner_registration_log_path }}"
+    create: true
+    mode: '0644'
+    line: >-
+      {{ {
+        'registration_outcome': detection_runner_registration_outcome,
+        'status': detection_runner_registration_status,
+        'bootstrap_revoked': detection_runner_revocation_confirmed | bool,
+        'timestamp': now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ')
+      } | to_json }}
+  when: not (detection_runner_lifecycle_outer_managed | default(false) | bool)
+
+- name: Propagate registration failure to the outer transaction
+  ansible.builtin.fail:
+    msg: "FAIL: {{ detection_runner_registration_status }}"
+  when:
+    - detection_runner_lifecycle_outer_managed | default(false) | bool
+    - not detection_runner_registration_core_succeeded | default(false) | bool
+
+- name: Fail closed on registration or bootstrap cleanup failure
+  ansible.builtin.fail:
+    msg: >-
+      {{ 'FAIL: bootstrap revocation failed after 3 tries; cleanup-first rerun required'
+         if not detection_runner_revocation_confirmed
+         else 'FAIL: local registration failed after bootstrap revocation; rerun Task 5 first' }}
+  when:
+    - not (detection_runner_lifecycle_outer_managed | default(false) | bool)
+    - not detection_runner_revocation_confirmed | bool or detection_runner_registration_outcome == 'failed'

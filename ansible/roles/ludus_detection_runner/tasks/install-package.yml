@@ -1,0 +1,76 @@
+---
+- name: Create private same-filesystem policy transaction directory
+  ansible.builtin.file:
+    path: "{{ detection_runner_policy_transaction_dir }}"
+    state: directory
+    owner: "{{ detection_runner_expected_local_owner }}"
+    mode: '0700'
+
+- name: Stage scoped policy wrapper privately
+  ansible.builtin.template:
+    src: policy-rc.d.j2
+    dest: "{{ detection_runner_policy_transaction_dir }}/wrapper-stage"
+    owner: "{{ detection_runner_expected_local_owner }}"
+    mode: '0755'
+
+- name: Install exact runner package under race-bounded autostart suppression
+  block:
+    - name: Enforce inactive masked service state before package install
+      ansible.builtin.include_tasks: service-guard.yml
+
+    - name: Atomically capture original and publish scoped policy without replacement
+      ansible.builtin.command:
+        argv:
+          - "{{ detection_runner_policy_helper_path }}"
+          - begin
+          - --public
+          - "{{ detection_runner_policy_path }}"
+          - --directory
+          - "{{ detection_runner_policy_transaction_dir }}"
+          - --staged
+          - "{{ detection_runner_policy_transaction_dir }}/wrapper-stage"
+          - --state
+          - "{{ detection_runner_policy_transaction_dir }}/state.json"
+          - --expected-uid
+          - "{{ detection_runner_expected_local_uid | string }}"
+      changed_when: true
+
+    - name: Install exact pinned runner package with apt-get
+      ansible.builtin.command:
+        argv:
+          - apt-get
+          - install
+          - -y
+          - --no-install-recommends
+          - "{{ detection_runner_packages[0].name }}={{ detection_runner_packages[0].version }}"
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+      changed_when: true
+
+  always:
+    - name: Capture public policy first and restore without replacement
+      ansible.builtin.command:
+        argv:
+          - "{{ detection_runner_policy_helper_path }}"
+          - cleanup
+          - --public
+          - "{{ detection_runner_policy_path }}"
+          - --directory
+          - "{{ detection_runner_policy_transaction_dir }}"
+          - --staged
+          - "{{ detection_runner_policy_transaction_dir }}/wrapper-stage"
+          - --state
+          - "{{ detection_runner_policy_transaction_dir }}/state.json"
+          - --expected-uid
+          - "{{ detection_runner_expected_local_uid | string }}"
+      register: detection_runner_policy_cleanup
+      changed_when: detection_runner_policy_cleanup.rc == 0
+      failed_when: false
+
+    - name: Require complete race-bounded policy restoration
+      ansible.builtin.assert:
+        that:
+          - detection_runner_policy_cleanup.rc == 0
+        fail_msg: >-
+          BLOCKED: policy transaction preserved a foreign/colliding object and
+          quarantined state; explicit disposition is required

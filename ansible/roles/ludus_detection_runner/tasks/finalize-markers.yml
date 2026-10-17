@@ -1,0 +1,121 @@
+---
+- name: Inspect both marker identities without following links
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop:
+    - "{{ detection_runner_registration_failed_marker }}"
+    - "{{ detection_runner_cleanup_failed_marker }}"
+  register: detection_runner_marker_stats
+
+- name: Classify marker paths without trusting unsafe objects
+  ansible.builtin.set_fact:
+    detection_runner_registration_marker_safe: >-
+      {{ not detection_runner_marker_stats.results[0].stat.exists or
+         (detection_runner_marker_stats.results[0].stat.isreg and
+          not detection_runner_marker_stats.results[0].stat.islnk and
+          detection_runner_marker_stats.results[0].stat.mode == '0644' and
+          detection_runner_marker_stats.results[0].stat.uid == detection_runner_expected_local_uid and
+          detection_runner_marker_stats.results[0].stat.pw_name == detection_runner_expected_local_owner) }}
+    detection_runner_cleanup_marker_safe: >-
+      {{ not detection_runner_marker_stats.results[1].stat.exists or
+         (detection_runner_marker_stats.results[1].stat.isreg and
+          not detection_runner_marker_stats.results[1].stat.islnk and
+          detection_runner_marker_stats.results[1].stat.mode == '0644' and
+          detection_runner_marker_stats.results[1].stat.uid == detection_runner_expected_local_uid and
+          detection_runner_marker_stats.results[1].stat.pw_name == detection_runner_expected_local_owner) }}
+    cacheable: false
+
+- name: Initialize aggregate marker mutation failures
+  ansible.builtin.set_fact:
+    detection_runner_marker_failures: >-
+      {{
+        ([] if detection_runner_registration_marker_safe | bool else ['unsafe_registration_marker'])
+        + ([] if detection_runner_cleanup_marker_safe | bool else ['unsafe_cleanup_marker'])
+      }}
+    cacheable: false
+
+- name: Independently remove non-authoritative cleanup marker
+  when:
+    - detection_runner_cleanup_marker_safe | bool
+    - detection_runner_revocation_confirmed | bool
+  block:
+    - name: Remove cleanup marker after confirmed revocation
+      ansible.builtin.file:
+        path: "{{ detection_runner_cleanup_failed_marker }}"
+        state: absent
+  rescue:
+    - name: Aggregate cleanup marker removal failure
+      ansible.builtin.set_fact:
+        detection_runner_marker_failures: "{{ detection_runner_marker_failures + ['cleanup_marker_remove_failed'] }}"
+        cacheable: false
+
+- name: Independently remove non-authoritative registration marker
+  when:
+    - detection_runner_registration_marker_safe | bool
+    - >-
+      not detection_runner_revocation_confirmed | bool or
+      detection_runner_registration_outcome == 'succeeded'
+  block:
+    - name: Remove registration marker when it is non-authoritative
+      ansible.builtin.file:
+        path: "{{ detection_runner_registration_failed_marker }}"
+        state: absent
+  rescue:
+    - name: Aggregate registration marker removal failure
+      ansible.builtin.set_fact:
+        detection_runner_marker_failures: "{{ detection_runner_marker_failures + ['registration_marker_remove_failed'] }}"
+        cacheable: false
+
+- name: Independently write authoritative registration-failure marker
+  when:
+    - detection_runner_registration_marker_safe | bool
+    - detection_runner_revocation_confirmed | bool
+    - detection_runner_registration_outcome == 'failed'
+  block:
+    - name: Record failed registration after confirmed revocation
+      ansible.builtin.copy:
+        dest: "{{ detection_runner_registration_failed_marker }}"
+        owner: "{{ detection_runner_expected_local_owner }}"
+        mode: '0644'
+        content: >-
+          {{ {
+            'registration_outcome': 'failed',
+            'status': detection_runner_registration_status,
+            'timestamp': now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ')
+          } | to_nice_json }}
+  rescue:
+    - name: Aggregate authoritative registration marker write failure
+      ansible.builtin.set_fact:
+        detection_runner_marker_failures: "{{ detection_runner_marker_failures + ['registration_marker_write_failed'] }}"
+        cacheable: false
+
+- name: Independently write authoritative cleanup-first marker
+  when:
+    - detection_runner_cleanup_marker_safe | bool
+    - not detection_runner_revocation_confirmed | bool
+  block:
+    - name: Record retained bootstrap cleanup failure
+      ansible.builtin.copy:
+        dest: "{{ detection_runner_cleanup_failed_marker }}"
+        owner: "{{ detection_runner_expected_local_owner }}"
+        mode: '0644'
+        content: >-
+          {{ {
+            'registration_outcome': detection_runner_registration_outcome,
+            'status': 'bootstrap_revocation_failed_after_3_tries',
+            'timestamp': now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ')
+          } | to_nice_json }}
+  rescue:
+    - name: Aggregate authoritative cleanup marker write failure
+      ansible.builtin.set_fact:
+        detection_runner_marker_failures: "{{ detection_runner_marker_failures + ['cleanup_marker_write_failed'] }}"
+        cacheable: false
+
+- name: Fail closed only after all applicable marker mutations were attempted
+  ansible.builtin.assert:
+    that:
+      - detection_runner_marker_failures | length == 0
+    fail_msg: >-
+      BLOCKED: one or more marker transitions failed after every independent
+      applicable mutation was attempted; marker state is not claimed correct
