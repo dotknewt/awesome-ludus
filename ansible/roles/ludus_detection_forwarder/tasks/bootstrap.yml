@@ -1,0 +1,125 @@
+---
+# yamllint disable rule:line-length
+- name: Bootstrap first start only without secret arguments
+  when: not _detection_forwarder_marker_stat.exists
+  block:
+    - name: Create protected first-start and marker directories
+      ansible.builtin.file:
+        path: "{{ _detection_forwarder_root }}{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - {path: "{{ detection_forwarder_seed_path | dirname }}", owner: "{{ detection_forwarder_file_owner }}", group: "{{ detection_forwarder_file_group }}", mode: "0750"}
+        - {path: "{{ detection_forwarder_marker_path | dirname }}", owner: "{{ detection_forwarder_root_owner }}", group: "{{ detection_forwarder_root_group }}", mode: "0750"}
+
+    - name: Resolve intended service account uid
+      ansible.builtin.command:
+        argv: ["{{ detection_forwarder_id }}", -u, "{{ detection_forwarder_service_user }}"]
+      register: _detection_forwarder_service_uid
+      changed_when: false
+
+    - name: Resolve intended service account gid
+      ansible.builtin.command:
+        argv: ["{{ detection_forwarder_id }}", -g, "{{ detection_forwarder_service_group }}"]
+      register: _detection_forwarder_service_gid
+      changed_when: false
+
+    - name: Publish protected bootstrap transaction before first start
+      ansible.builtin.template:
+        src: bootstrap-transaction.yml.j2
+        dest: "{{ _detection_forwarder_root }}{{ detection_forwarder_transaction_path }}"
+        owner: "{{ detection_forwarder_root_owner }}"
+        group: "{{ detection_forwarder_root_group }}"
+        mode: "0600"
+
+    - name: Create protected random first-start seed without output
+      ansible.builtin.command:
+        argv:
+          - "{{ detection_forwarder_python }}"
+          - -c
+          - |
+            import os, secrets, sys
+            path, uid, gid = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            fd = os.open(path, flags, 0o600)
+            try:
+                os.fchown(fd, uid, gid)
+                value = secrets.token_urlsafe(48)
+                os.write(fd, ("[user_info]\nUSERNAME = admin\nPASSWORD = " + value + "\n").encode())
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+          - "{{ _detection_forwarder_root }}{{ detection_forwarder_seed_path }}"
+          - "{{ _detection_forwarder_service_uid.stdout | trim }}"
+          - "{{ _detection_forwarder_service_gid.stdout | trim }}"
+      changed_when: true
+      no_log: true
+
+    - name: Perform verified noninteractive first start and license acceptance
+      ansible.builtin.command:
+        argv: ["{{ detection_forwarder_runuser }}", --user, "{{ detection_forwarder_service_user }}", --, "{{ detection_forwarder_cli }}", start, --accept-license, --answer-yes, --no-prompt]
+      changed_when: true
+      no_log: true
+  always:
+    - name: Remove transient first-start seed
+      ansible.builtin.file:
+        path: "{{ _detection_forwarder_root }}{{ detection_forwarder_seed_path }}"
+        state: absent
+      no_log: true
+
+- name: Create verified boot-start unit after successful first start
+  ansible.builtin.command:
+    argv: ["{{ detection_forwarder_cli }}", enable, boot-start, -user, "{{ detection_forwarder_service_user }}", --accept-license, --answer-yes, --no-prompt]
+  when: not _detection_forwarder_marker_stat.exists
+  changed_when: true
+
+- name: Inspect boot-start unit before any service operation
+  ansible.builtin.stat:
+    path: "{{ _detection_forwarder_root }}{{ detection_forwarder_unit_path }}"
+  register: _detection_forwarder_unit
+
+- name: Require regular boot-start unit before service operations
+  ansible.builtin.assert:
+    that:
+      - _detection_forwarder_unit.stat.exists
+      - _detection_forwarder_unit.stat.isreg
+
+- name: Read effective identity from newly generated unit
+  ansible.builtin.command:
+    argv: ["{{ detection_forwarder_systemctl }}", show, "{{ detection_forwarder_service_name }}", --property, User, --value]
+  register: _detection_forwarder_new_unit_user
+  changed_when: false
+  when: not _detection_forwarder_marker_stat.exists
+
+- name: Read fragment path from newly generated unit
+  ansible.builtin.command:
+    argv: ["{{ detection_forwarder_systemctl }}", show, "{{ detection_forwarder_service_name }}", --property, FragmentPath, --value]
+  register: _detection_forwarder_new_unit_path
+  changed_when: false
+  when: not _detection_forwarder_marker_stat.exists
+
+- name: Require generated unit to execute as selected nonroot identity
+  ansible.builtin.assert:
+    that:
+      - _detection_forwarder_new_unit_user.stdout | trim == detection_forwarder_service_user
+      - _detection_forwarder_new_unit_user.stdout | trim != 'root'
+      - _detection_forwarder_new_unit_path.stdout | trim == detection_forwarder_unit_path
+    fail_msg: Generated boot-start unit does not report the selected nonroot service identity
+  when: not _detection_forwarder_marker_stat.exists
+
+- name: Publish validated bootstrap marker after unit creation
+  ansible.builtin.template:
+    src: bootstrap-marker.yml.j2
+    dest: "{{ _detection_forwarder_root }}{{ detection_forwarder_marker_path }}"
+    owner: "{{ detection_forwarder_root_owner }}"
+    group: "{{ detection_forwarder_root_group }}"
+    mode: "0600"
+  when: not _detection_forwarder_marker_stat.exists
+
+- name: Close bootstrap transaction only after authoritative marker publication
+  ansible.builtin.file:
+    path: "{{ _detection_forwarder_root }}{{ detection_forwarder_transaction_path }}"
+    state: absent
+  when: not _detection_forwarder_marker_stat.exists

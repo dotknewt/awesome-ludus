@@ -5,6 +5,9 @@
 - name: Inspect package and managed lifecycle state
   ansible.builtin.include_tasks: inspect.yml
 
+- name: Prove canonical producer files exist before package mutation
+  ansible.builtin.include_tasks: inspect_sources.yml
+
 - name: Install and bootstrap the managed Universal Forwarder
   ansible.builtin.include_tasks: install.yml
 

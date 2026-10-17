@@ -109,7 +109,12 @@ case "$3" in
   Architecture) printf '%s\\n' "${{FAKE_DEB_ARCH:-amd64}}" ;;
   *) exit 2 ;;
 esac''')
-    _executable(fake_bin / "dpkg", f"{logger}\nprintf 'install ok installed\\t10.6.1.1\\tamd64\\n' > {package_state}\ntouch {lifecycle}/package-installed")
+    _executable(fake_bin / "dpkg", f'''{logger}
+printf 'install ok installed\\t10.6.1.1\\tamd64\\n' > {package_state}
+touch {lifecycle}/package-installed
+if [ -f {lifecycle}/fail-provenance ]; then
+  mkdir -p {root}/etc/detection-engineering/forwarder-install-provenance.yml/install-provenance.yml.j2
+fi''')
     _executable(fake_bin / "splunk", f'''{logger}
 [ -f {lifecycle}/package-installed ] || exit 40
 case "$1" in
@@ -142,14 +147,26 @@ case "$1" in
   *) exit 52 ;;
 esac''')
     _executable(fake_bin / "id", f'''{logger}
+[ -f {lifecycle}/package-installed ] || exit 61
+[ ! -f {lifecycle}/missing-account ] || exit 62
+[ "$#" -eq 2 ] || exit 63
 case "$1" in
-  -u) printf '%s\\n' {os.getuid()} ;;
-  -g) printf '%s\\n' {os.getgid()} ;;
+  -u) [ "$2" = splunkfwd ] || exit 64
+      if [ -f {lifecycle}/wrong-account-uid ]; then printf '%s\\n' 0; else printf '%s\\n' 1000; fi ;;
+  -g) [ "$2" = splunkfwd ] || exit 65
+      printf '%s\\n' 1000 ;;
+  -gn) [ "$2" = splunkfwd ] || exit 66
+       if [ -f {lifecycle}/wrong-account-group ]; then printf '%s\\n' wrong; else printf '%s\\n' splunkfwd; fi ;;
   *) exit 60 ;;
 esac''')
     _executable(fake_bin / "runuser", f'''{logger}
+[ -f {lifecycle}/package-installed ] || exit 84
+[ ! -f {lifecycle}/missing-account ] || exit 85
+[ ! -f {lifecycle}/wrong-account-uid ] || exit 86
+[ ! -f {lifecycle}/wrong-account-group ] || exit 87
 [ "$1" = --user ] && [ "$2" = splunkfwd ] && [ "$3" = -- ] || exit 80
 if [ "$4" = test ]; then
+  [ "$#" -eq 6 ] || exit 88
   [ "$5" = -r ] || exit 81
   inode=$(stat -c %i "$6")
   grep -Fqx "$6|$inode" {readable_state} || exit 82
@@ -207,6 +224,11 @@ def _run(fixture: dict, **updates):
     return run_production_include(ROLE, "main", variables, fixture["bin"])
 
 
+def _run_entrypoint(fixture: dict, entrypoint: str, **updates):
+    variables = copy.deepcopy(fixture["variables"]); variables.update(updates)
+    return run_production_include(ROLE, entrypoint, variables, fixture["bin"])
+
+
 def _calls(fixture: dict) -> list[str]:
     return fixture["calls"].read_text(encoding="utf-8").splitlines()
 
@@ -235,6 +257,318 @@ def _assert_no_mutation(fixture: dict) -> None:
     calls = _calls(fixture)
     assert not any(c.startswith("-i ") or c.startswith("start ") or c.startswith("enable ") or c.startswith("restart ") for c in calls)
     assert not _actual(fixture, "/var/lib/detection-engineering/forwarder-bootstrap.yml").exists()
+
+
+def _remove_sources(fixture: dict) -> None:
+    for item in fixture["variables"]["detection_forwarder_inputs"]:
+        _actual(fixture, item["path"]).unlink()
+
+
+def _preserved_unrelated_state(fixture: dict) -> tuple[Path, Path]:
+    service = fixture["lifecycle"] / "unrelated-service"
+    resource = fixture["root"] / "unrelated-resource"
+    service.write_text("active", encoding="utf-8")
+    resource.write_text("preserve", encoding="utf-8")
+    return service, resource
+
+
+def _assert_unrelated_state(paths: tuple[Path, Path]) -> None:
+    service, resource = paths
+    assert service.read_text(encoding="utf-8") == "active"
+    assert resource.read_text(encoding="utf-8") == "preserve"
+
+
+def _managed_snapshot(fixture: dict) -> dict[str, tuple[str, bytes] | None]:
+    logical_paths = {
+        "provenance": "/etc/detection-engineering/forwarder-install-provenance.yml",
+        "seed": "/opt/splunkforwarder/etc/system/local/user-seed.conf",
+        "transaction": "/var/lib/detection-engineering/forwarder-bootstrap-in-progress.yml",
+        "marker": "/var/lib/detection-engineering/forwarder-bootstrap.yml",
+        "unit": "/etc/systemd/system/SplunkForwarder.service",
+        "inputs": "/opt/splunkforwarder/etc/apps/detection_forwarder/local/inputs.conf",
+        "outputs": "/opt/splunkforwarder/etc/apps/detection_forwarder/local/outputs.conf",
+    }
+
+    def capture(path: Path) -> tuple[str, bytes] | None:
+        if path.is_file():
+            return ("file", path.read_bytes())
+        if path.is_dir():
+            return ("directory", b"")
+        return None
+
+    state = {name: capture(_actual(fixture, path)) for name, path in logical_paths.items()}
+    state.update(
+        {
+            "package": capture(fixture["package_state"]),
+            "package_account": capture(fixture["lifecycle"] / "package-installed"),
+            "bootstrapped": capture(fixture["lifecycle"] / "bootstrapped"),
+            "enabled": capture(fixture["lifecycle"] / "enabled"),
+            "service": capture(fixture["lifecycle"] / "service"),
+        }
+    )
+    return state
+
+
+def _assert_fresh_uf_absent(fixture: dict) -> None:
+    assert _managed_snapshot(fixture) == {
+        "provenance": None,
+        "seed": None,
+        "transaction": None,
+        "marker": None,
+        "unit": None,
+        "inputs": None,
+        "outputs": None,
+        "package": None,
+        "package_account": None,
+        "bootstrapped": None,
+        "enabled": None,
+        "service": None,
+    }
+
+
+def _assert_prepared_only(fixture: dict) -> None:
+    state = _managed_snapshot(fixture)
+    for name in ("package", "package_account", "provenance"):
+        assert state[name] is not None
+    for name in ("seed", "transaction", "marker", "unit", "inputs", "outputs", "bootstrapped", "enabled", "service"):
+        assert state[name] is None
+
+
+def _establish_active_forwarder(fixture: dict) -> None:
+    prepared = _run_entrypoint(fixture, "prepare")
+    assert prepared.returncode == 0, prepared.stdout + prepared.stderr
+    activated = _run_entrypoint(fixture, "activate")
+    assert activated.returncode == 0, activated.stdout + activated.stderr
+
+
+def test_identity_fakes_reject_prepackage_and_wrong_account_arguments(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    fake_id = fixture["bin"] / "id"
+    fake_runuser = fixture["bin"] / "runuser"
+    source = _actual(fixture, "/var/log/auth.log")
+    assert subprocess.run([fake_id, "-u", "splunkfwd"], check=False).returncode != 0
+    assert subprocess.run(
+        [fake_runuser, "--user", "splunkfwd", "--", "test", "-r", source], check=False
+    ).returncode != 0
+    prepared = _run_entrypoint(fixture, "prepare")
+    assert prepared.returncode == 0, prepared.stdout + prepared.stderr
+
+    for argv in (
+        [fake_id, "-u", "root"],
+        [fake_id, "-g", "root"],
+        [fake_id, "-gn", "root"],
+        [fake_id, "-u", "splunkfwd", "extra"],
+    ):
+        assert subprocess.run(argv, check=False).returncode != 0
+    assert subprocess.run(
+        [fake_runuser, "--user", "root", "--", "test", "-r", source], check=False
+    ).returncode != 0
+
+
+@pytest.mark.parametrize("identity_failure", ["wrong-account-uid", "wrong-account-group"])
+def test_prepare_refuses_wrong_package_account_after_valid_provenance(
+    tmp_path: Path, identity_failure: str
+) -> None:
+    fixture = _fixture(tmp_path)
+    unrelated = _preserved_unrelated_state(fixture)
+    (fixture["lifecycle"] / identity_failure).touch()
+
+    result = _run_entrypoint(fixture, "prepare")
+
+    assert result.returncode != 0
+    state = _managed_snapshot(fixture)
+    assert state["package"] is not None
+    assert state["package_account"] is not None
+    assert state["provenance"] is not None
+    for name in ("seed", "transaction", "marker", "unit", "inputs", "outputs", "bootstrapped", "enabled", "service"):
+        assert state[name] is None
+    _assert_unrelated_state(unrelated)
+    before = len(_calls(fixture))
+    replay = _run_entrypoint(fixture, "prepare")
+    assert replay.returncode != 0
+    assert _managed_snapshot(fixture) == state
+    assert not any(
+        call.startswith(("-i ", "start ", "restart ", "enable "))
+        for call in _calls(fixture)[before:]
+    )
+    _assert_unrelated_state(unrelated)
+
+
+@pytest.mark.parametrize("identity_failure", ["wrong-account-uid", "wrong-account-group"])
+def test_activate_refuses_wrong_account_while_preserving_valid_active_state(
+    tmp_path: Path, identity_failure: str
+) -> None:
+    fixture = _fixture(tmp_path)
+    unrelated = _preserved_unrelated_state(fixture)
+    _establish_active_forwarder(fixture)
+    before_state = _managed_snapshot(fixture)
+    (fixture["lifecycle"] / identity_failure).touch()
+    before_calls = len(_calls(fixture))
+
+    result = _run_entrypoint(fixture, "activate")
+
+    assert result.returncode != 0
+    assert _managed_snapshot(fixture) == before_state
+    assert not any(
+        call.startswith(("-i ", "start ", "restart ", "enable "))
+        for call in _calls(fixture)[before_calls:]
+    )
+    _assert_unrelated_state(unrelated)
+
+
+def test_prepare_without_sources_no_bootstrap(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    _remove_sources(fixture)
+
+    result = _run_entrypoint(fixture, "prepare")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert fixture["package_state"].is_file()
+    assert _actual(fixture, "/etc/detection-engineering/forwarder-install-provenance.yml").is_file()
+    assert not _actual(fixture, "/opt/splunkforwarder/etc/system/local/user-seed.conf").exists()
+    assert not _actual(fixture, "/var/lib/detection-engineering/forwarder-bootstrap-in-progress.yml").exists()
+    assert not _actual(fixture, "/var/lib/detection-engineering/forwarder-bootstrap.yml").exists()
+    assert not _actual(fixture, "/etc/systemd/system/SplunkForwarder.service").exists()
+    assert not (fixture["lifecycle"] / "service").exists()
+
+
+def test_prepare_converges_without_service_change(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    unrelated = _preserved_unrelated_state(fixture)
+    _establish_active_forwarder(fixture)
+    active_state = _managed_snapshot(fixture)
+    before = len(_calls(fixture))
+
+    result = _run_entrypoint(fixture, "prepare")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "changed=0" in result.stdout
+    assert _managed_snapshot(fixture) == active_state
+    assert not any(
+        call.startswith(("start ", "restart ", "enable "))
+        for call in _calls(fixture)[before:]
+    )
+    _assert_unrelated_state(unrelated)
+
+
+@pytest.mark.parametrize("missing", ["package", "provenance", "account"])
+def test_activate_refuses_missing_package_provenance_or_account(
+    tmp_path: Path, missing: str
+) -> None:
+    fixture = _fixture(tmp_path)
+    unrelated = _preserved_unrelated_state(fixture)
+    if missing == "package":
+        expected_state = _managed_snapshot(fixture)
+    else:
+        _establish_active_forwarder(fixture)
+    if missing == "provenance":
+        _actual(fixture, "/etc/detection-engineering/forwarder-install-provenance.yml").unlink()
+    if missing == "account":
+        (fixture["lifecycle"] / "missing-account").touch()
+    if missing != "package":
+        expected_state = _managed_snapshot(fixture)
+    before = len(_calls(fixture))
+
+    result = _run_entrypoint(fixture, "activate")
+
+    assert result.returncode != 0
+    assert _managed_snapshot(fixture) == expected_state
+    if missing == "package":
+        _assert_fresh_uf_absent(fixture)
+    assert not any(
+        call.startswith(("-i ", "start ", "restart ", "enable "))
+        for call in _calls(fixture)[before:]
+    )
+    _assert_unrelated_state(unrelated)
+
+
+@pytest.mark.parametrize("invalid", ["missing", "nonregular", "unreadable"])
+def test_activate_refuses_missing_or_unreadable_sources_before_bootstrap(
+    tmp_path: Path, invalid: str
+) -> None:
+    fixture = _fixture(tmp_path)
+    unrelated = _preserved_unrelated_state(fixture)
+    _establish_active_forwarder(fixture)
+    source = _actual(fixture, "/var/log/laurel/audit.log")
+    if invalid == "missing":
+        source.unlink()
+    elif invalid == "nonregular":
+        source.unlink(); source.mkdir()
+    else:
+        fixture["readable"].write_text("", encoding="utf-8")
+    expected_state = _managed_snapshot(fixture)
+    before = len(_calls(fixture))
+
+    result = _run_entrypoint(fixture, "activate")
+
+    assert result.returncode != 0
+    assert _managed_snapshot(fixture) == expected_state
+    assert not any(
+        call.startswith(("start ", "restart ", "enable "))
+        for call in _calls(fixture)[before:]
+    )
+    _assert_unrelated_state(unrelated)
+
+
+def test_prepare_then_activate_across_fresh_invocations(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path, "runner")
+    prepared = _run_entrypoint(fixture, "prepare")
+    assert prepared.returncode == 0, prepared.stdout + prepared.stderr
+    before = len(_calls(fixture))
+
+    activated = _run_entrypoint(fixture, "activate")
+
+    assert activated.returncode == 0, activated.stdout + activated.stderr
+    later = _calls(fixture)[before:]
+    assert not any(call.startswith("-i ") for call in later)
+    assert any(call.startswith("start ") for call in later)
+    assert any(call.startswith("enable boot-start") for call in later)
+    assert _actual(fixture, "/var/lib/detection-engineering/forwarder-bootstrap.yml").is_file()
+    assert (fixture["lifecycle"] / "service").is_file()
+
+
+def test_intermediate_failure_never_activates(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    unrelated = _preserved_unrelated_state(fixture)
+    prepared = _run_entrypoint(fixture, "prepare")
+    assert prepared.returncode == 0, prepared.stdout + prepared.stderr
+    _assert_prepared_only(fixture)
+    fixture["readable"].write_text("", encoding="utf-8")
+
+    failed = _run_entrypoint(fixture, "activate")
+
+    assert failed.returncode != 0
+    assert not (fixture["lifecycle"] / "bootstrapped").exists()
+    assert not (fixture["lifecycle"] / "service").exists()
+    assert not _actual(fixture, "/opt/splunkforwarder/etc/system/local/user-seed.conf").exists()
+    assert not _actual(fixture, "/var/lib/detection-engineering/forwarder-bootstrap-in-progress.yml").exists()
+    _assert_prepared_only(fixture)
+    _assert_unrelated_state(unrelated)
+
+
+def test_interrupted_package_provenance_refuses_replay(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    unrelated = _preserved_unrelated_state(fixture)
+    (fixture["lifecycle"] / "fail-provenance").touch()
+
+    interrupted = _run_entrypoint(fixture, "prepare")
+
+    assert interrupted.returncode != 0
+    interrupted_state = _managed_snapshot(fixture)
+    assert interrupted_state["package"] is not None
+    assert interrupted_state["package_account"] is not None
+    assert interrupted_state["provenance"] == ("directory", b"")
+    for name in ("seed", "transaction", "marker", "unit", "inputs", "outputs", "bootstrapped", "enabled", "service"):
+        assert interrupted_state[name] is None
+    _assert_unrelated_state(unrelated)
+    before = len(_calls(fixture))
+
+    replay = _run_entrypoint(fixture, "prepare")
+
+    assert replay.returncode != 0
+    assert not any(call.startswith("-i ") for call in _calls(fixture)[before:])
+    assert _managed_snapshot(fixture) == interrupted_state
+    _assert_unrelated_state(unrelated)
 
 
 def test_fresh_install_bootstraps_before_unit_service_and_cleans_seed(tmp_path: Path) -> None:
@@ -420,6 +754,7 @@ def test_seed_secret_never_enters_argv_query_stdout_and_is_removed(tmp_path: Pat
 
 def test_failed_first_start_removes_seed_without_marker_or_unit(tmp_path: Path) -> None:
     fixture = _fixture(tmp_path)
+    unrelated = _preserved_unrelated_state(fixture)
     splunk = fixture["bin"] / "splunk"
     text = splunk.read_text().replace(
         'case "$1" in',
@@ -429,18 +764,34 @@ def test_failed_first_start_removes_seed_without_marker_or_unit(tmp_path: Path) 
     (fixture["lifecycle"] / "reject-bootstrap").touch()
     result = _run(fixture)
     assert result.returncode != 0
-    assert not _actual(fixture, "/opt/splunkforwarder/etc/system/local/user-seed.conf").exists()
-    assert not _actual(fixture, "/var/lib/detection-engineering/forwarder-bootstrap.yml").exists()
-    assert not _actual(fixture, "/etc/systemd/system/SplunkForwarder.service").exists()
+    failed_state = _managed_snapshot(fixture)
+    for name in ("package", "package_account", "provenance", "transaction"):
+        assert failed_state[name] is not None
+    for name in ("seed", "marker", "unit", "inputs", "outputs", "bootstrapped", "enabled", "service"):
+        assert failed_state[name] is None
+    _assert_unrelated_state(unrelated)
+    (fixture["lifecycle"] / "reject-bootstrap").unlink()
+    before = len(_calls(fixture))
+    replay = _run(fixture)
+    assert replay.returncode != 0
+    assert _managed_snapshot(fixture) == failed_state
+    assert not any(
+        call.startswith(("-i ", "start ", "restart ", "enable "))
+        for call in _calls(fixture)[before:]
+    )
+    _assert_unrelated_state(unrelated)
 
 
 @pytest.mark.parametrize("variable,value", [("FAKE_DEB_PACKAGE", "splunk"), ("FAKE_DEB_VERSION", "9.9.9"), ("FAKE_DEB_ARCH", "arm64")])
 def test_downloaded_package_identity_mismatch_refuses_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variable: str, value: str) -> None:
     fixture = _fixture(tmp_path)
+    unrelated = _preserved_unrelated_state(fixture)
     monkeypatch.setenv(variable, value)
     result = _run(fixture)
     assert result.returncode != 0
     assert not any(c.startswith("-i ") for c in _calls(fixture))
+    _assert_fresh_uf_absent(fixture)
+    _assert_unrelated_state(unrelated)
 
 
 def test_unknown_bootstrap_capability_refuses_before_mutation(tmp_path: Path) -> None:
@@ -490,16 +841,33 @@ def test_ambiguous_partial_bootstrap_refuses_retry_without_restarting(
     tmp_path: Path, failure: str
 ) -> None:
     fixture = _fixture(tmp_path)
+    unrelated = _preserved_unrelated_state(fixture)
     (fixture["lifecycle"] / failure).touch()
     first = _run(fixture)
     assert first.returncode != 0
-    assert _actual(fixture, "/var/lib/detection-engineering/forwarder-bootstrap-in-progress.yml").is_file()
+    failed_state = _managed_snapshot(fixture)
+    for name in ("package", "package_account", "provenance", "transaction", "bootstrapped"):
+        assert failed_state[name] is not None
+    for name in ("seed", "inputs", "outputs", "enabled", "service"):
+        assert failed_state[name] is None
+    if failure == "fail-unit":
+        assert failed_state["unit"] is None
+        assert failed_state["marker"] is None
+    elif failure == "fail-marker":
+        assert failed_state["unit"] is not None
+        assert failed_state["marker"] == ("directory", b"")
+    else:
+        assert failed_state["unit"] is not None
+        assert failed_state["marker"] is None
+    _assert_unrelated_state(unrelated)
     (fixture["lifecycle"] / failure).unlink()
     before = len(_calls(fixture))
     second = _run(fixture)
     assert second.returncode != 0
     later = _calls(fixture)[before:]
     assert not any(c.startswith("start ") or c.startswith("enable boot-start") for c in later)
+    assert _managed_snapshot(fixture) == failed_state
+    _assert_unrelated_state(unrelated)
 
 
 def test_root_or_caller_substituted_service_identity_is_refused(tmp_path: Path) -> None:
@@ -553,8 +921,13 @@ def test_kernel_enforces_readability_as_distinct_nonroot_uid(tmp_path: Path) -> 
     fixture = _fixture(tmp_path, "runner")
     logger = f"printf '%s\\n' \"$*\" >> {fixture['calls']}"
     _executable(fixture["bin"] / "runuser", f'''{logger}
+[ -f {fixture["lifecycle"]}/package-installed ] || exit 84
+[ ! -f {fixture["lifecycle"]}/missing-account ] || exit 85
+[ ! -f {fixture["lifecycle"]}/wrong-account-uid ] || exit 86
+[ ! -f {fixture["lifecycle"]}/wrong-account-group ] || exit 87
 [ "$1" = --user ] && [ "$2" = splunkfwd ] && [ "$3" = -- ] || exit 80
 if [ "$4" = test ]; then
+  [ "$#" -eq 6 ] || exit 88
   shift 3
   [ "$1" = test ] || exit 81
   shift
@@ -562,6 +935,11 @@ if [ "$4" = test ]; then
 fi
 shift 3
 exec "$@"''')
+    source = _actual(fixture, "/var/log/auth.log")
+    assert subprocess.run(
+        [fixture["bin"] / "runuser", "--user", "splunkfwd", "--", "test", "-r", source],
+        check=False,
+    ).returncode != 0
     boundary = fixture["root"]
     while boundary != Path("/tmp"):
         subprocess.run(["setfacl", "-m", "u:1000:x", str(boundary)], check=True)
@@ -575,6 +953,10 @@ exec "$@"''')
         subprocess.run(["setfacl", "-m", "u:1000:r", str(actual)], check=True)
     result = _run(fixture)
     assert result.returncode == 0, result.stdout + result.stderr
+    assert subprocess.run(
+        [fixture["bin"] / "runuser", "--user", "root", "--", "test", "-r", source],
+        check=False,
+    ).returncode != 0
 
 
 def test_uf_has_no_parsing_or_redaction_configuration() -> None:

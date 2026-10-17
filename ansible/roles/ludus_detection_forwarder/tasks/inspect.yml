@@ -24,22 +24,6 @@
   loop_control:
     label: "{{ item.item }}"
 
-- name: Inspect all canonical producer files before mutation
-  ansible.builtin.stat:
-    path: "{{ _detection_forwarder_root }}{{ item.path }}"
-  loop: "{{ detection_forwarder_inputs }}"
-  register: _detection_forwarder_source_stats
-
-- name: Refuse absent or nonregular canonical producer files
-  ansible.builtin.assert:
-    that:
-      - item.stat.exists
-      - item.stat.isreg
-    fail_msg: Canonical producer output must already exist as a regular file
-  loop: "{{ _detection_forwarder_source_stats.results }}"
-  loop_control:
-    label: "{{ item.item.path }}"
-
 - name: Inspect authenticated-download value
   ansible.builtin.stat:
     path: "{{ detection_forwarder_download_auth_path }}"
@@ -148,6 +132,27 @@
         {'schema_version': 1, 'package': _detection_forwarder_expected_package}
     fail_msg: Existing UF provenance does not match selected package/build/arch/SHA
   when: _detection_forwarder_provenance_stat.exists
+
+- name: Resolve installed Universal Forwarder account identity
+  ansible.builtin.command:
+    argv: ["{{ detection_forwarder_id }}", "{{ item.option }}", "{{ detection_forwarder_service_user }}"]
+  loop:
+    - {option: -u, expected: nonroot}
+    - {option: -gn, expected: "{{ detection_forwarder_service_group }}"}
+  register: _detection_forwarder_installed_account
+  changed_when: false
+  failed_when: false
+  when: _detection_forwarder_package_is_installed
+
+- name: Require installed package-owned nonroot account and group
+  ansible.builtin.assert:
+    that:
+      - _detection_forwarder_installed_account.results[0].rc == 0
+      - _detection_forwarder_installed_account.results[0].stdout | trim != '0'
+      - _detection_forwarder_installed_account.results[1].rc == 0
+      - _detection_forwarder_installed_account.results[1].stdout | trim == detection_forwarder_service_group
+    fail_msg: Installed UF package does not provide the selected nonroot account and group
+  when: _detection_forwarder_package_is_installed
 
 - name: Validate existing bootstrap marker metadata and content
   ansible.builtin.assert:

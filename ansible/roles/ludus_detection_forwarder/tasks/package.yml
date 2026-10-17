@@ -1,0 +1,82 @@
+---
+# yamllint disable rule:line-length
+- name: Install exact verified artifact when package is not fully installed
+  when: not _detection_forwarder_package_is_installed
+  block:
+    - name: Create protected package cache directory
+      ansible.builtin.file:
+        path: "{{ detection_forwarder_artifact_path | dirname }}"
+        state: directory
+        owner: "{{ detection_forwarder_root_owner }}"
+        group: "{{ detection_forwarder_root_group }}"
+        mode: "0750"
+
+    - name: Fetch checksum-pinned package without URL credentials
+      ansible.builtin.get_url:
+        url: "{{ detection_forwarder_artifact.url }}"
+        dest: "{{ detection_forwarder_artifact_path }}"
+        checksum: "sha256:{{ detection_forwarder_artifact.sha256 }}"
+        mode: "0600"
+        headers: >-
+          {{ {'Authorization': (_detection_forwarder_download_auth.content | b64decode | trim)}
+             if detection_forwarder_artifact.download_auth_required else {} }}
+      no_log: "{{ detection_forwarder_artifact.download_auth_required }}"
+
+    - name: Read downloaded package identity
+      ansible.builtin.command:
+        argv: ["{{ detection_forwarder_dpkg_deb }}", --field, "{{ detection_forwarder_artifact_path }}", "{{ item }}"]
+      loop: [Package, Version, Architecture]
+      register: _detection_forwarder_deb_fields
+      changed_when: false
+
+    - name: Require selected package identity before installation
+      ansible.builtin.assert:
+        that:
+          - _detection_forwarder_deb_fields.results[0].stdout | trim == 'splunkforwarder'
+          - _detection_forwarder_deb_fields.results[1].stdout | trim == detection_forwarder_artifact.version
+          - _detection_forwarder_deb_fields.results[2].stdout | trim == 'amd64'
+
+    - name: Install selected Universal Forwarder package
+      ansible.builtin.command:
+        argv: ["{{ detection_forwarder_dpkg }}", -i, "{{ detection_forwarder_artifact_path }}"]
+      changed_when: true
+
+    - name: Create protected provenance directory
+      ansible.builtin.file:
+        path: "{{ _detection_forwarder_root }}{{ detection_forwarder_provenance_path | dirname }}"
+        state: directory
+        owner: "{{ detection_forwarder_root_owner }}"
+        group: "{{ detection_forwarder_root_group }}"
+        mode: "0750"
+
+    - name: Persist exact protected install provenance
+      ansible.builtin.template:
+        src: install-provenance.yml.j2
+        dest: "{{ _detection_forwarder_root }}{{ detection_forwarder_provenance_path }}"
+        owner: "{{ detection_forwarder_root_owner }}"
+        group: "{{ detection_forwarder_root_group }}"
+        mode: "0600"
+
+    - name: Verify package installation completed with selected identity
+      ansible.builtin.command:
+        argv: ["{{ detection_forwarder_dpkg_query }}", --show, "--showformat=${Status}\\t${Version}\\t${Architecture}", splunkforwarder]
+      register: _detection_forwarder_prepared_package
+      changed_when: false
+
+    - name: Resolve package-created Universal Forwarder account
+      ansible.builtin.command:
+        argv: ["{{ detection_forwarder_id }}", "{{ item }}", "{{ detection_forwarder_service_user }}"]
+      loop: [-u, -gn]
+      register: _detection_forwarder_prepared_account
+      changed_when: false
+      failed_when: false
+
+    - name: Require selected package and package-owned nonroot account
+      ansible.builtin.assert:
+        that:
+          - _detection_forwarder_prepared_package.stdout.split() == ['install', 'ok', 'installed', detection_forwarder_artifact.version, 'amd64']
+          - _detection_forwarder_prepared_account.results[0].rc == 0
+          - _detection_forwarder_prepared_account.results[0].stdout | trim != '0'
+          - _detection_forwarder_prepared_account.results[1].rc == 0
+          - _detection_forwarder_prepared_account.results[1].stdout | trim == detection_forwarder_service_group
+        fail_msg: Package preparation did not produce the selected package-owned nonroot identity
