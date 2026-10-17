@@ -125,10 +125,6 @@ ludus_extensions:
           destination: splunk
           ports: [8088]
     forwarder_source_policy:
-      downstream_time_field: _time
-      native_time_fields:
-        gitlab_access: time
-        systemd: __REALTIME_TIMESTAMP
       common:
         - id_suffix: auth
           path: /var/log/auth.log
@@ -144,17 +140,12 @@ ludus_extensions:
           sourcetype: linux:audit:safe
       profiles:
         gitlab:
-          required_ids: [gitlab-access, gitlab-application, gitlab-audit]
-          access_path: /var/log/gitlab/nginx/gitlab_access.log
-          access_native_fields: [time, identity, method, path, status]
-          gap_classes: [application, audit]
+          required_ids: []
         runner:
-          required_ids: [runner-service, runner-registration]
+          required_ids: [runner-registration]
           registration_path: /var/log/detection-engineering/runner-registration.jsonl
-          service_output_path: /var/log/detection-engineering/runner-service.jsonl
         workload:
-          required_ids: [workload-docker-daemon]
-          daemon_output_path: /var/log/detection-engineering/docker-daemon.jsonl
+          required_ids: []
     artifact_layout_policy:
       formats: [raw, tar.gz]
       raw_member: null
@@ -265,28 +256,12 @@ ludus_extensions:
               source: planned_vm.identity_suffix
             audit_dispatch_gate:
               source: verified_inputs.capabilities.audit_dispatch
-            gitlab_logs_gate:
-              source: verified_inputs.capabilities.gitlab_ce_logs
-            runner_service_log_gate:
-              source: verified_inputs.capabilities.runner_service_log
-            docker_daemon_log_gate:
-              source: verified_inputs.capabilities.docker_daemon_log
           type: list[ForwarderInput]
         detection_forwarder_producer_contract:
           operation: build_forwarder_producer_contract
           inputs:
-            policy:
-              source: contract.forwarder_source_policy
-            profile:
-              source: planned_vm.identity_suffix
             audit_dispatch_gate:
               source: verified_inputs.capabilities.audit_dispatch
-            gitlab_logs_gate:
-              source: verified_inputs.capabilities.gitlab_ce_logs
-            runner_service_log_gate:
-              source: verified_inputs.capabilities.runner_service_log
-            docker_daemon_log_gate:
-              source: verified_inputs.capabilities.docker_daemon_log
           type: ForwarderProducerContract
         detection_splunk_receiver_host:
           operation: lookup_dependency_host
@@ -312,9 +287,6 @@ ludus_extensions:
         detection_gitlab_signing_key_fingerprint:
           source: verified_inputs.apt.gitlab.observed.signing_key_fingerprint
           type: str
-        detection_gitlab_log_contract:
-          source: verified_inputs.capabilities.gitlab_ce_logs.observed
-          type: GitLabLogContract
         detection_runner_api_contract:
           source: verified_inputs.capabilities.runner_api.observed
           type: RunnerApiContract

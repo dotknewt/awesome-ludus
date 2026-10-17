@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ast
 import copy
+import hashlib
 import re
 import subprocess
 from pathlib import Path
@@ -60,7 +62,6 @@ EXPECTED_ROLE_VARIABLES = {
         "detection_gitlab_repository_url",
         "detection_gitlab_signing_key_url",
         "detection_gitlab_signing_key_fingerprint",
-        "detection_gitlab_log_contract",
         "detection_runner_api_contract",
         "detection_gitlab_root_password",
     },
@@ -301,7 +302,7 @@ def test_every_matrix_input_has_one_reader(blueprint_root, read_yaml):
         inputs.append((source["boundary"], source["vm_role"], source["path_or_input"]))
     assert len(ids) == len(set(ids))
     assert len(inputs) == len(set(inputs))
-    assert len(ids) == 23
+    assert len(ids) == 18
 
     expected = {
         source_id: values
@@ -318,13 +319,8 @@ def test_every_matrix_input_has_one_reader(blueprint_root, read_yaml):
             ("splunk-auth", ("host", "splunk", "/var/log/auth.log", "splunk_local", "de_linux", "linux:auth", None)),
             ("splunk-system", ("host", "splunk", "/var/log/syslog", "splunk_local", "de_linux", "linux:system", None)),
             ("splunk-audit-safe", ("host", "splunk", "/var/log/detection-engineering/audit-safe.jsonl", "splunk_local", "de_linux", "linux:audit:safe", "capabilities.audit_dispatch")),
-            ("gitlab-access", ("host", "gitlab", "/var/log/gitlab/nginx/gitlab_access.log", "forwarder", "de_gitlab", "gitlab:access", "capabilities.gitlab_ce_logs")),
-            ("gitlab-application", ("host", "gitlab", "capabilities.gitlab_ce_logs.observed.paths.application", "forwarder", "de_gitlab", "gitlab:application", "capabilities.gitlab_ce_logs")),
-            ("gitlab-audit", ("host", "gitlab", "capabilities.gitlab_ce_logs.observed.paths.audit", "forwarder", "de_gitlab", "gitlab:audit", "capabilities.gitlab_ce_logs")),
-            ("runner-service", ("host", "runner", "systemd:gitlab-runner", "forwarder", "de_runner", "gitlab:runner", None)),
             ("runner-registration", ("host", "runner", "/var/log/detection-engineering/runner-registration.jsonl", "forwarder", "de_runner", "gitlab:runner:registration", "capabilities.runner_api")),
             ("splunk-internal", ("host", "splunk", "$SPLUNK_HOME/var/log/splunk/*.log", "splunk_local", "_internal", "splunk:native", "capabilities.splunk")),
-            ("workload-docker-daemon", ("host", "workload", "systemd:dockerd", "forwarder", "de_runtime", "docker:daemon", None)),
             ("workload-docker-container", ("host", "workload", "/var/lib/docker/containers/*/*-json.log", "otel_host", "de_runtime", "docker:container", "capabilities.otel")),
             ("minikube-api-audit", ("node", "workload", "capabilities.otel.observed.audit_path", "otel_cluster", "de_runtime", "kube:audit", "capabilities.otel")),
             ("minikube-node-service", ("node", "workload", "systemd:kubelet", "otel_cluster", "de_runtime", "kube:node", "capabilities.otel")),
@@ -428,6 +424,19 @@ def test_production_include_harness_invokes_real_role_task(tmp_path):
     assert "Validate supported Malcolm deployment inputs" in result.stdout
 
 
+def test_production_include_harness_ast_is_unchanged():
+    tree = ast.parse(Path(support.__file__).read_text(encoding="utf-8"))
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "run_production_include"
+    )
+    digest = hashlib.sha256(
+        ast.dump(function, include_attributes=False).encode()
+    ).hexdigest()
+    assert digest == "2b49069c34d83f3c58b3c5ef9df092afcd2f215ff0a6098fe78c4f6e9ffe793b"
+
+
 def test_target_inventory_is_deployment_only(blueprint_root, read_yaml):
     config = _load(blueprint_root, read_yaml, "range-config.yml")
     contract = config["ludus_extensions"]["detection_engineering_contract"]
@@ -501,19 +510,6 @@ def test_mapping_contract_resolves_explicit_synthetic_sources(blueprint_root, re
         "write_logs_false": True,
         "fail_closed": True,
     }
-    gitlab_logs = {
-        "paths": {
-            "application": "/synthetic/gitlab/application.log",
-            "audit": "/synthetic/gitlab/audit.log",
-        },
-        "producer_safe_fields": {
-            "access": ["time", "identity", "method", "path", "status"],
-            "application": ["method", "status"],
-            "audit": ["author_id", "entity_type"],
-        },
-        "query_and_auth_excluded": True,
-        "unavailable_classes": [],
-    }
     runner_api = {
         "bootstrap_auth": {
             "credential_type": "synthetic-access-token",
@@ -552,25 +548,6 @@ def test_mapping_contract_resolves_explicit_synthetic_sources(blueprint_root, re
         "digest": "sha256:" + "c" * 64,
     }
     audit_gate = _synthetic_gate(audit_dispatch, [2, 8, 9, 10])
-    gitlab_gate = _synthetic_gate(gitlab_logs, [4, 5, 6, 8, 9, 10])
-    runner_service_gate = _synthetic_gate(
-        {
-            "input": "systemd:gitlab-runner",
-            "output_path": "/var/log/detection-engineering/runner-service.jsonl",
-            "native_fields": ["__REALTIME_TIMESTAMP", "MESSAGE"],
-            "excluded_fields": ["CMDLINE"],
-        },
-        [4, 8, 9, 10],
-    )
-    docker_daemon_gate = _synthetic_gate(
-        {
-            "input": "systemd:dockerd",
-            "output_path": "/var/log/detection-engineering/docker-daemon.jsonl",
-            "native_fields": ["__REALTIME_TIMESTAMP", "MESSAGE"],
-            "excluded_fields": ["CMDLINE"],
-        },
-        [4, 8, 9, 10],
-    )
     package_observed = {
         "repository_url": "https://example.invalid/docker",
         "signing_key_url": "https://example.invalid/docker-key",
@@ -623,9 +600,6 @@ def test_mapping_contract_resolves_explicit_synthetic_sources(blueprint_root, re
         "verified_inputs.network.observed.guest_interface": "eth0",
         "verified_inputs.capabilities.audit_dispatch.observed": audit_dispatch,
         "verified_inputs.capabilities.audit_dispatch": audit_gate,
-        "verified_inputs.capabilities.gitlab_ce_logs": gitlab_gate,
-        "verified_inputs.capabilities.runner_service_log": runner_service_gate,
-        "verified_inputs.capabilities.docker_daemon_log": docker_daemon_gate,
         "verified_inputs.downloads.splunk.observed": artifact,
         "verified_inputs.downloads.forwarder.observed": artifact,
         "verified_inputs.downloads.minikube.observed": artifact,
@@ -658,7 +632,6 @@ def test_mapping_contract_resolves_explicit_synthetic_sources(blueprint_root, re
         "verified_inputs.apt.docker": package_gates["docker"],
         "verified_inputs.apt.containerd": package_gates["containerd"],
         "verified_inputs.apt.docker_plugins": package_gates["docker_plugins"],
-        "verified_inputs.capabilities.gitlab_ce_logs.observed": gitlab_logs,
         "verified_inputs.capabilities.runner_api.observed": runner_api,
         "verified_inputs.charts.otel.observed": chart,
         "verified_inputs.capabilities.otel.observed": otel,
@@ -694,6 +667,10 @@ def test_mapping_contract_resolves_explicit_synthetic_sources(blueprint_root, re
     }]
     assert resolved["forwarder"]["detection_splunk_receiver_host"] == "{{ range_id }}-splunk"
     assert resolved["forwarder"]["detection_forwarder_inputs"][0].keys() == {"path", "index", "sourcetype", "safe_fields"}
+    assert len(resolved["forwarder"]["detection_forwarder_inputs"]) == 3
+    assert set(resolved["forwarder"]["detection_forwarder_producer_contract"]) == {
+        "schema_version", "audit_dispatch"
+    }
     assert resolved["workload"]["detection_minikube_artifact"] == {
         "version": "1.2.3",
         "url": "https://example.invalid/tool",
@@ -794,11 +771,6 @@ def test_mapping_contract_resolves_explicit_synthetic_sources(blueprint_root, re
             "SplunkTrialCapability",
         ),
         (
-            "verified_inputs.capabilities.gitlab_ce_logs.observed",
-            {**gitlab_logs, "query_and_auth_excluded": "not-a-bool"},
-            "GitLabLogContract",
-        ),
-        (
             "verified_inputs.capabilities.runner_api.observed",
             invalid_runner_api,
             "RunnerApiContract",
@@ -831,7 +803,7 @@ def test_mapping_contract_resolves_explicit_synthetic_sources(blueprint_root, re
         support.assemble_firewall_rules(contract["firewall_policy"], wrong_type, "malcolm")
 
 
-def test_forwarder_producer_contract_projects_canonical_profile_inputs(blueprint_root, read_yaml):
+def test_forwarder_producer_contract_projects_linux_only_profiles(blueprint_root, read_yaml):
     config = _load(blueprint_root, read_yaml, "range-config.yml")
     contract = config["ludus_extensions"]["detection_engineering_contract"]
     policy = contract["forwarder_source_policy"]
@@ -845,115 +817,114 @@ def test_forwarder_producer_contract_projects_canonical_profile_inputs(blueprint
         },
         [2, 8, 9, 10],
     )
-    gitlab = _synthetic_gate(
-        {
-            "paths": {
-                "application": "/synthetic/gitlab/application.log",
-                "audit": "/synthetic/gitlab/audit.log",
-            },
-            "producer_safe_fields": {
-                "access": ["time", "identity", "method", "path", "status"],
-                "application": ["time", "severity", "message"],
-                "audit": ["time", "author_id", "entity_type"],
-            },
-            "query_and_auth_excluded": True,
-            "unavailable_classes": [],
-        },
-        [4, 5, 6, 8, 9, 10],
-    )
-    runner = _synthetic_gate(
-        {
-            "input": "systemd:gitlab-runner",
-            "output_path": "/var/log/detection-engineering/runner-service.jsonl",
-            "native_fields": ["__REALTIME_TIMESTAMP", "MESSAGE", "SYSLOG_IDENTIFIER"],
-            "excluded_fields": ["CMDLINE", "_CMDLINE", "COREDUMP_ENVIRON"],
-        },
-        [4, 8, 9, 10],
-    )
-    docker = _synthetic_gate(
-        {
-            "input": "systemd:dockerd",
-            "output_path": "/var/log/detection-engineering/docker-daemon.jsonl",
-            "native_fields": ["__REALTIME_TIMESTAMP", "MESSAGE", "SYSLOG_IDENTIFIER"],
-            "excluded_fields": ["CMDLINE", "_CMDLINE", "COREDUMP_ENVIRON"],
-        },
-        [4, 8, 9, 10],
-    )
-    gates = {
-        "audit_dispatch": audit,
-        "gitlab_logs": gitlab,
-        "runner_service_log": runner,
-        "docker_daemon_log": docker,
-    }
+    gates = {"audit_dispatch": audit}
 
     expected_paths = {
         "gitlab": {
             "/var/log/auth.log", "/var/log/syslog",
             "/var/log/detection-engineering/audit-safe.jsonl",
-            "/var/log/gitlab/nginx/gitlab_access.log",
-            "/synthetic/gitlab/application.log", "/synthetic/gitlab/audit.log",
         },
         "runner": {
             "/var/log/auth.log", "/var/log/syslog",
             "/var/log/detection-engineering/audit-safe.jsonl",
-            "/var/log/detection-engineering/runner-service.jsonl",
             "/var/log/detection-engineering/runner-registration.jsonl",
         },
         "workload": {
             "/var/log/auth.log", "/var/log/syslog",
             "/var/log/detection-engineering/audit-safe.jsonl",
-            "/var/log/detection-engineering/docker-daemon.jsonl",
         },
     }
     for profile in ("gitlab", "runner", "workload"):
-        producer = support.build_forwarder_producer_contract(profile, gates, policy)
+        producer = support.build_forwarder_producer_contract(gates)
         projected = support.project_forwarder_profile(profile, matrix, producer, policy)
+        assert set(producer) == {"schema_version", "audit_dispatch"}
         assert producer["schema_version"] == 1
-        assert set(producer) == {"schema_version", "audit_dispatch", "gitlab_logs", "systemd_adapter"}
-        assert {item["path"] for item in projected["inputs"]} == expected_paths[profile]
-        assert all(set(item) == {"path", "index", "sourcetype", "safe_fields"} for item in projected["inputs"])
-        assert projected["gaps"] == []
-        if profile == "gitlab":
-            access_input = next(item for item in projected["inputs"] if item["sourcetype"] == "gitlab:access")
-            access_native = producer["gitlab_logs"]["observed"]["producer_safe_fields"]["access"]
-            assert access_input["safe_fields"] != access_native
-            assert "_time" in access_input["safe_fields"]
-            assert "time" in access_native
-        if producer["systemd_adapter"] is not None:
-            native = producer["systemd_adapter"]["observed"]["native_fields"]
-            daemon_input = next(item for item in projected["inputs"] if item["path"].endswith("-daemon.jsonl") or item["path"].endswith("-service.jsonl"))
-            assert daemon_input["safe_fields"] != native
-            assert "_time" in daemon_input["safe_fields"]
-            assert "__REALTIME_TIMESTAMP" in native
-
-    gap_gates = copy.deepcopy(gates)
-    gap_gates["gitlab_logs"]["observed"]["unavailable_classes"] = ["audit"]
-    gap_producer = support.build_forwarder_producer_contract("gitlab", gap_gates, policy)
-    gap_projection = support.project_forwarder_profile("gitlab", matrix, gap_producer, policy)
-    assert gap_projection["gaps"] == ["gitlab_audit"]
-    assert "/synthetic/gitlab/audit.log" not in {item["path"] for item in gap_projection["inputs"]}
-    assert any(row["id"] == "gitlab-audit" for row in matrix)
+        assert producer["audit_dispatch"] is audit
+        assert {item["path"] for item in projected} == expected_paths[profile]
+        assert len(projected) == {"gitlab": 3, "runner": 4, "workload": 3}[profile]
+        assert all(set(item) == {"path", "index", "sourcetype", "safe_fields"} for item in projected)
 
     wrong_path = copy.deepcopy(matrix)
     next(row for row in wrong_path if row["id"] == "runner-registration")["path_or_input"] = "/tmp/arbitrary.log"
-    producer = support.build_forwarder_producer_contract("runner", gates, policy)
+    producer = support.build_forwarder_producer_contract(gates)
     with pytest.raises(ValueError, match="canonical.*runner-registration"):
         support.project_forwarder_profile("runner", wrong_path, producer, policy)
 
     missing_common = [row for row in matrix if row["id"] != "workload-auth"]
-    producer = support.build_forwarder_producer_contract("workload", gates, policy)
+    producer = support.build_forwarder_producer_contract(gates)
     with pytest.raises(ValueError, match="common.*coverage"):
         support.project_forwarder_profile("workload", missing_common, producer, policy)
 
-    wrong_native = copy.deepcopy(gates)
-    wrong_native["gitlab_logs"]["observed"]["producer_safe_fields"]["access"] = ["_time", "message"]
-    with pytest.raises(ValueError, match="native.*access"):
-        support.build_forwarder_producer_contract("gitlab", wrong_native, policy)
+    malformed_audit = copy.deepcopy(gates)
+    malformed_audit["audit_dispatch"]["observed"]["fail_closed"] = False
+    with pytest.raises(ValueError, match="fail closed"):
+        support.build_forwarder_producer_contract(malformed_audit)
 
-    wrong_systemd_time = copy.deepcopy(gates)
-    wrong_systemd_time["runner_service_log"]["observed"]["native_fields"] = ["_time", "MESSAGE"]
-    with pytest.raises(ValueError, match="native and downstream time"):
-        support.build_forwarder_producer_contract("runner", wrong_systemd_time, policy)
+
+def test_removed_service_contracts_cannot_be_reintroduced(blueprint_root, read_yaml):
+    config = _load(blueprint_root, read_yaml, "range-config.yml")
+    contract = config["ludus_extensions"]["detection_engineering_contract"]
+    inputs = _load(blueprint_root, read_yaml, "verified-inputs.yml")
+    matrix = _load(blueprint_root, read_yaml, "telemetry-matrix.yml")["sources"]
+    removed_ids = {
+        "gitlab-access", "gitlab-application", "gitlab-audit",
+        "runner-service", "workload-docker-daemon",
+    }
+    removed_capabilities = {
+        "gitlab_ce_logs", "runner_service_log", "docker_daemon_log",
+    }
+    assert removed_ids.isdisjoint({row["id"] for row in matrix})
+    assert removed_capabilities.isdisjoint(inputs["capabilities"])
+    assert "detection_gitlab_log_contract" not in contract["role_variable_contracts"]["gitlab"]
+
+    legal_gate = _synthetic_gate(
+        {
+            "input": "systemd:gitlab-runner",
+            "output_path": "/var/log/detection-engineering/runner-service.jsonl",
+            "native_fields": ["__REALTIME_TIMESTAMP", "MESSAGE"],
+            "excluded_fields": ["CMDLINE"],
+        },
+        [4, 8, 9, 10],
+    )
+    reintroduced_inputs = copy.deepcopy(inputs)
+    reintroduced_inputs["capabilities"]["runner_service_log"] = legal_gate
+    with pytest.raises(ValueError, match="verified_inputs.capabilities"):
+        support.validate_verified_inputs(reintroduced_inputs)
+
+    audit = _synthetic_gate(
+        {
+            "package_version": "1.2.3-1",
+            "plugin_protocol": "builtin_af_unix",
+            "write_logs_false": True,
+            "fail_closed": True,
+        },
+        [2, 8, 9, 10],
+    )
+    with pytest.raises(ValueError, match="canonical producer gates"):
+        support.build_forwarder_producer_contract(
+            {"audit_dispatch": audit, "runner_service_log": legal_gate}
+        )
+
+    reintroduced_rows = copy.deepcopy(matrix)
+    reintroduced_rows.append({
+        "id": "runner-service",
+        "boundary": "host",
+        "vm_role": "runner",
+        "class": "runner_service",
+        "path_or_input": "/var/log/detection-engineering/runner-service.jsonl",
+        "reader": "forwarder",
+        "index": "de_runner",
+        "sourcetype": "gitlab:runner",
+        "safe_fields": ["_time", "host", "source", "sourcetype", "message"],
+        "negative_fields": ["password", "token", "authorization"],
+        "required": True,
+        "capability_gate": None,
+    })
+    producer = support.build_forwarder_producer_contract({"audit_dispatch": audit})
+    with pytest.raises(ValueError, match="profile coverage"):
+        support.project_forwarder_profile(
+            "runner", reintroduced_rows, producer, contract["forwarder_source_policy"]
+        )
 
 
 def test_runtime_layouts_and_combined_packages_are_strictly_bound(blueprint_root, read_yaml):
@@ -1094,11 +1065,8 @@ def test_verified_inputs_strict_schema_rejects_malformed_verified_records(bluepr
         ("charts", "otel"),
         ("capabilities", "splunk"),
         ("capabilities", "splunk_uninstall"),
-        ("capabilities", "gitlab_ce_logs"),
         ("capabilities", "runner_api"),
         ("capabilities", "audit_dispatch"),
-        ("capabilities", "runner_service_log"),
-        ("capabilities", "docker_daemon_log"),
         ("capabilities", "otel"),
         ("test_tools", None),
     ]

@@ -214,14 +214,6 @@ capabilities:
       Exact 10.6.1.1 package metadata/scripts and a disposable preservation test
       are missing; 10.4 guidance cannot prove safe in-place preservation.
     stops: [11]
-  gitlab_ce_logs:
-    status: BLOCKED
-    source:
-      url: https://docs.gitlab.com/administration/logs/
-      observed_at: "2026-10-16T19:24:19Z"
-    observed: null
-    limitation: Installed CE version paths, safe producer fields, and unavailable event classes are unverified.
-    stops: [4, 5, 6, 8, 9, 10]
   runner_api:
     status: BLOCKED
     source:
@@ -238,26 +230,6 @@ capabilities:
     observed: null
     limitation: Package version and fail-closed dispatcher protocol contract are unverified.
     stops: [2, 8, 9, 10]
-  runner_service_log:
-    status: BLOCKED
-    source:
-      url: https://www.freedesktop.org/software/systemd/man/latest/journalctl.html
-      observed_at: "2026-10-17T00:00:00Z"
-    observed: null
-    limitation: >-
-      The reserved runner service output is a design constant; no verified
-      systemd producer adapter or native-field contract exists yet.
-    stops: [4, 8, 9, 10]
-  docker_daemon_log:
-    status: BLOCKED
-    source:
-      url: https://www.freedesktop.org/software/systemd/man/latest/journalctl.html
-      observed_at: "2026-10-17T00:00:00Z"
-    observed: null
-    limitation: >-
-      The reserved Docker daemon output is a design constant; no verified
-      systemd producer adapter or native-field contract exists yet.
-    stops: [4, 8, 9, 10]
   otel:
     status: BLOCKED
     source:

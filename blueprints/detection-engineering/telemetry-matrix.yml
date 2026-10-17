@@ -77,34 +77,6 @@ sources:
     sourcetype: linux:audit:safe
     capability_gate: capabilities.audit_dispatch
   - <<: *source_defaults
-    id: gitlab-access
-    class: gitlab_access
-    path_or_input: /var/log/gitlab/nginx/gitlab_access.log
-    index: de_gitlab
-    sourcetype: gitlab:access
-    capability_gate: capabilities.gitlab_ce_logs
-  - <<: *source_defaults
-    id: gitlab-application
-    class: gitlab_application
-    path_or_input: capabilities.gitlab_ce_logs.observed.paths.application
-    index: de_gitlab
-    sourcetype: gitlab:application
-    capability_gate: capabilities.gitlab_ce_logs
-  - <<: *source_defaults
-    id: gitlab-audit
-    class: gitlab_audit
-    path_or_input: capabilities.gitlab_ce_logs.observed.paths.audit
-    index: de_gitlab
-    sourcetype: gitlab:audit
-    capability_gate: capabilities.gitlab_ce_logs
-  - <<: *source_defaults
-    id: runner-service
-    vm_role: runner
-    class: runner_service
-    path_or_input: systemd:gitlab-runner
-    index: de_runner
-    sourcetype: gitlab:runner
-  - <<: *source_defaults
     id: runner-registration
     vm_role: runner
     class: runner_registration
@@ -121,13 +93,6 @@ sources:
     index: _internal
     sourcetype: splunk:native
     capability_gate: capabilities.splunk
-  - <<: *source_defaults
-    id: workload-docker-daemon
-    vm_role: workload
-    class: docker_daemon
-    path_or_input: systemd:dockerd
-    index: de_runtime
-    sourcetype: docker:daemon
   - <<: *source_defaults
     id: workload-docker-container
     vm_role: workload

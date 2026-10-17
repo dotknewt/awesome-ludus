@@ -269,26 +269,6 @@ def _uninstall(value: Any, path: str) -> None:
         _fail(f"{path}.disposable_preservation_test.fixture_manifest_sha256", "must be sha256")
 
 
-def _gitlab_logs(value: Any, path: str) -> None:
-    item = _keys(value, {"paths", "producer_safe_fields", "query_and_auth_excluded", "unavailable_classes"}, path)
-    if not isinstance(item["paths"], dict):
-        _fail(f"{path}.paths", "must be an object")
-    for name, source_path in item["paths"].items():
-        _string(name, f"{path}.paths key")
-        _string(source_path, f"{path}.paths.{name}")
-    if set(item["paths"]) != {"application", "audit"}:
-        _fail(f"{path}.paths", "must contain exactly application and audit")
-    _object_of_string_lists(item["producer_safe_fields"], f"{path}.producer_safe_fields")
-    if set(item["producer_safe_fields"]) != {"access", "application", "audit"}:
-        _fail(f"{path}.producer_safe_fields", "must contain access, application, and audit")
-    if item["producer_safe_fields"]["access"] != ["time", "identity", "method", "path", "status"]:
-        _fail(f"{path}.producer_safe_fields.access", "must equal the canonical native access fields")
-    _boolean(item["query_and_auth_excluded"], f"{path}.query_and_auth_excluded")
-    _strings(item["unavailable_classes"], f"{path}.unavailable_classes")
-    if len(item["unavailable_classes"]) != len(set(item["unavailable_classes"])) or not set(item["unavailable_classes"]) <= {"application", "audit"}:
-        _fail(f"{path}.unavailable_classes", "may contain only unique application/audit gaps")
-
-
 def _runner_api(value: Any, path: str) -> None:
     item = _keys(value, {"bootstrap_auth", "manager"}, path)
     bootstrap = _keys(
@@ -324,21 +304,6 @@ def _audit_dispatch(value: Any, path: str) -> None:
     _string(item["plugin_protocol"], f"{path}.plugin_protocol")
     if item["write_logs_false"] is not True or item["fail_closed"] is not True:
         _fail(path, "must disable raw writes and fail closed")
-
-
-def _systemd_adapter(value: Any, path: str) -> None:
-    item = _keys(value, {"input", "output_path", "native_fields", "excluded_fields"}, path)
-    if item["input"] not in {"systemd:gitlab-runner", "systemd:dockerd"}:
-        _fail(f"{path}.input", "must be a supported systemd input")
-    output = _string(item["output_path"], f"{path}.output_path")
-    if not output.startswith("/"):
-        _fail(f"{path}.output_path", "must be an absolute path")
-    native = _strings(item["native_fields"], f"{path}.native_fields")
-    excluded = _strings(item["excluded_fields"], f"{path}.excluded_fields")
-    if not native or not excluded:
-        _fail(path, "native_fields and excluded_fields must be nonempty")
-    if set(native) & set(excluded):
-        _fail(path, "native_fields and excluded_fields must be disjoint")
 
 
 def _otel(value: Any, path: str) -> None:
@@ -472,7 +437,7 @@ def validate_verified_inputs(inputs: Any) -> None:
     charts = _keys(root["charts"], {"otel"}, "verified_inputs.charts")
     _gate(charts["otel"], "verified_inputs.charts.otel", [7, 8, 9, 10], _chart)
 
-    capabilities = _keys(root["capabilities"], {"splunk", "splunk_free", "splunk_uninstall", "gitlab_ce_logs", "runner_api", "audit_dispatch", "runner_service_log", "docker_daemon_log", "otel"}, "verified_inputs.capabilities")
+    capabilities = _keys(root["capabilities"], {"splunk", "splunk_free", "splunk_uninstall", "runner_api", "audit_dispatch", "otel"}, "verified_inputs.capabilities")
     _gate(capabilities["splunk"], "verified_inputs.capabilities.splunk", [3, 4, 7, 8, 9, 10], _splunk_capability)
     future = _keys(capabilities["splunk_free"], {"status", "source", "observed", "limitation"}, "verified_inputs.capabilities.splunk_free")
     if future["status"] not in {"UNVERIFIED", "VERIFIED", "INCOMPATIBLE"}:
@@ -488,29 +453,8 @@ def validate_verified_inputs(inputs: Any) -> None:
     if future["status"] == "INCOMPATIBLE" and future["observed"] is not None:
         _splunk_free(future["observed"], "verified_inputs.capabilities.splunk_free.observed")
     _gate(capabilities["splunk_uninstall"], "verified_inputs.capabilities.splunk_uninstall", [11], _uninstall)
-    _gate(capabilities["gitlab_ce_logs"], "verified_inputs.capabilities.gitlab_ce_logs", [4, 5, 6, 8, 9, 10], _gitlab_logs)
     _gate(capabilities["runner_api"], "verified_inputs.capabilities.runner_api", [5, 6, 8, 9, 10], _runner_api)
     _gate(capabilities["audit_dispatch"], "verified_inputs.capabilities.audit_dispatch", [2, 8, 9, 10], _audit_dispatch)
-    _gate(capabilities["runner_service_log"], "verified_inputs.capabilities.runner_service_log", [4, 8, 9, 10], _systemd_adapter)
-    _gate(capabilities["docker_daemon_log"], "verified_inputs.capabilities.docker_daemon_log", [4, 8, 9, 10], _systemd_adapter)
-    for name, expected_input, expected_output in (
-        (
-            "runner_service_log",
-            "systemd:gitlab-runner",
-            "/var/log/detection-engineering/runner-service.jsonl",
-        ),
-        (
-            "docker_daemon_log",
-            "systemd:dockerd",
-            "/var/log/detection-engineering/docker-daemon.jsonl",
-        ),
-    ):
-        gate = capabilities[name]
-        if gate["status"] == "VERIFIED" and (
-            gate["observed"]["input"] != expected_input
-            or gate["observed"]["output_path"] != expected_output
-        ):
-            _fail(f"verified_inputs.capabilities.{name}.observed", "must use the reserved input/output constants")
     _gate(capabilities["otel"], "verified_inputs.capabilities.otel", [7, 8, 9, 10], _otel)
     _gate(root["test_tools"], "verified_inputs.test_tools", [1, 2, 3, 4, 5, 6, 7, 8, 9], _test_tools)
 
@@ -681,11 +625,6 @@ def _verified_gate_observed(
 
 def _validate_forwarder_policy(policy: Any, path: str) -> None:
     expected = {
-        "downstream_time_field": "_time",
-        "native_time_fields": {
-            "gitlab_access": "time",
-            "systemd": "__REALTIME_TIMESTAMP",
-        },
         "common": [
             {
                 "id_suffix": "auth",
@@ -707,21 +646,12 @@ def _validate_forwarder_policy(policy: Any, path: str) -> None:
             },
         ],
         "profiles": {
-            "gitlab": {
-                "required_ids": ["gitlab-access", "gitlab-application", "gitlab-audit"],
-                "access_path": "/var/log/gitlab/nginx/gitlab_access.log",
-                "access_native_fields": ["time", "identity", "method", "path", "status"],
-                "gap_classes": ["application", "audit"],
-            },
+            "gitlab": {"required_ids": []},
             "runner": {
-                "required_ids": ["runner-service", "runner-registration"],
+                "required_ids": ["runner-registration"],
                 "registration_path": "/var/log/detection-engineering/runner-registration.jsonl",
-                "service_output_path": "/var/log/detection-engineering/runner-service.jsonl",
             },
-            "workload": {
-                "required_ids": ["workload-docker-daemon"],
-                "daemon_output_path": "/var/log/detection-engineering/docker-daemon.jsonl",
-            },
+            "workload": {"required_ids": []},
         },
     }
     if policy != expected:
@@ -729,66 +659,21 @@ def _validate_forwarder_policy(policy: Any, path: str) -> None:
 
 
 def build_forwarder_producer_contract(
-    profile: str,
     gates: Mapping[str, Any],
-    policy: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Build one strict full-gate producer contract for a forwarder profile."""
+    """Build the strict V1 audit-only full-gate producer contract."""
 
-    _validate_forwarder_policy(policy, "contract.forwarder_source_policy")
-    if profile not in {"gitlab", "runner", "workload"}:
-        _fail("forwarder.profile", "must be gitlab, runner, or workload")
-    if set(gates) != {
-        "audit_dispatch", "gitlab_logs", "runner_service_log", "docker_daemon_log"
-    }:
-        _fail("forwarder.gates", "must contain the four canonical producer gates")
+    if set(gates) != {"audit_dispatch"}:
+        _fail("forwarder.gates", "must contain exactly the canonical producer gates")
     _verified_gate_observed(
         gates["audit_dispatch"],
         "forwarder.audit_dispatch",
         [2, 8, 9, 10],
         _audit_dispatch,
     )
-    gitlab_gate = None
-    adapter_gate = None
-    if profile == "gitlab":
-        gitlab_observed = _verified_gate_observed(
-            gates["gitlab_logs"],
-            "forwarder.gitlab_logs",
-            [4, 5, 6, 8, 9, 10],
-            _gitlab_logs,
-        )
-        if gitlab_observed["producer_safe_fields"]["access"] != policy["profiles"]["gitlab"]["access_native_fields"]:
-            _fail("forwarder.gitlab_logs", "native access fields must match policy")
-        gitlab_gate = gates["gitlab_logs"]
-    elif profile == "runner":
-        adapter = _verified_gate_observed(
-            gates["runner_service_log"],
-            "forwarder.runner_service_log",
-            [4, 8, 9, 10],
-            _systemd_adapter,
-        )
-        if adapter["input"] != "systemd:gitlab-runner" or adapter["output_path"] != policy["profiles"]["runner"]["service_output_path"]:
-            _fail("forwarder.runner_service_log", "must use the reserved runner input/output")
-        if policy["native_time_fields"]["systemd"] not in adapter["native_fields"] or policy["downstream_time_field"] in adapter["native_fields"]:
-            _fail("forwarder.runner_service_log", "native and downstream time fields must remain distinct")
-        adapter_gate = gates["runner_service_log"]
-    else:
-        adapter = _verified_gate_observed(
-            gates["docker_daemon_log"],
-            "forwarder.docker_daemon_log",
-            [4, 8, 9, 10],
-            _systemd_adapter,
-        )
-        if adapter["input"] != "systemd:dockerd" or adapter["output_path"] != policy["profiles"]["workload"]["daemon_output_path"]:
-            _fail("forwarder.docker_daemon_log", "must use the reserved Docker input/output")
-        if policy["native_time_fields"]["systemd"] not in adapter["native_fields"] or policy["downstream_time_field"] in adapter["native_fields"]:
-            _fail("forwarder.docker_daemon_log", "native and downstream time fields must remain distinct")
-        adapter_gate = gates["docker_daemon_log"]
     return {
         "schema_version": 1,
         "audit_dispatch": gates["audit_dispatch"],
-        "gitlab_logs": gitlab_gate,
-        "systemd_adapter": adapter_gate,
     }
 
 
@@ -813,15 +698,14 @@ def project_forwarder_profile(
     matrix_rows: Any,
     producer_contract: Mapping[str, Any],
     policy: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Project canonical matrix rows to four-field inputs and explicit CE gaps."""
+) -> list[dict[str, Any]]:
+    """Project one canonical Linux-only V1 forwarder profile."""
 
     _validate_forwarder_policy(policy, "contract.forwarder_source_policy")
     if not isinstance(matrix_rows, list):
         _fail("forwarder.matrix", "must be a list")
     _assignable(producer_contract, "ForwarderProducerContract", "forwarder.producer_contract")
     projected: list[dict[str, Any]] = []
-    gaps: list[str] = []
     expected_ids = set()
     for common in policy["common"]:
         source_id = f"{profile}-{common['id_suffix']}"
@@ -835,40 +719,11 @@ def project_forwarder_profile(
 
     profile_policy = policy["profiles"][profile]
     expected_ids.update(profile_policy["required_ids"])
-    if profile == "gitlab":
-        gate = producer_contract["gitlab_logs"]
-        observed = _verified_gate_observed(
-            gate, "forwarder.producer_contract.gitlab_logs", [4, 5, 6, 8, 9, 10], _gitlab_logs
-        )
-        access = _matrix_row(matrix_rows, "gitlab-access", "forwarder.gitlab coverage")
-        if access.get("path_or_input") != profile_policy["access_path"]:
-            _fail("forwarder.canonical.gitlab-access", "does not match canonical GitLab access path")
-        projected.append(_project_input(access, profile_policy["access_path"]))
-        for class_name, source_id in (("application", "gitlab-application"), ("audit", "gitlab-audit")):
-            row = _matrix_row(matrix_rows, source_id, "forwarder.gitlab coverage")
-            if row.get("path_or_input") != f"capabilities.gitlab_ce_logs.observed.paths.{class_name}":
-                _fail(f"forwarder.canonical.{source_id}", "must retain the canonical capability path reference")
-            if class_name in observed["unavailable_classes"]:
-                gaps.append(f"gitlab_{class_name}")
-            else:
-                projected.append(_project_input(row, observed["paths"][class_name]))
-    elif profile == "runner":
-        adapter = producer_contract["systemd_adapter"]["observed"]
-        service = _matrix_row(matrix_rows, "runner-service", "forwarder.runner coverage")
-        if service.get("path_or_input") != "systemd:gitlab-runner":
-            _fail("forwarder.canonical.runner-service", "must use the canonical systemd input")
-        projected.append(_project_input(service, adapter["output_path"]))
+    if profile == "runner":
         registration = _matrix_row(matrix_rows, "runner-registration", "forwarder.runner coverage")
         if registration.get("path_or_input") != profile_policy["registration_path"]:
             _fail("forwarder.canonical.runner-registration", "must use the canonical registration path")
         projected.append(_project_input(registration, profile_policy["registration_path"]))
-    else:
-        adapter = producer_contract["systemd_adapter"]["observed"]
-        daemon = _matrix_row(matrix_rows, "workload-docker-daemon", "forwarder.workload coverage")
-        if daemon.get("path_or_input") != "systemd:dockerd":
-            _fail("forwarder.canonical.workload-docker-daemon", "must use the canonical systemd input")
-        projected.append(_project_input(daemon, adapter["output_path"]))
-
     actual_profile_ids = {
         row["id"]
         for row in matrix_rows
@@ -876,7 +731,7 @@ def project_forwarder_profile(
     }
     if actual_profile_ids != expected_ids:
         _fail("forwarder.profile coverage", f"expected {sorted(expected_ids)}, got {sorted(actual_profile_ids)}")
-    return {"inputs": projected, "gaps": gaps}
+    return projected
 
 
 def combine_apt_package_gates(gates: Mapping[str, Any]) -> dict[str, Any]:
@@ -996,25 +851,17 @@ def _apply_mapping_operation(operation: str, inputs: dict[str, Any], path: str) 
         return _assemble_firewall_policy(inputs, path)
 
     if operation == "project_forwarder_inputs":
-        gates = {
-            "audit_dispatch": inputs["audit_dispatch_gate"],
-            "gitlab_logs": inputs["gitlab_logs_gate"],
-            "runner_service_log": inputs["runner_service_log_gate"],
-            "docker_daemon_log": inputs["docker_daemon_log_gate"],
-        }
-        producer = build_forwarder_producer_contract(inputs["profile"], gates, inputs["policy"])
+        producer = build_forwarder_producer_contract(
+            {"audit_dispatch": inputs["audit_dispatch_gate"]}
+        )
         return project_forwarder_profile(
             inputs["profile"], inputs["telemetry_sources"], producer, inputs["policy"]
-        )["inputs"]
+        )
 
     if operation == "build_forwarder_producer_contract":
-        gates = {
-            "audit_dispatch": inputs["audit_dispatch_gate"],
-            "gitlab_logs": inputs["gitlab_logs_gate"],
-            "runner_service_log": inputs["runner_service_log_gate"],
-            "docker_daemon_log": inputs["docker_daemon_log_gate"],
-        }
-        return build_forwarder_producer_contract(inputs["profile"], gates, inputs["policy"])
+        return build_forwarder_producer_contract(
+            {"audit_dispatch": inputs["audit_dispatch_gate"]}
+        )
 
     if operation == "project_runtime_artifact":
         artifact = _keys(
@@ -1139,8 +986,6 @@ def _assignable(value: Any, type_name: str, path: str) -> None:
         _audit_dispatch(value, f"{path}<AuditDispatch>")
     elif type_name == "SplunkTrialCapability":
         _splunk_capability(value, f"{path}<SplunkTrialCapability>")
-    elif type_name == "GitLabLogContract":
-        _gitlab_logs(value, f"{path}<GitLabLogContract>")
     elif type_name == "RunnerApiContract":
         _runner_api(value, f"{path}<RunnerApiContract>")
     elif type_name == "HelmChartPin":
@@ -1150,7 +995,7 @@ def _assignable(value: Any, type_name: str, path: str) -> None:
     elif type_name == "ForwarderProducerContract":
         item = _keys(
             value,
-            {"schema_version", "audit_dispatch", "gitlab_logs", "systemd_adapter"},
+            {"schema_version", "audit_dispatch"},
             f"{path}<ForwarderProducerContract>",
         )
         if item["schema_version"] != 1:
@@ -1158,16 +1003,6 @@ def _assignable(value: Any, type_name: str, path: str) -> None:
         _verified_gate_observed(
             item["audit_dispatch"], f"{path}.audit_dispatch", [2, 8, 9, 10], _audit_dispatch
         )
-        if (item["gitlab_logs"] is None) == (item["systemd_adapter"] is None):
-            _fail(path, "must contain exactly one profile-specific producer gate")
-        if item["gitlab_logs"] is not None:
-            _verified_gate_observed(
-                item["gitlab_logs"], f"{path}.gitlab_logs", [4, 5, 6, 8, 9, 10], _gitlab_logs
-            )
-        if item["systemd_adapter"] is not None:
-            _verified_gate_observed(
-                item["systemd_adapter"], f"{path}.systemd_adapter", [4, 8, 9, 10], _systemd_adapter
-            )
     elif type_name == "ArtifactLayoutGateMap":
         if not isinstance(value, dict) or set(value) != {"minikube", "kubectl", "helm", "otel_host"}:
             _fail(path, "must contain four artifact layout gates")
