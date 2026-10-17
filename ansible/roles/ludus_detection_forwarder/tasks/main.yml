@@ -1,0 +1,15 @@
+---
+- name: Validate all forwarder contracts before target mutation
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Inspect package and managed lifecycle state
+  ansible.builtin.include_tasks: inspect.yml
+
+- name: Install and bootstrap the managed Universal Forwarder
+  ansible.builtin.include_tasks: install.yml
+
+- name: Grant and prove narrow producer readability
+  ansible.builtin.include_tasks: access.yml
+
+- name: Converge profile configuration and service
+  ansible.builtin.include_tasks: configure.yml

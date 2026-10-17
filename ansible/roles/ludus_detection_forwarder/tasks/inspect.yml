@@ -1,0 +1,189 @@
+---
+# yamllint disable rule:line-length
+- name: Inspect immutable host command prerequisites before mutation
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ detection_forwarder_dpkg }}"
+    - "{{ detection_forwarder_dpkg_query }}"
+    - "{{ detection_forwarder_dpkg_deb }}"
+    - "{{ detection_forwarder_systemctl }}"
+    - "{{ detection_forwarder_id }}"
+    - "{{ detection_forwarder_runuser }}"
+    - "{{ detection_forwarder_python }}"
+  register: _detection_forwarder_command_stats
+
+- name: Refuse mutation without package service and identity prerequisites
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg or item.stat.islnk
+      - item.stat.executable
+    fail_msg: Required preinstalled host command is absent or not executable
+  loop: "{{ _detection_forwarder_command_stats.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Inspect all canonical producer files before mutation
+  ansible.builtin.stat:
+    path: "{{ _detection_forwarder_root }}{{ item.path }}"
+  loop: "{{ detection_forwarder_inputs }}"
+  register: _detection_forwarder_source_stats
+
+- name: Refuse absent or nonregular canonical producer files
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg
+    fail_msg: Canonical producer output must already exist as a regular file
+  loop: "{{ _detection_forwarder_source_stats.results }}"
+  loop_control:
+    label: "{{ item.item.path }}"
+
+- name: Inspect authenticated-download value
+  ansible.builtin.stat:
+    path: "{{ detection_forwarder_download_auth_path }}"
+  register: _detection_forwarder_download_auth_stat
+  when: detection_forwarder_artifact.download_auth_required
+  no_log: true
+
+- name: Require protected authenticated-download value
+  ansible.builtin.assert:
+    that:
+      - _detection_forwarder_download_auth_stat.stat.exists
+      - _detection_forwarder_download_auth_stat.stat.isreg
+      - _detection_forwarder_download_auth_stat.stat.mode == '0600'
+      - _detection_forwarder_download_auth_stat.stat.pw_name == detection_forwarder_root_owner
+      - _detection_forwarder_download_auth_stat.stat.gr_name == detection_forwarder_root_group
+  when: detection_forwarder_artifact.download_auth_required
+
+- name: Read protected authenticated-download value
+  ansible.builtin.slurp:
+    src: "{{ detection_forwarder_download_auth_path }}"
+  register: _detection_forwarder_download_auth
+  when: detection_forwarder_artifact.download_auth_required
+  no_log: true
+
+- name: Read installed package status, version, and architecture
+  ansible.builtin.command:
+    argv: ["{{ detection_forwarder_dpkg_query }}", --show, "--showformat=${Status}\\t${Version}\\t${Architecture}", splunkforwarder]
+  register: _detection_forwarder_installed
+  changed_when: false
+  failed_when: false
+
+- name: Classify installed package state
+  ansible.builtin.set_fact:
+    _detection_forwarder_package_record: "{{ _detection_forwarder_installed.stdout.split() if _detection_forwarder_installed.rc == 0 else [] }}"
+    _detection_forwarder_package_is_installed: >-
+      {{ _detection_forwarder_installed.rc == 0 and
+         _detection_forwarder_installed.stdout.split() | length == 5 and
+         _detection_forwarder_installed.stdout.split()[0:3] == ['install', 'ok', 'installed'] }}
+
+- name: Refuse implicit package replacement
+  ansible.builtin.assert:
+    that:
+      - not _detection_forwarder_package_is_installed or _detection_forwarder_package_record[3] == detection_forwarder_artifact.version
+      - not _detection_forwarder_package_is_installed or _detection_forwarder_package_record[4] == 'amd64'
+
+- name: Inspect managed provenance bootstrap transaction marker and unit
+  ansible.builtin.stat:
+    path: "{{ _detection_forwarder_root }}{{ item }}"
+  loop:
+    - "{{ detection_forwarder_provenance_path }}"
+    - "{{ detection_forwarder_marker_path }}"
+    - "{{ detection_forwarder_transaction_path }}"
+    - "{{ detection_forwarder_unit_path }}"
+  register: _detection_forwarder_state_stats
+
+- name: Classify managed lifecycle files
+  ansible.builtin.set_fact:
+    _detection_forwarder_provenance_stat: "{{ _detection_forwarder_state_stats.results[0].stat }}"
+    _detection_forwarder_marker_stat: "{{ _detection_forwarder_state_stats.results[1].stat }}"
+    _detection_forwarder_transaction_stat: "{{ _detection_forwarder_state_stats.results[2].stat }}"
+    _detection_forwarder_existing_unit_stat: "{{ _detection_forwarder_state_stats.results[3].stat }}"
+
+- name: Refuse ambiguous or contradictory bootstrap lifecycle state
+  ansible.builtin.assert:
+    that:
+      - not _detection_forwarder_transaction_stat.exists
+      - (_detection_forwarder_marker_stat.exists | bool) == (_detection_forwarder_existing_unit_stat.exists | bool)
+      - not _detection_forwarder_existing_unit_stat.exists or _detection_forwarder_existing_unit_stat.isreg
+    fail_msg: Bootstrap transaction is incomplete or marker and generated unit disagree; refusing automatic replay
+
+- name: Refuse unmanaged matching installed package
+  ansible.builtin.assert:
+    that:
+      - not _detection_forwarder_package_is_installed or _detection_forwarder_provenance_stat.exists
+      - not _detection_forwarder_package_is_installed or _detection_forwarder_provenance_stat.isreg
+      - not _detection_forwarder_package_is_installed or _detection_forwarder_provenance_stat.mode == '0600'
+      - not _detection_forwarder_package_is_installed or _detection_forwarder_provenance_stat.pw_name == detection_forwarder_root_owner
+      - not _detection_forwarder_package_is_installed or _detection_forwarder_provenance_stat.gr_name == detection_forwarder_root_group
+    fail_msg: Matching installed UF lacks protected role-owned package/build/arch/SHA provenance
+
+- name: Read existing protected lifecycle records
+  ansible.builtin.slurp:
+    src: "{{ _detection_forwarder_root }}{{ item.path }}"
+  loop:
+    - {path: "{{ detection_forwarder_provenance_path }}", exists: "{{ _detection_forwarder_provenance_stat.exists }}"}
+    - {path: "{{ detection_forwarder_marker_path }}", exists: "{{ _detection_forwarder_marker_stat.exists }}"}
+  when: item.exists | bool
+  register: _detection_forwarder_state_raw
+  no_log: true
+
+- name: Decode existing lifecycle records
+  ansible.builtin.set_fact:
+    _detection_forwarder_existing_provenance: >-
+      {{ (_detection_forwarder_state_raw.results[0].content | b64decode | from_yaml)
+         if _detection_forwarder_provenance_stat.exists else none }}
+    _detection_forwarder_existing_marker: >-
+      {{ (_detection_forwarder_state_raw.results[1].content | b64decode | from_yaml)
+         if _detection_forwarder_marker_stat.exists else none }}
+  no_log: true
+
+- name: Validate existing package provenance content
+  ansible.builtin.assert:
+    that:
+      - >-
+        _detection_forwarder_existing_provenance ==
+        {'schema_version': 1, 'package': _detection_forwarder_expected_package}
+    fail_msg: Existing UF provenance does not match selected package/build/arch/SHA
+  when: _detection_forwarder_provenance_stat.exists
+
+- name: Validate existing bootstrap marker metadata and content
+  ansible.builtin.assert:
+    that:
+      - _detection_forwarder_marker_stat.isreg
+      - _detection_forwarder_marker_stat.mode == '0600'
+      - _detection_forwarder_marker_stat.pw_name == detection_forwarder_root_owner
+      - _detection_forwarder_marker_stat.gr_name == detection_forwarder_root_group
+      - >-
+        _detection_forwarder_existing_marker ==
+        {'schema_version': 1,
+         'package': _detection_forwarder_expected_package,
+         'service': {'name': detection_forwarder_service_name,
+                     'user': detection_forwarder_service_user}}
+    fail_msg: Existing UF bootstrap marker is not valid authority for service operations
+  when: _detection_forwarder_marker_stat.exists
+
+- name: Read effective identity from an existing generated unit
+  ansible.builtin.command:
+    argv: ["{{ detection_forwarder_systemctl }}", show, "{{ detection_forwarder_service_name }}", --property, User, --value]
+  register: _detection_forwarder_existing_unit_user
+  changed_when: false
+  when: _detection_forwarder_existing_unit_stat.exists
+
+- name: Read fragment path from an existing generated unit
+  ansible.builtin.command:
+    argv: ["{{ detection_forwarder_systemctl }}", show, "{{ detection_forwarder_service_name }}", --property, FragmentPath, --value]
+  register: _detection_forwarder_existing_unit_path
+  changed_when: false
+  when: _detection_forwarder_existing_unit_stat.exists
+
+- name: Require existing unit to execute as the selected nonroot identity
+  ansible.builtin.assert:
+    that:
+      - _detection_forwarder_existing_unit_user.stdout | trim == detection_forwarder_service_user
+      - _detection_forwarder_existing_unit_user.stdout | trim != 'root'
+      - _detection_forwarder_existing_unit_path.stdout | trim == detection_forwarder_unit_path
+    fail_msg: Generated boot-start unit does not report the selected nonroot service identity
+  when: _detection_forwarder_existing_unit_stat.exists

@@ -1,0 +1,7 @@
+# Accepted risk: this is plaintext Splunk-to-Splunk TCP. The configured
+# receiver is protected by range guest-firewall policy, not TLS.
+[tcpout]
+defaultGroup = detection_receiver
+
+[tcpout:detection_receiver]
+server = {{ detection_splunk_receiver_host }}:{{ detection_splunk_receiver_port }}

@@ -1,0 +1,11 @@
+schema_version: 1
+state: in_progress
+package:
+  name: splunkforwarder
+  version: {{ detection_forwarder_artifact.version }}
+  build: {{ detection_forwarder_artifact.build }}
+  architecture: amd64
+  sha256: {{ detection_forwarder_artifact.sha256 }}
+service:
+  name: {{ detection_forwarder_service_name }}
+  user: {{ detection_forwarder_service_user }}
