@@ -4,11 +4,14 @@
   gather_facts: false
   vars:
     detection_linux_host_id: synthetic-host
-    detection_audit_dispatch:
-      package_version: 1:4.0.2-2+deb13u1
-      plugin_protocol: auditd-string-newline-v1
-      write_logs_false: true
-      fail_closed: true
+    detection_laurel_artifact:
+      version: synthetic-version
+      url: https://example.invalid/laurel.tar.gz
+      sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      download_auth_required: false
+    detection_laurel_read_user: splunkfwd
+    detection_laurel_rotate_size: 5000000
+    detection_laurel_rotate_generations: 10
   tasks:
     - name: Load production tasks
       ansible.builtin.import_tasks: ../tasks/main.yml

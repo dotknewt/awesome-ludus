@@ -1,6 +1,0 @@
-active = yes
-direction = out
-path = {{ detection_logging_root }}/usr/local/libexec/detection-engineering/audit_sanitize.py
-type = always
-args = --output {{ detection_logging_root }}{{ detection_logging_output_path }} --owner {{ detection_audit_output_owner }} --group {{ detection_audit_output_group }}
-format = string

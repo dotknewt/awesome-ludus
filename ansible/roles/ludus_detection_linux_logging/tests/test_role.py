@@ -1,7 +1,9 @@
+import hashlib
+import io
 import json
 import os
-import resource
 import subprocess
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -10,339 +12,471 @@ from support import run_production_include
 
 
 ROLE = Path(__file__).resolve().parents[1]
-PROTOCOL = "auditd-string-newline-v1"
-PACKAGE = "1:4.0.2-2+deb13u1"
 
 
-def _dispatch():
-    return {"package_version": PACKAGE, "plugin_protocol": PROTOCOL,
-            "write_logs_false": True, "fail_closed": True}
+def _artifact(tmp_path, *, extra_member=False, member_mtime=0):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    archive = tmp_path / ("unsafe.tar.gz" if extra_member else "laurel.tar.gz")
+    binary = b"#!/bin/sh\nprintf 'synthetic laurel fixture\\n'\n"
+    with tarfile.open(archive, "w:gz") as bundle:
+        member = tarfile.TarInfo("laurel")
+        member.mode = 0o755
+        member.mtime = member_mtime
+        member.size = len(binary)
+        bundle.addfile(member, io.BytesIO(binary))
+        if extra_member:
+            extra = b"not allowed"
+            member = tarfile.TarInfo("../escape")
+            member.size = len(extra)
+            bundle.addfile(member, io.BytesIO(extra))
+    return archive, hashlib.sha256(archive.read_bytes()).hexdigest()
 
 
-def _audit_line(serial="3"):
-    return (f'type=SYSCALL msg=audit(1.2:{serial}): pid=42 uid=1000 '
-            'exe="/usr/bin/curl" comm="curl" key="process"')
-
-
-def _run_sanitizer(tmp_path, payload, *, existing_mode=None, output_name="audit-safe.jsonl"):
-    output = tmp_path / output_name
-    if existing_mode is not None:
-        output.write_text("", encoding="utf-8")
-        output.chmod(existing_mode)
-    result = subprocess.run(
-        ["python3", str(ROLE / "files/audit_sanitize.py"), "--output", str(output),
-         "--owner", str(os.getuid()), "--group", str(os.getgid())],
-        input=payload, text=True, capture_output=True,
-    )
-    return result, output
-
-
-def test_audit_newline_records_are_incremental_and_secret_records_never_persist(tmp_path):
-    payload = "\n".join([
-        _audit_line("3"),
-        'type=EXECVE msg=audit(1.2:3): argc=2 a0="curl" a1="CANARY_SECRET"',
-        'type=PROCTITLE msg=audit(1.2:3): proctitle=43414E4152595F534543524554',
-        _audit_line("4"),
-    ]) + "\n"
-    result, output = _run_sanitizer(tmp_path, payload, existing_mode=0o666)
-    assert result.returncode == 0, result.stderr
-    records = [json.loads(line) for line in output.read_text().splitlines()]
-    assert [record["audit_serial"] for record in records] == ["3", "4"]
-    assert all(record["pid"] == "42" and record["exe"] == "/usr/bin/curl" for record in records)
-    assert "CANARY_SECRET" not in output.read_text() and "PROCTITLE" not in output.read_text()
-    assert output.stat().st_mode & 0o777 == 0o640
-    assert (output.stat().st_uid, output.stat().st_gid) == (os.getuid(), os.getgid())
-
-
-@pytest.mark.parametrize("payload", [
-    "not an audit record\n",
-    _audit_line() + "\npartial-without-newline",
-])
-def test_malformed_or_partial_stream_fails_without_raw_fallback(tmp_path, payload):
-    result, output = _run_sanitizer(tmp_path, payload)
-    assert result.returncode != 0
-    assert not output.exists() or payload not in output.read_text()
-
-
-def test_output_open_and_write_failures_are_nonzero(tmp_path):
-    missing = tmp_path / "missing" / "audit.jsonl"
-    open_failure = subprocess.run(
-        ["python3", str(ROLE / "files/audit_sanitize.py"), "--output", str(missing)],
-        input=_audit_line() + "\n", text=True, capture_output=True,
-    )
-    assert open_failure.returncode != 0
-    write_failure = subprocess.run(
-        ["python3", str(ROLE / "files/audit_sanitize.py"), "--output", "/dev/full"],
-        input=_audit_line() + "\n", text=True, capture_output=True,
-    )
-    assert write_failure.returncode != 0
-    limited = tmp_path / "limited.jsonl"
-    midstream = subprocess.run(
-        ["python3", str(ROLE / "files/audit_sanitize.py"), "--output", str(limited),
-         "--owner", str(os.getuid()), "--group", str(os.getgid())],
-        input=_audit_line("1") + "\n" + _audit_line("2") + "\n",
-        text=True, capture_output=True,
-        preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_FSIZE, (32, 32)),
-    )
-    assert midstream.returncode != 0
-    assert "CANARY_SECRET" not in limited.read_text(errors="ignore")
-
-
-def _root_fixture(tmp_path, *, active_plugin=None):
+def _fixture(
+    tmp_path,
+    *,
+    reader="splunkfwd",
+    reader_exists=True,
+    readable=True,
+    auditd_installed=True,
+    auditd_status="installed",
+    auditd_tools=True,
+    auditd_unit=True,
+    root_owned_laurel=False,
+    fail_rule_load_once=False,
+    fail_restart_once=False,
+    no_output=False,
+    no_reader_access=False,
+    chown_noop=False,
+):
     root = tmp_path / "root"
-    for relative in ("etc/audit/plugins.d", "var/log"):
+    for relative in ("etc/audit/plugins.d", "etc/audit/rules.d", "var/log"):
         (root / relative).mkdir(parents=True, exist_ok=True)
-    (root / "etc/audit/auditd.conf").write_text(
-        "write_logs = yes\nplugin_dir = /etc/audit/plugins.d\nlog_file = /var/log/audit/audit.log\n"
-    )
-    (root / "var/log/auth.log").touch()
-    (root / "var/log/syslog").touch()
-    if active_plugin:
-        (root / "etc/audit/plugins.d/other.conf").write_text(
-            f"active = yes\npath = {active_plugin}\ntype = always\nformat = string\n"
+    for name in ("auth.log", "syslog"):
+        path = root / "var/log" / name
+        path.write_text(f"retained {name}\n")
+        path.chmod(0o644 if readable else 0o600)
+
+    state = tmp_path / "state"
+    state.mkdir()
+    accounts = state / "accounts"
+    other_reader = "splunk" if reader == "splunkfwd" else "splunkfwd"
+    accounts.write_text((f"{reader}\n{other_reader}\n") if reader_exists else "")
+    (state / "enabled").write_text("no")
+    (state / "active").write_text("no")
+    (state / "rules").write_text("")
+    (state / "ownership").write_text("")
+    (state / "acl").write_text("")
+    if auditd_installed:
+        (state / "package-status").write_text(auditd_status)
+    if auditd_unit:
+        (state / "unit").touch()
+    for flag, enabled in {
+        "fail-rule-load-once": fail_rule_load_once,
+        "fail-restart-once": fail_restart_once,
+        "no-output": no_output,
+        "no-reader-access": no_reader_access,
+        "chown-noop": chown_noop,
+    }.items():
+        if enabled:
+            (state / flag).touch()
+
+    output_dir = root / "var/log/laurel"
+    if root_owned_laurel:
+        output_dir.mkdir(parents=True)
+        (output_dir / "audit.log").write_text('{"old":"retained"}\n')
+        (output_dir / "audit.log").chmod(0o600)
+        (state / "ownership").write_text(
+            f"{output_dir}:root\n{output_dir}/audit.log:root\n"
         )
-    return root
+
+    calls = tmp_path / "calls"
+    fake = tmp_path / "bin"
+    fake.mkdir()
+
+    (fake / "dpkg-query").write_text(
+        f'''#!/usr/bin/env python3
+import pathlib
+import sys
+
+expected = ["--show", "--showformat=${{db:Status-Status}}", "auditd"]
+pathlib.Path({str(calls)!r}).open("a").write("dpkg-query:" + repr(sys.argv[1:]) + "\\n")
+if sys.argv[1:] != expected:
+    raise SystemExit(9)
+status = pathlib.Path({str(state / "package-status")!r})
+if not status.is_file():
+    raise SystemExit(1)
+sys.stdout.write(status.read_text())
+'''
+    )
+    (fake / "getent").write_text(
+        f'''#!/bin/sh
+[ "$1" = passwd ] || exit 9
+grep -qx "$2" {accounts} || exit 2
+printf '%s:x:999:999::/nonexistent:/usr/sbin/nologin\\n' "$2"
+'''
+    )
+    (fake / "useradd").write_text(
+        f'''#!/bin/sh
+[ "$*" = "--system --home-dir {root}/var/log/laurel --create-home _laurel" ] || exit 9
+grep -qx _laurel {accounts} || echo _laurel >> {accounts}
+if [ ! -d {root}/var/log/laurel ]; then
+  mkdir -p {root}/var/log/laurel
+  echo "{root}/var/log/laurel:_laurel" >> {state}/ownership
+fi
+echo "useradd:$*" >> {calls}
+'''
+    )
+    (fake / "chown").write_text(
+        f'''#!/bin/sh
+[ "$1" = --changes ] || exit 9
+[ "$2" = _laurel:_laurel ] || exit 9
+grep -qx _laurel {accounts} || exit 8
+echo "chown:$*" >> {calls}
+[ -f {state}/chown-noop ] && exit 0
+grep -Fxq "$3:_laurel" {state}/ownership && exit 0
+grep -v "^$3:" {state}/ownership > {state}/ownership.tmp || true
+mv {state}/ownership.tmp {state}/ownership
+echo "$3:_laurel" >> {state}/ownership
+echo "changed ownership of '$3'"
+'''
+    )
+    (fake / "runuser").write_text(
+        rf'''#!/bin/sh
+[ "$1" = -u ] && grep -qx "$2" {accounts} || exit 8
+[ "$3" = -- ] && [ "$4" = test ] && [ "$5" = -r ] || exit 9
+path=$6
+mode=$(stat -c %a "$path") || exit 7
+case "${{mode#??}}" in
+  4|5|6|7) cat "$path" >/dev/null;;
+  *) grep -Fxq "$path:$2" {state}/acl && cat "$path" >/dev/null || exit 6;;
+esac
+echo "read:$2:$path" >> {calls}
+'''
+    )
+    (fake / "systemctl").write_text(
+        rf'''#!/bin/sh
+echo "systemctl:$*" >> {calls}
+case "$1" in
+  show)
+    [ -f {state}/unit ] && echo loaded || echo not-found
+    ;;
+  is-enabled)
+    [ "$(cat {state}/enabled)" = yes ]
+    ;;
+  is-active)
+    [ "$(cat {state}/active)" = yes ]
+    ;;
+  enable)
+    [ -f {state}/unit ] || exit 5
+    echo yes > {state}/enabled
+    ;;
+  restart)
+    [ "$2" = auditd ] && [ -f {state}/unit ] && [ -f {state}/package-status ] || exit 5
+    [ "$(cat {state}/enabled)" = yes ] || exit 4
+    [ -s {state}/rules ] || exit 3
+    [ -x {root}/usr/local/sbin/laurel ] || exit 8
+    [ -f {root}/etc/laurel/config.toml ] || exit 7
+    [ -f {root}/etc/audit/plugins.d/laurel.conf ] || exit 6
+    grep -Fxq "{root}/var/log/laurel:_laurel" {state}/ownership || exit 12
+    [ "$(stat -c %a {root}/var/log/laurel)" = 750 ] || exit 13
+    output={root}/var/log/laurel/audit.log
+    if [ -f "$output" ]; then
+      grep -Fxq "$output:_laurel" {state}/ownership || exit 16
+      [ "$(stat -c %a "$output")" = 640 ] || exit 17
+    fi
+    if [ -f {state}/fail-restart-once ]; then rm {state}/fail-restart-once; exit 14; fi
+    echo yes > {state}/active
+    if [ ! -f {state}/no-output ]; then
+      printf '{{"EXECVE":{{"ARGV":["native","ordinary"]}},"ENV":{{"LD_PRELOAD":"/tmp/native.so"}}}}\n' > "$output"
+      chmod 640 "$output"
+      grep -v "^$output:" {state}/ownership > {state}/ownership.tmp || true
+      mv {state}/ownership.tmp {state}/ownership
+      echo "$output:_laurel" >> {state}/ownership
+      if [ ! -f {state}/no-reader-access ]; then
+        reader=$(sed -n 's/^read-users = \[ "\([^"]*\)" \]/\1/p' {root}/etc/laurel/config.toml)
+        echo "$output:$reader" >> {state}/acl
+      fi
+    fi
+    ;;
+  *) exit 9;;
+esac
+'''
+    )
+    augenrules = fake / "augenrules"
+    auditctl = fake / "auditctl"
+    if auditd_tools:
+        augenrules.write_text(
+            f'''#!/bin/sh
+echo "augenrules:$*" >> {calls}
+[ "$1" = --load ] || exit 9
+if [ -f {state}/fail-rule-load-once ]; then rm {state}/fail-rule-load-once; exit 15; fi
+grep -q detection_process {root}/etc/audit/rules.d/99-detection-laurel.rules || exit 8
+echo '-a always,exit -F arch=b64 -S execve -F key=detection_process' > {state}/rules
+'''
+        )
+        auditctl.write_text(
+            f'''#!/bin/sh
+echo "auditctl:$*" >> {calls}
+[ "$1" = -l ] || exit 9
+cat {state}/rules
+'''
+        )
+
+    for command in fake.iterdir():
+        command.chmod(0o755)
+    return root, fake, state, calls
 
 
-def _role_vars(root):
+def _variables(root, fake, archive, digest, *, reader="splunkfwd"):
     return {
         "detection_linux_host_id": "synthetic-host",
-        "detection_audit_dispatch": _dispatch(),
+        "detection_laurel_artifact": {
+            "version": "synthetic-version",
+            "url": archive.as_uri(),
+            "sha256": digest,
+            "download_auth_required": False,
+        },
+        "detection_laurel_read_user": reader,
+        "detection_laurel_rotate_size": 5000000,
+        "detection_laurel_rotate_generations": 10,
         "detection_logging_root": str(root),
-        "detection_logging_apply": False,
-        "detection_audit_output_owner": os.getuid(),
-        "detection_audit_output_group": os.getgid(),
+        "detection_logging_dpkg_query_command": str(fake / "dpkg-query"),
+        "detection_logging_getent_command": str(fake / "getent"),
+        "detection_logging_useradd_command": str(fake / "useradd"),
+        "detection_logging_chown_command": str(fake / "chown"),
+        "detection_logging_runuser_command": str(fake / "runuser"),
+        "detection_logging_service_command": str(fake / "systemctl"),
+        "detection_auditd_augenrules_command": str(fake / "augenrules"),
+        "detection_auditd_auditctl_command": str(fake / "auditctl"),
+        "detection_laurel_output_wait_timeout": 1,
     }
 
 
-def test_positive_rooted_fixture_configures_safe_sources_and_plugin(tmp_path):
-    root = _root_fixture(tmp_path)
-    fake = tmp_path / "bin"; fake.mkdir()
-    output = root / "var/log/detection-engineering/audit-safe.jsonl"
-    output.parent.mkdir(parents=True)
-    output.write_text("")
-    output.chmod(0o666)
-    result = run_production_include(
-        "ludus_detection_linux_logging", "configure", _role_vars(root), fake,
+def _run_main(variables, fake):
+    return run_production_include(
+        "ludus_detection_linux_logging", "main", variables, fake,
     )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "write_logs = no" in (root / "etc/audit/auditd.conf").read_text()
-    assert "format = string" in (root / "etc/audit/plugins.d/detection-engineering.conf").read_text()
-    assert "$FileCreateMode" not in (root / "etc/rsyslog.d/30-detection-engineering.conf").read_text()
-    assert output.stat().st_mode & 0o777 == 0o640
-    installed = root / "usr/local/libexec/detection-engineering/audit_sanitize.py"
-    canary = _audit_line() + "\n" + 'type=EXECVE msg=audit(1.2:3): a0="DURABLE_CANARY"\n'
-    dispatch = subprocess.run(
-        [str(installed), "--output", str(output), "--owner", str(os.getuid()),
-         "--group", str(os.getgid())], input=canary, text=True, capture_output=True,
-    )
-    assert dispatch.returncode == 0, dispatch.stderr
-    assert "DURABLE_CANARY" not in output.read_text()
-    assert json.loads(output.read_text())["comm"] == "curl"
-    assert not (root / "var/log/audit/audit.log").exists()
 
 
-def test_active_unreviewed_plugin_refuses_before_safe_config_mutation(tmp_path):
-    root = _root_fixture(tmp_path, active_plugin="/usr/bin/raw-forwarder")
-    fake = tmp_path / "bin"; fake.mkdir()
-    before = (root / "etc/audit/auditd.conf").read_bytes()
-    result = run_production_include(
-        "ludus_detection_linux_logging", "configure", _role_vars(root), fake,
-    )
+def _valid(tmp_path, **fixture_options):
+    archive, digest = _artifact(tmp_path)
+    root, fake, state, calls = _fixture(tmp_path, **fixture_options)
+    reader = fixture_options.get("reader", "splunkfwd")
+    return root, fake, state, calls, _variables(root, fake, archive, digest, reader=reader)
+
+
+def test_missing_artifact_refuses_before_mutation(tmp_path):
+    root, fake, _state, calls, variables = _valid(tmp_path)
+    variables["detection_laurel_artifact"] = None
+    result = _run_main(variables, fake)
     assert result.returncode != 0
-    assert "unreviewed active audit plugin" in result.stdout + result.stderr
-    assert (root / "etc/audit/auditd.conf").read_bytes() == before
-
-
-def test_alternate_effective_plugin_dir_is_preflighted(tmp_path):
-    root = _root_fixture(tmp_path)
-    alternate = root / "etc/audit/alternate"
-    alternate.mkdir()
-    (root / "etc/audit/auditd.conf").write_text(
-        "write_logs = yes\nplugin_dir = /etc/audit/alternate\n"
-    )
-    (alternate / ".hidden.conf").write_text("active = yes\n")
-    (alternate / "ignored.extra.conf").write_text("active = yes\n")
-    (alternate / "inactive.conf").write_text("active = no\n")
-    (alternate / "raw.conf").write_text(
-        "active = yes\npath = /usr/bin/raw-forwarder\ntype = always\nformat = string\n"
-    )
-    fake = tmp_path / "bin"; fake.mkdir()
-    result = run_production_include(
-        "ludus_detection_linux_logging", "configure", _role_vars(root), fake,
-    )
-    assert result.returncode != 0
-    assert "unreviewed active audit plugin" in result.stdout + result.stderr
-
-
-def test_existing_raw_audit_log_or_rotation_refuses(tmp_path):
-    root = _root_fixture(tmp_path)
-    raw_dir = root / "var/log/audit"
-    raw_dir.mkdir()
-    (raw_dir / "audit.log.1").write_text("type=EXECVE CANARY_RAW\n")
-    fake = tmp_path / "bin"; fake.mkdir()
-    result = run_production_include(
-        "ludus_detection_linux_logging", "configure", _role_vars(root), fake,
-    )
-    assert result.returncode != 0
-    assert "existing raw audit durable sink" in result.stdout + result.stderr
-
-
-def test_absent_plugin_directory_does_not_bypass_raw_log_refusal(tmp_path):
-    root = _root_fixture(tmp_path)
-    (root / "etc/audit/plugins.d").rmdir()
-    raw_dir = root / "var/log/audit"
-    raw_dir.mkdir()
-    (raw_dir / "audit.log").write_text("type=EXECVE CANARY_RETAINED\n")
-    fake = tmp_path / "bin"; fake.mkdir()
-    result = run_production_include(
-        "ludus_detection_linux_logging", "configure", _role_vars(root), fake,
-    )
-    assert result.returncode != 0
-    assert "operator disposition" in result.stdout + result.stderr
-    assert (raw_dir / "audit.log").read_text() == "type=EXECVE CANARY_RETAINED\n"
-
-
-@pytest.mark.parametrize(
-    "altered_field", ["direction", "args"],
-)
-def test_same_name_plugin_requires_exact_direction_and_arguments(tmp_path, altered_field):
-    root = _root_fixture(tmp_path)
-    expected_args = (f"--output {root}/var/log/detection-engineering/audit-safe.jsonl "
-                     f"--owner {os.getuid()} --group {os.getgid()}")
-    direction = "in" if altered_field == "direction" else "out"
-    plugin_args = "--output /tmp/wrong" if altered_field == "args" else expected_args
-    plugin = root / "etc/audit/plugins.d/detection-engineering.conf"
-    plugin.write_text(
-        "active = yes\n"
-        f"direction = {direction}\n"
-        f"path = {root}/usr/local/libexec/detection-engineering/audit_sanitize.py\n"
-        "type = always\n"
-        f"args = {plugin_args}\n"
-        "format = string\n"
-    )
-    fake = tmp_path / "bin"; fake.mkdir()
-    result = run_production_include(
-        "ludus_detection_linux_logging", "configure", _role_vars(root), fake,
-    )
-    assert result.returncode != 0
-    assert "unsafe effective configuration" in result.stdout + result.stderr
-
-
-def _modeled_systemctl(tmp_path, *, stop_succeeds, becomes_inactive=True):
-    state = tmp_path / "auditd-state"
-    state.write_text("active")
-    calls = tmp_path / "systemctl-calls"
-    command = tmp_path / "systemctl"
-    if stop_succeeds:
-        stop_action = f'echo inactive > {state}; exit 0' if becomes_inactive else "exit 0"
-    else:
-        stop_action = "exit 7"
-    command.write_text(
-        "#!/bin/sh\n"
-        f'echo "$*" >> {calls}\n'
-        f'case "$1" in is-active) [ "$(cat {state})" = active ] && exit 0 || exit 3;; '
-        f'stop) {stop_action};; *) exit 9;; esac\n'
-    )
-    command.chmod(0o755)
-    return command, calls
-
-
-def test_active_auditd_is_stopped_and_confirmed_inactive_before_sink_scan(tmp_path):
-    root = _root_fixture(tmp_path)
-    (root / "etc/audit/plugins.d").rmdir()
-    raw_dir = root / "var/log/audit"
-    raw_dir.mkdir()
-    (raw_dir / "audit.log").touch()
-    command, calls = _modeled_systemctl(tmp_path, stop_succeeds=True)
-    variables = _role_vars(root) | {
-        "detection_logging_apply": True,
-        "detection_logging_service_command": str(command),
-    }
-    result = run_production_include(
-        "ludus_detection_linux_logging", ["quiesce", "preflight"], variables, tmp_path,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert calls.read_text().splitlines() == [
-        "is-active --quiet auditd", "stop auditd", "is-active --quiet auditd",
-    ]
-
-
-def test_auditd_stop_failure_refuses_before_sink_scan(tmp_path):
-    root = _root_fixture(tmp_path)
-    command, calls = _modeled_systemctl(tmp_path, stop_succeeds=False)
-    variables = _role_vars(root) | {
-        "detection_logging_apply": True,
-        "detection_logging_service_command": str(command),
-    }
-    result = run_production_include(
-        "ludus_detection_linux_logging", ["quiesce", "preflight"], variables, tmp_path,
-    )
-    assert result.returncode != 0
-    assert calls.read_text().splitlines() == ["is-active --quiet auditd", "stop auditd"]
-
-
-def test_auditd_still_active_after_successful_stop_command_refuses(tmp_path):
-    root = _root_fixture(tmp_path)
-    command, calls = _modeled_systemctl(
-        tmp_path, stop_succeeds=True, becomes_inactive=False,
-    )
-    variables = _role_vars(root) | {
-        "detection_logging_apply": True,
-        "detection_logging_service_command": str(command),
-    }
-    result = run_production_include(
-        "ludus_detection_linux_logging", ["quiesce", "preflight"], variables, tmp_path,
-    )
-    assert result.returncode != 0
-    assert "did not become inactive" in result.stdout + result.stderr
-    assert calls.read_text().splitlines() == [
-        "is-active --quiet auditd", "stop auditd", "is-active --quiet auditd",
-    ]
-
-
-def test_missing_auth_or_system_source_refuses(tmp_path):
-    root = _root_fixture(tmp_path)
-    (root / "var/log/syslog").unlink()
-    fake = tmp_path / "bin"; fake.mkdir()
-    result = run_production_include(
-        "ludus_detection_linux_logging", "configure", _role_vars(root), fake,
-    )
-    assert result.returncode != 0
-    assert "required auth/system log sources" in result.stdout + result.stderr
-
-
-def test_unknown_dispatch_capability_refuses_before_mutation(tmp_path):
-    fake = tmp_path / "bin"; fake.mkdir()
-    calls = tmp_path / "unexpected-service-call"
-    service = tmp_path / "service"
-    service.write_text(f"#!/bin/sh\necho called > {calls}\nexit 0\n")
-    service.chmod(0o755)
-    result = run_production_include(
-        "ludus_detection_linux_logging", "configure",
-        {
-            "detection_linux_host_id": "synthetic-host",
-            "detection_audit_dispatch": {"package_version": PACKAGE, "plugin_protocol": "unknown", "write_logs_false": True, "fail_closed": True},
-            "detection_logging_root": str(tmp_path / "root"),
-            "detection_logging_apply": True,
-            "detection_logging_service_command": str(service),
-        }, fake,
-    )
-    assert result.returncode != 0
-    assert "verified fail-closed audit dispatch" in result.stdout + result.stderr
-    assert not (tmp_path / "root").exists()
+    assert "checksum-pinned Laurel RuntimeArtifact" in result.stdout + result.stderr
+    assert not (root / "etc/laurel").exists()
     assert not calls.exists()
 
 
-def test_restart_include_invokes_only_modeled_services(tmp_path):
-    fake_service = tmp_path / "service"
-    calls = tmp_path / "calls"
-    fake_service.write_text(f'#!/bin/sh\ncase "$1:$2" in restart:auditd|restart:rsyslog) echo "$1:$2" >> {calls};; *) exit 9;; esac\n')
-    fake_service.chmod(0o755)
-    result = run_production_include(
-        "ludus_detection_linux_logging", "restart",
-        {"detection_logging_apply": True, "detection_logging_service_command": str(fake_service)},
-        tmp_path,
-    )
+@pytest.mark.parametrize("missing", ["package", "tools", "unit"])
+def test_missing_auditd_prerequisite_refuses_before_role_mutation(tmp_path, missing):
+    options = {
+        "auditd_installed": missing != "package",
+        "auditd_tools": missing != "tools",
+        "auditd_unit": missing != "unit",
+    }
+    root, fake, state, _calls, variables = _valid(tmp_path, **options)
+    result = _run_main(variables, fake)
+    assert result.returncode != 0
+    assert "Task 8 must provision distro auditd" in result.stdout + result.stderr
+    assert "_laurel" not in (state / "accounts").read_text()
+    assert not (root / "etc/laurel").exists()
+    assert not (root / "usr/local/sbin/laurel").exists()
+    assert not (root / "var/cache/detection-engineering").exists()
+
+
+@pytest.mark.parametrize("status", ["not-installed", "config-files", "unpacked"])
+def test_non_installed_auditd_status_refuses_before_role_mutation(tmp_path, status):
+    root, fake, state, calls, variables = _valid(tmp_path, auditd_status=status)
+    result = _run_main(variables, fake)
+    assert result.returncode != 0
+    assert "Task 8 must provision distro auditd" in result.stdout + result.stderr
+    assert "_laurel" not in (state / "accounts").read_text()
+    assert not (root / "etc/laurel").exists()
+    assert not (root / "usr/local/sbin/laurel").exists()
+    assert "--showformat=${db:Status-Status}" in calls.read_text()
+
+
+def test_laurel_read_user_exists_before_configuration(tmp_path):
+    root, fake, state, calls, variables = _valid(tmp_path, reader_exists=False)
+    result = _run_main(variables, fake)
+    assert result.returncode != 0
+    assert "reader account must exist" in result.stdout + result.stderr
+    assert "_laurel" not in (state / "accounts").read_text()
+    assert not (root / "etc/laurel").exists()
+    assert "useradd:" not in calls.read_text()
+
+
+@pytest.mark.parametrize("reader", ["splunkfwd", "splunk"])
+def test_fresh_install_applies_rules_starts_service_and_materializes_native_output(tmp_path, reader):
+    root, fake, state, calls, variables = _valid(tmp_path, reader=reader)
+    result = _run_main(variables, fake)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert calls.read_text().splitlines() == ["restart:auditd", "restart:rsyslog"]
+    assert (state / "enabled").read_text() == "yes\n"
+    assert (state / "active").read_text() == "yes\n"
+    assert "detection_process" in (state / "rules").read_text()
+    output = root / "var/log/laurel/audit.log"
+    event = json.loads(output.read_text())
+    assert event["EXECVE"]["ARGV"] == ["native", "ordinary"]
+    assert f"{output}:{reader}" in (state / "acl").read_text()
+    assert f"read:{reader}:{output}" in calls.read_text()
+    assert (root / "var/lib/detection-engineering/laurel-apply.sha256").is_file()
+
+    unauthorized = subprocess.run(
+        [
+            str(fake / "runuser"), "-u",
+            "splunk" if reader == "splunkfwd" else "splunkfwd",
+            "--", "test", "-r", str(output),
+        ],
+        text=True, capture_output=True,
+    )
+    assert unauthorized.returncode != 0
+
+
+def test_second_run_converges_without_restart_churn(tmp_path):
+    root, fake, _state, calls, variables = _valid(tmp_path)
+    first = _run_main(variables, fake)
+    assert first.returncode == 0, first.stdout + first.stderr
+    restarts_before = calls.read_text().count("systemctl:restart auditd")
+    second = _run_main(variables, fake)
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert calls.read_text().count("systemctl:restart auditd") == restarts_before == 1
+    assert "changed=0" in second.stdout
+
+
+def test_checksum_change_reapplies_even_when_binary_content_is_unchanged(tmp_path):
+    root, fake, _state, calls, variables = _valid(tmp_path)
+    first = _run_main(variables, fake)
+    assert first.returncode == 0, first.stdout + first.stderr
+    marker = root / "var/lib/detection-engineering/laurel-apply.sha256"
+    old_marker = marker.read_text()
+
+    replacement, replacement_digest = _artifact(
+        tmp_path / "replacement", member_mtime=1,
+    )
+    assert replacement_digest != variables["detection_laurel_artifact"]["sha256"]
+    variables["detection_laurel_artifact"] = {
+        "version": "synthetic-replacement",
+        "url": replacement.as_uri(),
+        "sha256": replacement_digest,
+        "download_auth_required": False,
+    }
+    second = _run_main(variables, fake)
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert calls.read_text().count("systemctl:restart auditd") == 2
+    assert marker.read_text() != old_marker
+
+
+def test_modeled_post_write_interruption_reapplies_new_config_from_old_marker(tmp_path):
+    root, fake, _state, calls, variables = _valid(tmp_path)
+    first = _run_main(variables, fake)
+    assert first.returncode == 0, first.stdout + first.stderr
+    marker = root / "var/lib/detection-engineering/laurel-apply.sha256"
+    old_marker = marker.read_text()
+
+    config = root / "etc/laurel/config.toml"
+    config.write_text(config.read_text().replace(
+        'read-users = [ "splunkfwd" ]', 'read-users = [ "splunk" ]',
+    ))
+    variables["detection_laurel_read_user"] = "splunk"
+
+    rerun = _run_main(variables, fake)
+    assert rerun.returncode == 0, rerun.stdout + rerun.stderr
+    assert calls.read_text().count("systemctl:restart auditd") == 2
+    assert marker.read_text() != old_marker
+    assert f"read:splunk:{root}/var/log/laurel/audit.log" in calls.read_text()
+
+
+@pytest.mark.parametrize("stale_marker", ["native-auditd-laurel-v1\n", "malformed\n"])
+def test_legacy_or_malformed_marker_forces_reapplication(tmp_path, stale_marker):
+    root, fake, _state, calls, variables = _valid(tmp_path)
+    first = _run_main(variables, fake)
+    assert first.returncode == 0, first.stdout + first.stderr
+    marker = root / "var/lib/detection-engineering/laurel-apply.sha256"
+    marker.write_text(stale_marker)
+
+    rerun = _run_main(variables, fake)
+    assert rerun.returncode == 0, rerun.stdout + rerun.stderr
+    assert calls.read_text().count("systemctl:restart auditd") == 2
+    persisted = marker.read_text().strip()
+    assert len(persisted) == 64
+    int(persisted, 16)
+
+
+@pytest.mark.parametrize("failure", ["fail_rule_load_once", "fail_restart_once"])
+def test_failed_native_apply_retries_with_unchanged_files(tmp_path, failure):
+    root, fake, state, calls, variables = _valid(tmp_path, **{failure: True})
+    first = _run_main(variables, fake)
+    assert first.returncode != 0
+    config_hash = hashlib.sha256((root / "etc/laurel/config.toml").read_bytes()).hexdigest()
+    assert not (root / "var/lib/detection-engineering/laurel-apply.sha256").exists()
+
+    second = _run_main(variables, fake)
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert hashlib.sha256((root / "etc/laurel/config.toml").read_bytes()).hexdigest() == config_hash
+    assert (state / "active").read_text() == "yes\n"
+    assert "detection_process" in (state / "rules").read_text()
+    expected = 2 if failure == "fail_restart_once" else 1
+    assert calls.read_text().count("systemctl:restart auditd") == expected
+
+
+def test_existing_root_owned_laurel_directory_and_output_are_repaired(tmp_path):
+    root, fake, state, _calls, variables = _valid(tmp_path, root_owned_laurel=True)
+    result = _run_main(variables, fake)
+    assert result.returncode == 0, result.stdout + result.stderr
+    output_dir = root / "var/log/laurel"
+    output = output_dir / "audit.log"
+    ownership = (state / "ownership").read_text()
+    assert f"{output_dir}:_laurel" in ownership
+    assert f"{output}:_laurel" in ownership
+    assert output_dir.stat().st_mode & 0o777 == 0o750
+    assert output.stat().st_mode & 0o777 == 0o640
+
+
+def test_privilege_drop_write_failure_is_not_masked(tmp_path):
+    root, fake, _state, _calls, variables = _valid(
+        tmp_path, root_owned_laurel=True, chown_noop=True,
+    )
+    result = _run_main(variables, fake)
+    assert result.returncode != 0
+    assert not (root / "var/lib/detection-engineering/laurel-apply.sha256").exists()
+
+
+@pytest.mark.parametrize("condition", ["missing", "unreadable"])
+def test_post_start_native_output_failure_refuses_health(tmp_path, condition):
+    options = {"no_output": condition == "missing", "no_reader_access": condition == "unreadable"}
+    root, fake, _state, _calls, variables = _valid(tmp_path, **options)
+    result = _run_main(variables, fake)
+    assert result.returncode != 0
+    assert not (root / "var/lib/detection-engineering/laurel-apply.sha256").exists()
+
+
+def test_checksum_archive_and_common_source_failures_remain_fail_closed(tmp_path):
+    archive, _digest = _artifact(tmp_path)
+    root, fake, state, _calls = _fixture(tmp_path / "checksum")
+    variables = _variables(root, fake, archive, "f" * 64)
+    bad = _run_main(variables, fake)
+    assert bad.returncode != 0
+    assert "_laurel" not in (state / "accounts").read_text()
+
+    unsafe, unsafe_digest = _artifact(tmp_path, extra_member=True)
+    root2, fake2, state2, _calls2 = _fixture(tmp_path / "archive")
+    rejected = _run_main(_variables(root2, fake2, unsafe, unsafe_digest), fake2)
+    assert rejected.returncode != 0
+    assert "exactly one regular root member named laurel" in rejected.stdout + rejected.stderr
+    assert "_laurel" not in (state2 / "accounts").read_text()
+
+    root3, fake3, state3, calls3, variables3 = _valid(tmp_path / "source", readable=False)
+    source_failure = _run_main(variables3, fake3)
+    assert source_failure.returncode != 0
+    assert "reader cannot read required auth/system source" in source_failure.stdout + source_failure.stderr
+    assert "_laurel" not in (state3 / "accounts").read_text()
+    assert "useradd:" not in calls3.read_text()

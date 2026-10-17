@@ -1,0 +1,26 @@
+# Reviewed against threathunters-io/laurel v0.6.3 native configuration.
+directory = "/var/log/laurel"
+user = "{{ detection_laurel_service_user }}"
+statusreport-period = 0
+input = "stdin"
+
+[auditlog]
+file = "audit.log"
+size = {{ detection_laurel_rotate_size }}
+generations = {{ detection_laurel_rotate_generations }}
+read-users = [ "{{ detection_laurel_read_user }}" ]
+
+[transform]
+execve-argv = [ "array" ]
+
+[translate]
+universal = false
+user-db = false
+drop-raw = false
+
+[enrich]
+pid = true
+execve-env = [ "LD_PRELOAD", "LD_LIBRARY_PATH" ]
+container = true
+script = true
+user-groups = true

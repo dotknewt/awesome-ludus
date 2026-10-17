@@ -1,89 +1,435 @@
 ---
-- name: Refuse unverified audit dispatch before mutation
+- name: Require checksum-pinned Laurel RuntimeArtifact before mutation
+  ansible.builtin.assert:
+    that:
+      - detection_laurel_artifact is mapping
+    fail_msg: A checksum-pinned Laurel RuntimeArtifact is required; installation facts remain BLOCKED
+
+- name: Validate native Laurel role inputs
   ansible.builtin.assert:
     that:
       - detection_linux_host_id is string
       - detection_linux_host_id | length > 0
-      - detection_audit_dispatch is mapping
-      - detection_audit_dispatch.package_version == '1:4.0.2-2+deb13u1'
-      - detection_audit_dispatch.plugin_protocol == 'auditd-string-newline-v1'
-      - detection_audit_dispatch.write_logs_false is sameas true
-      - detection_audit_dispatch.fail_closed is sameas true
-    fail_msg: Deployment requires the verified fail-closed audit dispatch protocol and package family
+      - detection_laurel_artifact.keys() | sort == ['download_auth_required', 'sha256', 'url', 'version']
+      - detection_laurel_artifact.version is string
+      - detection_laurel_artifact.version | length > 0
+      - detection_laurel_artifact.url is string
+      - (detection_laurel_artifact.url is match('^https://')) or ((detection_logging_root | length > 0) and (detection_laurel_artifact.url is match('^file://')))
+      - detection_laurel_artifact.sha256 is match('^[0-9a-f]{64}$')
+      - detection_laurel_artifact.download_auth_required is sameas false
+      - detection_laurel_read_user in ['splunkfwd', 'splunk']
+      - detection_laurel_rotate_size == 5000000
+      - detection_laurel_rotate_generations == 10
+    fail_msg: Invalid native Laurel artifact, reader, or rotation contract
 
-- name: Inspect required auth and system log sources
+- name: Verify the distro auditd package is installed
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_logging_dpkg_query_command }}"
+      - --show
+      - "--showformat=${db:Status-Status}"
+      - auditd
+  changed_when: false
+  failed_when: false
+  register: detection_auditd_package
+
+- name: Inspect required distro auditd tools
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ detection_auditd_augenrules_command }}"
+    - "{{ detection_auditd_auditctl_command }}"
+  register: detection_auditd_tools
+
+- name: Inspect the auditd systemd unit
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_logging_service_command }}"
+      - show
+      - auditd
+      - --property=LoadState
+      - --value
+  changed_when: false
+  failed_when: false
+  register: detection_auditd_unit
+
+- name: Refuse mutation without the Task 8 distro auditd prerequisite
+  ansible.builtin.assert:
+    that:
+      - detection_auditd_package.rc == 0
+      - detection_auditd_package.stdout | trim == 'installed'
+      - detection_auditd_tools.results[0].stat.exists
+      - detection_auditd_tools.results[0].stat.executable | default(false)
+      - detection_auditd_tools.results[1].stat.exists
+      - detection_auditd_tools.results[1].stat.executable | default(false)
+      - detection_auditd_unit.rc == 0
+      - detection_auditd_unit.stdout | trim == 'loaded'
+    fail_msg: Task 8 must provision distro auditd package, augenrules/auditctl tools, and loaded unit before this role mutates Laurel state
+
+- name: Verify the assigned reader account already exists
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_logging_getent_command }}"
+      - passwd
+      - "{{ detection_laurel_read_user }}"
+  changed_when: false
+  register: detection_laurel_reader
+  failed_when: false
+
+- name: Refuse Laurel configuration before reader account provisioning
+  ansible.builtin.assert:
+    that: detection_laurel_reader.rc == 0
+    fail_msg: Laurel reader account must exist before native read-users configuration; Task 8 owns ordering
+
+- name: Inspect required common Linux log sources
   ansible.builtin.stat:
     path: "{{ detection_logging_root }}{{ item }}"
   loop:
     - "{{ detection_linux_auth_log_path }}"
     - "{{ detection_linux_system_log_path }}"
-  register: detection_logging_source_stats
+  register: detection_common_sources
 
-- name: Refuse hosts without required auth and system log sources
+- name: Require retained auth and system source files
   ansible.builtin.assert:
     that:
       - item.stat.exists
       - item.stat.isreg
-    fail_msg: Host does not provide required auth/system log sources
-  loop: "{{ detection_logging_source_stats.results }}"
+    fail_msg: Expected auth.log/syslog source is absent or not a regular file
+  loop: "{{ detection_common_sources.results }}"
 
-- name: Quiesce auditd before durable sink inspection
-  ansible.builtin.include_tasks: quiesce.yml
+- name: Exercise common source reads as the actual assigned reader
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_logging_runuser_command }}"
+      - -u
+      - "{{ detection_laurel_read_user }}"
+      - --
+      - test
+      - -r
+      - "{{ detection_logging_root }}{{ item }}"
+  loop:
+    - "{{ detection_linux_auth_log_path }}"
+    - "{{ detection_linux_system_log_path }}"
+  changed_when: false
+  register: detection_common_source_reads
+  failed_when: false
 
-- name: Preflight effective audit sinks only after auditd is inactive
-  ansible.builtin.include_tasks: preflight.yml
+- name: Refuse unreadable auth or system telemetry
+  ansible.builtin.assert:
+    that: item.rc == 0
+    fail_msg: Laurel reader cannot read required auth/system source; this role does not alter stock ownership or ACLs
+  loop: "{{ detection_common_source_reads.results }}"
 
-- name: Create safe audit directories
+- name: Create Laurel artifact cache directory
+  ansible.builtin.file:
+    path: "{{ detection_logging_root }}/var/cache/detection-engineering"
+    state: directory
+    mode: "0750"
+
+- name: Download the pinned Laurel artifact
+  ansible.builtin.get_url:
+    url: "{{ detection_laurel_artifact.url }}"
+    dest: "{{ detection_logging_root }}/var/cache/detection-engineering/laurel-{{ detection_laurel_artifact.sha256 }}.tar.gz"
+    checksum: "sha256:{{ detection_laurel_artifact.sha256 }}"
+    mode: "0600"
+  register: detection_laurel_download
+
+- name: Validate Laurel archive layout before account or binary mutation
+  ansible.builtin.script:
+    cmd: >-
+      install_laurel_artifact.py
+      --archive {{ (detection_logging_root ~ '/var/cache/detection-engineering/laurel-' ~ detection_laurel_artifact.sha256 ~ '.tar.gz') | quote }}
+      --sha256 {{ detection_laurel_artifact.sha256 | quote }}
+      --check-only
+  changed_when: false
+
+- name: Check for the native Laurel service account
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_logging_getent_command }}"
+      - passwd
+      - "{{ detection_laurel_service_user }}"
+  changed_when: false
+  failed_when: false
+  register: detection_laurel_service_account
+
+- name: Create only the Laurel-owned service account
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_logging_useradd_command }}"
+      - --system
+      - --home-dir
+      - "{{ detection_logging_root }}/var/log/laurel"
+      - --create-home
+      - "{{ detection_laurel_service_user }}"
+  when: detection_laurel_service_account.rc != 0
+  changed_when: true
+
+- name: Install the validated Laurel binary atomically
+  ansible.builtin.script:
+    cmd: >-
+      install_laurel_artifact.py
+      --archive {{ (detection_logging_root ~ '/var/cache/detection-engineering/laurel-' ~ detection_laurel_artifact.sha256 ~ '.tar.gz') | quote }}
+      --sha256 {{ detection_laurel_artifact.sha256 | quote }}
+      --destination {{ (detection_logging_root ~ detection_laurel_binary_path) | quote }}
+  register: detection_laurel_install
+  changed_when: "'CHANGED' in detection_laurel_install.stdout"
+
+- name: Create native Laurel system configuration directories
   ansible.builtin.file:
     path: "{{ detection_logging_root }}{{ item }}"
     state: directory
     mode: "0750"
   loop:
-    - /etc/audit/rules.d
+    - /etc/laurel
     - /etc/audit/plugins.d
-    - /etc/rsyslog.d
-    - /usr/local/libexec/detection-engineering
-    - /var/log/detection-engineering
+    - /etc/audit/rules.d
 
-- name: Disable raw audit log persistence before package start
-  ansible.builtin.lineinfile:
-    path: "{{ detection_logging_root }}{{ detection_auditd_config_path }}"
-    regexp: '^\s*write_logs\s*='
-    line: write_logs = no
-    create: true
-    mode: "0640"
-  notify: Restart detection logging services
-
-- name: Install audit sanitizer
-  ansible.builtin.copy:
-    src: audit_sanitize.py
-    dest: "{{ detection_logging_root }}/usr/local/libexec/detection-engineering/audit_sanitize.py"
-    mode: "0755"
-
-- name: Enforce safe audit output ownership and mode
+- name: Enforce the Laurel output directory writable mode
   ansible.builtin.file:
-    path: "{{ detection_logging_root }}{{ detection_logging_output_path }}"
-    state: touch
-    access_time: preserve
-    modification_time: preserve
-    owner: "{{ detection_audit_output_owner }}"
-    group: "{{ detection_audit_output_group }}"
-    mode: "0640"
+    path: "{{ detection_logging_root }}/var/log/laurel"
+    state: directory
+    mode: "0750"
+  register: detection_laurel_output_directory
 
-- name: Render safe logging configuration
+- name: Enforce Laurel ownership on its output directory
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_logging_chown_command }}"
+      - --changes
+      - "{{ detection_laurel_service_user }}:{{ detection_laurel_service_user }}"
+      - "{{ detection_logging_root }}/var/log/laurel"
+  register: detection_laurel_output_owner
+  changed_when: detection_laurel_output_owner.stdout | length > 0
+
+- name: Inspect preexisting native Laurel output
+  ansible.builtin.stat:
+    path: "{{ detection_logging_root }}{{ detection_laurel_output_path }}"
+  register: detection_laurel_existing_output
+
+- name: Enforce writable mode on preexisting native Laurel output
+  ansible.builtin.file:
+    path: "{{ detection_logging_root }}{{ detection_laurel_output_path }}"
+    mode: "0640"
+  when: detection_laurel_existing_output.stat.exists
+  register: detection_laurel_existing_output_mode
+
+- name: Enforce Laurel ownership on preexisting native output
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_logging_chown_command }}"
+      - --changes
+      - "{{ detection_laurel_service_user }}:{{ detection_laurel_service_user }}"
+      - "{{ detection_logging_root }}{{ detection_laurel_output_path }}"
+  when: detection_laurel_existing_output.stat.exists
+  register: detection_laurel_existing_output_owner
+  changed_when: detection_laurel_existing_output_owner.stdout | length > 0
+
+- name: Render version-reviewed native Laurel configuration
   ansible.builtin.template:
-    src: "{{ item.src }}"
-    dest: "{{ detection_logging_root }}{{ item.dest }}"
+    src: laurel-config.toml.j2
+    dest: "{{ detection_logging_root }}{{ detection_laurel_config_path }}"
     mode: "0640"
-  loop:
-    - {src: audit.rules.j2, dest: /etc/audit/rules.d/detection-engineering.rules}
-    - {src: audit-dispatch.conf.j2, dest: /etc/audit/plugins.d/detection-engineering.conf}
-    - {src: rsyslog-detection.conf.j2, dest: /etc/rsyslog.d/30-detection-engineering.conf}
-  notify: Restart detection logging services
+  register: detection_laurel_config
 
-- name: Install exactly supported audit package after safe configuration
-  ansible.builtin.apt:
-    name: "auditd={{ detection_audit_dispatch.package_version }}"
+- name: Render version-reviewed auditd Laurel plugin
+  ansible.builtin.template:
+    src: laurel-plugin.conf.j2
+    dest: "{{ detection_logging_root }}{{ detection_laurel_plugin_path }}"
+    mode: "0640"
+  register: detection_laurel_plugin
+
+- name: Install bounded audit rules adapted from pinned guidance
+  ansible.builtin.template:
+    src: audit.rules.j2
+    dest: "{{ detection_logging_root }}{{ detection_laurel_rules_path }}"
+    mode: "0640"
+  register: detection_laurel_rules
+
+- name: Hash rendered application-driving files
+  ansible.builtin.stat:
+    path: "{{ detection_logging_root }}{{ item }}"
+    checksum_algorithm: sha256
+  loop:
+    - "{{ detection_laurel_config_path }}"
+    - "{{ detection_laurel_plugin_path }}"
+    - "{{ detection_laurel_rules_path }}"
+  register: detection_laurel_application_files
+
+- name: Assemble deterministic native application state
+  ansible.builtin.set_fact:
+    detection_laurel_application_state:
+      - "{{ detection_laurel_artifact.sha256 }}"
+      - "{{ detection_laurel_read_user }}"
+      - "{{ detection_laurel_rotate_size | string }}"
+      - "{{ detection_laurel_rotate_generations | string }}"
+      - "{{ detection_laurel_application_files.results[0].stat.checksum }}"
+      - "{{ detection_laurel_application_files.results[1].stat.checksum }}"
+      - "{{ detection_laurel_application_files.results[2].stat.checksum }}"
+
+- name: Calculate desired native application digest
+  ansible.builtin.set_fact:
+    detection_laurel_application_digest: >-
+      {{ detection_laurel_application_state | to_json | hash('sha256') }}
+
+- name: Inspect the last successful native application marker
+  ansible.builtin.stat:
+    path: "{{ detection_logging_root }}/var/lib/detection-engineering/laurel-apply.sha256"
+  register: detection_laurel_apply_marker
+
+- name: Initialize persisted native application digest
+  ansible.builtin.set_fact:
+    detection_laurel_persisted_digest: ""
+
+- name: Read persisted native application digest
+  ansible.builtin.slurp:
+    path: "{{ detection_logging_root }}/var/lib/detection-engineering/laurel-apply.sha256"
+  when: detection_laurel_apply_marker.stat.exists
+  register: detection_laurel_persisted_marker
+
+- name: Decode persisted native application digest
+  ansible.builtin.set_fact:
+    detection_laurel_persisted_digest: >-
+      {{ detection_laurel_persisted_marker.content | b64decode | trim }}
+  when: detection_laurel_apply_marker.stat.exists
+
+- name: Query current auditd enablement
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_logging_service_command }}"
+      - is-enabled
+      - auditd
+  changed_when: false
+  failed_when: false
+  register: detection_auditd_enabled_before
+
+- name: Enable auditd when Task 8 has not already enabled it
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_logging_service_command }}"
+      - enable
+      - auditd
+  when: detection_auditd_enabled_before.rc != 0
+  changed_when: true
+
+- name: Query currently loaded audit rules
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_auditd_auditctl_command }}"
+      - -l
+  changed_when: false
+  failed_when: false
+  register: detection_auditd_rules_before
+
+- name: Query current auditd activity
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_logging_service_command }}"
+      - is-active
+      - auditd
+  changed_when: false
+  failed_when: false
+  register: detection_auditd_active_before
+
+- name: Determine whether native auditd application is required
+  ansible.builtin.set_fact:
+    detection_laurel_apply_required: >-
+      {{
+        detection_laurel_install.changed
+        or detection_laurel_output_directory.changed
+        or detection_laurel_output_owner.changed
+        or detection_laurel_existing_output_mode.changed
+        or detection_laurel_existing_output_owner.changed
+        or detection_laurel_config.changed
+        or detection_laurel_plugin.changed
+        or detection_laurel_rules.changed
+        or detection_laurel_persisted_digest != detection_laurel_application_digest
+        or detection_auditd_enabled_before.rc != 0
+        or detection_auditd_active_before.rc != 0
+        or detection_auditd_rules_before.rc != 0
+        or 'key=detection_process' not in detection_auditd_rules_before.stdout
+      }}
+
+- name: Invalidate successful application marker before native mutation
+  ansible.builtin.file:
+    path: "{{ detection_logging_root }}/var/lib/detection-engineering/laurel-apply.sha256"
+    state: absent
+  when: detection_laurel_apply_required | bool
+
+- name: Load the bounded rules through the distro auditd lifecycle
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_auditd_augenrules_command }}"
+      - --load
+  when: detection_laurel_apply_required | bool
+  changed_when: true
+
+- name: Restart auditd after native configuration application
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_logging_service_command }}"
+      - restart
+      - auditd
+  when: detection_laurel_apply_required | bool
+  changed_when: true
+
+- name: Verify auditd remains enabled
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_logging_service_command }}"
+      - is-enabled
+      - auditd
+  changed_when: false
+
+- name: Verify auditd is active
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_logging_service_command }}"
+      - is-active
+      - auditd
+  changed_when: false
+
+- name: Read loaded audit rules after native application
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_auditd_auditctl_command }}"
+      - -l
+  changed_when: false
+  register: detection_auditd_rules_after
+
+- name: Require the bounded process rule to be loaded
+  ansible.builtin.assert:
+    that:
+      - detection_auditd_rules_after.rc == 0
+      - "'key=detection_process' in detection_auditd_rules_after.stdout"
+    fail_msg: auditd did not report the required detection_process rule key after augenrules application
+
+- name: Wait for native Laurel output after auditd start
+  ansible.builtin.wait_for:
+    path: "{{ detection_logging_root }}{{ detection_laurel_output_path }}"
     state: present
-    update_cache: false
-  when: detection_logging_apply | bool
+    timeout: "{{ detection_laurel_output_wait_timeout }}"
+
+- name: Exercise native Laurel output read as assigned reader
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_logging_runuser_command }}"
+      - -u
+      - "{{ detection_laurel_read_user }}"
+      - --
+      - test
+      - -r
+      - "{{ detection_logging_root }}{{ detection_laurel_output_path }}"
+  changed_when: false
+
+- name: Create native application marker directory
+  ansible.builtin.file:
+    path: "{{ detection_logging_root }}/var/lib/detection-engineering"
+    state: directory
+    mode: "0750"
+
+- name: Record successful native auditd and Laurel application
+  ansible.builtin.copy:
+    content: "{{ detection_laurel_application_digest }}\n"
+    dest: "{{ detection_logging_root }}/var/lib/detection-engineering/laurel-apply.sha256"
+    mode: "0600"

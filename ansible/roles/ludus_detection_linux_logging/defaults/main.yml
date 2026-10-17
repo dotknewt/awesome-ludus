@@ -1,10 +1,19 @@
 ---
 detection_logging_root: ""
-detection_logging_apply: true
-detection_logging_output_path: /var/log/detection-engineering/audit-safe.jsonl
-detection_auditd_config_path: /etc/audit/auditd.conf
+detection_laurel_service_user: _laurel
+detection_laurel_binary_path: /usr/local/sbin/laurel
+detection_laurel_config_path: /etc/laurel/config.toml
+detection_laurel_plugin_path: /etc/audit/plugins.d/laurel.conf
+detection_laurel_rules_path: /etc/audit/rules.d/99-detection-laurel.rules
+detection_laurel_output_path: /var/log/laurel/audit.log
 detection_linux_auth_log_path: /var/log/auth.log
 detection_linux_system_log_path: /var/log/syslog
-detection_audit_output_owner: root
-detection_audit_output_group: root
-detection_logging_service_command: /usr/bin/systemctl
+detection_logging_dpkg_query_command: /usr/bin/dpkg-query
+detection_logging_getent_command: getent
+detection_logging_useradd_command: useradd
+detection_logging_chown_command: chown
+detection_logging_runuser_command: runuser
+detection_logging_service_command: systemctl
+detection_auditd_augenrules_command: /usr/sbin/augenrules
+detection_auditd_auditctl_command: /usr/sbin/auditctl
+detection_laurel_output_wait_timeout: 15

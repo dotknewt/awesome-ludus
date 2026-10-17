@@ -1,9 +1,0 @@
----
-- name: Restart validated logging services
-  ansible.builtin.command:
-    argv:
-      - "{{ detection_logging_service_command }}"
-      - restart
-      - "{{ item }}"
-  loop: [auditd, rsyslog]
-  changed_when: true
