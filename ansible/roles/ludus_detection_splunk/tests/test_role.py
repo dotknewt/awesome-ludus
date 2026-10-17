@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import copy
+import re
 import stat
 from pathlib import Path
 
@@ -42,9 +43,18 @@ def test_installs_configures_local_telemetry_and_generates_scoped_token_once(tmp
     token = token_path.read_text(encoding="utf-8").strip()
     assert all(f"[{name}]" in indexes for name in ("de_linux", "de_gitlab", "de_runner", "de_runtime"))
     assert "homePath" not in indexes and "maxTotalDataSizeMB" not in indexes
-    assert "/var/log/auth.log" in inputs and "linux:auth" in inputs
-    assert "/var/log/syslog" in inputs and "linux:system" in inputs
-    assert "/var/log/detection-engineering/audit-safe.jsonl" in inputs
+    assert re.findall(r"^\[monitor://([^]]+)\]$", inputs, re.MULTILINE) == [
+        "/var/log/auth.log",
+        "/var/log/syslog",
+        "/var/log/laurel/audit.log",
+    ]
+    assert "[monitor:///var/log/auth.log]\ndisabled = false\nindex = de_linux\nsourcetype = linux:auth" in inputs
+    assert "[monitor:///var/log/syslog]\ndisabled = false\nindex = de_linux\nsourcetype = linux:system" in inputs
+    assert "[monitor:///var/log/laurel/audit.log]\ndisabled = false\nindex = de_linux\nsourcetype = linux:audit:laurel" in inputs
+    assert "/var/log/detection-engineering/audit-safe.jsonl" not in inputs
+    assert "linux:audit:safe" not in inputs
+    assert all(token not in inputs.lower() for token in ("[tcpout", "forward-server", "splunkfwd"))
+    assert all(token not in inputs.upper() for token in ("TRANSFORMS-", "SEDCMD-", "FIELDALIAS-"))
     assert "[splunktcp://9997]" in inputs
     assert "10.77.10.14" in web
     assert "[http://detection-workload]" in hec and token in hec
