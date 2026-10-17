@@ -1,0 +1,14 @@
+---
+- name: Syntax check logging role
+  hosts: all
+  gather_facts: false
+  vars:
+    detection_linux_host_id: synthetic-host
+    detection_audit_dispatch:
+      package_version: 1:4.0.2-2+deb13u1
+      plugin_protocol: auditd-string-newline-v1
+      write_logs_false: true
+      fail_closed: true
+  tasks:
+    - name: Load production tasks
+      ansible.builtin.import_tasks: ../tasks/main.yml

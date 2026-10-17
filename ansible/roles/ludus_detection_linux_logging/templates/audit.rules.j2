@@ -1,0 +1,3 @@
+# Process identity; EXECVE and PROCTITLE are removed by the fail-closed dispatcher.
+-a always,exit -F arch=b64 -S execve -k detection_process
+-a always,exit -F arch=b32 -S execve -k detection_process

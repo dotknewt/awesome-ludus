@@ -1,0 +1,21 @@
+# Managed by ludus_detection_guest_firewall. This file owns one table only.
+table inet ludus_detection {
+  set docker_bridges { type ifname; elements = { {{ detection_firewall_docker_bridges | map('to_json') | join(', ') }} } }
+
+  chain input {
+    type filter hook input priority -1; policy drop;
+    ct state established,related accept
+    iifname "lo" accept
+    ip daddr {{ detection_firewall_lab_ip }} {% for rule in detection_firewall_allowed_tcp %}ip saddr { {{ rule.sources | join(', ') }} } tcp dport { {{ rule.ports | join(', ') }} } accept
+    {% endfor %}
+  }
+
+  chain forward {
+    type filter hook forward priority -1; policy accept;
+    ct state established,related accept
+{% for rule in detection_firewall_allowed_tcp %}
+    ct status dnat oifname @docker_bridges ip saddr { {{ rule.sources | join(', ') }} } ct original ip daddr {{ detection_firewall_lab_ip }} ct original proto-dst { {{ rule.ports | join(', ') }} } accept
+{% endfor %}
+    ct status dnat oifname @docker_bridges drop
+  }
+}

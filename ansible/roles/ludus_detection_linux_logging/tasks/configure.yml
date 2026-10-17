@@ -1,0 +1,89 @@
+---
+- name: Refuse unverified audit dispatch before mutation
+  ansible.builtin.assert:
+    that:
+      - detection_linux_host_id is string
+      - detection_linux_host_id | length > 0
+      - detection_audit_dispatch is mapping
+      - detection_audit_dispatch.package_version == '1:4.0.2-2+deb13u1'
+      - detection_audit_dispatch.plugin_protocol == 'auditd-string-newline-v1'
+      - detection_audit_dispatch.write_logs_false is sameas true
+      - detection_audit_dispatch.fail_closed is sameas true
+    fail_msg: Deployment requires the verified fail-closed audit dispatch protocol and package family
+
+- name: Inspect required auth and system log sources
+  ansible.builtin.stat:
+    path: "{{ detection_logging_root }}{{ item }}"
+  loop:
+    - "{{ detection_linux_auth_log_path }}"
+    - "{{ detection_linux_system_log_path }}"
+  register: detection_logging_source_stats
+
+- name: Refuse hosts without required auth and system log sources
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg
+    fail_msg: Host does not provide required auth/system log sources
+  loop: "{{ detection_logging_source_stats.results }}"
+
+- name: Quiesce auditd before durable sink inspection
+  ansible.builtin.include_tasks: quiesce.yml
+
+- name: Preflight effective audit sinks only after auditd is inactive
+  ansible.builtin.include_tasks: preflight.yml
+
+- name: Create safe audit directories
+  ansible.builtin.file:
+    path: "{{ detection_logging_root }}{{ item }}"
+    state: directory
+    mode: "0750"
+  loop:
+    - /etc/audit/rules.d
+    - /etc/audit/plugins.d
+    - /etc/rsyslog.d
+    - /usr/local/libexec/detection-engineering
+    - /var/log/detection-engineering
+
+- name: Disable raw audit log persistence before package start
+  ansible.builtin.lineinfile:
+    path: "{{ detection_logging_root }}{{ detection_auditd_config_path }}"
+    regexp: '^\s*write_logs\s*='
+    line: write_logs = no
+    create: true
+    mode: "0640"
+  notify: Restart detection logging services
+
+- name: Install audit sanitizer
+  ansible.builtin.copy:
+    src: audit_sanitize.py
+    dest: "{{ detection_logging_root }}/usr/local/libexec/detection-engineering/audit_sanitize.py"
+    mode: "0755"
+
+- name: Enforce safe audit output ownership and mode
+  ansible.builtin.file:
+    path: "{{ detection_logging_root }}{{ detection_logging_output_path }}"
+    state: touch
+    access_time: preserve
+    modification_time: preserve
+    owner: "{{ detection_audit_output_owner }}"
+    group: "{{ detection_audit_output_group }}"
+    mode: "0640"
+
+- name: Render safe logging configuration
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ detection_logging_root }}{{ item.dest }}"
+    mode: "0640"
+  loop:
+    - {src: audit.rules.j2, dest: /etc/audit/rules.d/detection-engineering.rules}
+    - {src: audit-dispatch.conf.j2, dest: /etc/audit/plugins.d/detection-engineering.conf}
+    - {src: rsyslog-detection.conf.j2, dest: /etc/rsyslog.d/30-detection-engineering.conf}
+  notify: Restart detection logging services
+
+- name: Install exactly supported audit package after safe configuration
+  ansible.builtin.apt:
+    name: "auditd={{ detection_audit_dispatch.package_version }}"
+    state: present
+    update_cache: false
+  when: detection_logging_apply | bool

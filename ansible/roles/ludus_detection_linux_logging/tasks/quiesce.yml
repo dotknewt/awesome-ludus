@@ -1,0 +1,40 @@
+---
+- name: Determine whether auditd is active
+  ansible.builtin.command:
+    argv: ["{{ detection_logging_service_command }}", is-active, --quiet, auditd]
+  register: detection_auditd_active
+  changed_when: false
+  failed_when: false
+  when: detection_logging_apply | bool
+
+- name: Refuse indeterminate auditd service state
+  ansible.builtin.assert:
+    that: detection_auditd_active.rc in [0, 3, 4]
+    fail_msg: Cannot safely determine whether auditd is active
+  when: detection_logging_apply | bool
+
+- name: Stop active auditd before inspecting durable sinks
+  ansible.builtin.command:
+    argv: ["{{ detection_logging_service_command }}", stop, auditd]
+  when:
+    - detection_logging_apply | bool
+    - detection_auditd_active.rc == 0
+  changed_when: true
+
+- name: Confirm stopped auditd is inactive
+  ansible.builtin.command:
+    argv: ["{{ detection_logging_service_command }}", is-active, --quiet, auditd]
+  register: detection_auditd_after_stop
+  changed_when: false
+  failed_when: false
+  when:
+    - detection_logging_apply | bool
+    - detection_auditd_active.rc == 0
+
+- name: Refuse sink inspection while auditd remains active or indeterminate
+  ansible.builtin.assert:
+    that: detection_auditd_after_stop.rc in [3, 4]
+    fail_msg: auditd did not become inactive; refusing durable sink inspection
+  when:
+    - detection_logging_apply | bool
+    - detection_auditd_active.rc == 0

@@ -1,0 +1,6 @@
+---
+detection_firewall_rules_path: /etc/nftables.d/ludus-detection.nft
+detection_firewall_apply: true
+detection_firewall_expected_tcp: []
+detection_firewall_verified_service_ports: []
+detection_firewall_apply_helper_path: /usr/local/sbin/ludus-detection-firewall-apply

@@ -1,0 +1,10 @@
+---
+detection_logging_root: ""
+detection_logging_apply: true
+detection_logging_output_path: /var/log/detection-engineering/audit-safe.jsonl
+detection_auditd_config_path: /etc/audit/auditd.conf
+detection_linux_auth_log_path: /var/log/auth.log
+detection_linux_system_log_path: /var/log/syslog
+detection_audit_output_owner: root
+detection_audit_output_group: root
+detection_logging_service_command: /usr/bin/systemctl

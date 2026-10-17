@@ -1,0 +1,16 @@
+---
+- name: Syntax check firewall role
+  hosts: all
+  gather_facts: false
+  vars:
+    detection_firewall_profile: workload
+    detection_firewall_lab_ip: 10.10.10.15
+    detection_firewall_management_cidrs: [10.0.0.0/24]
+    detection_firewall_vpn_cidrs: [10.1.0.0/24]
+    detection_firewall_docker_bridges: [docker0]
+    detection_firewall_allowed_tcp: [{sources: [10.0.0.0/24], ports: [22]}]
+    detection_firewall_expected_tcp: [{sources: [10.0.0.0/24], ports: [22]}]
+    detection_firewall_verified_service_ports: [22]
+  tasks:
+    - name: Load production tasks
+      ansible.builtin.import_tasks: ../tasks/main.yml

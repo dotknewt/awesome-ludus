@@ -1,0 +1,7 @@
+---
+- name: Apply validated detection firewall table
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_firewall_apply_helper_path }}"
+      - "{{ detection_firewall_rules_path }}"
+  changed_when: true

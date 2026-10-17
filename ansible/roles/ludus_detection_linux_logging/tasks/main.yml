@@ -1,0 +1,3 @@
+---
+- name: Configure safe Linux logging
+  ansible.builtin.include_tasks: configure.yml

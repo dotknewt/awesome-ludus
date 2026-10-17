@@ -1,0 +1,12 @@
+[Unit]
+Description=Ludus detection owned nftables table
+After=network-pre.target
+Before=network.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart={{ detection_firewall_apply_helper_path }} {{ detection_firewall_rules_path }}
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
