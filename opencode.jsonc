@@ -7,11 +7,6 @@
         "command": ["docker", "mcp", "gateway", "run", "--profile", "default"],
         "disabled": false
       },
-      "ludus": {
-        "type": "local",
-        "command": ["docker", "mcp", "gateway", "run", "--profile", "ludus"],
-        "disabled": false
-      },
 	  "hermes": {
         "type": "local",
         "command": [
@@ -22,6 +17,19 @@
           "serve"
         ],
       "disabled": true
+      },
+      "ludus-mcp": {
+        "type": "local",
+        "command": [
+          "npx",
+          "-y",
+          "@badsectorlabs/ludus-mcp",
+          "--url",
+          "https://ludus:8080",
+          "--api-key",
+          "{file:~/.secrets/ludus-mcp-key}"
+        ],
+        "disabled": false
       }
     }
   }
