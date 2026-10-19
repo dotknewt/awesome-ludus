@@ -6,30 +6,20 @@
       "extends": "openai",
       "agents": {
         "librarian": {
-          "skills_add": [
-            "ludus-cli",
-            "environment-guide",
-            "ludus-troubleshoot"
-          ],
-          "mcps": [
-            "default",
-            "ludus"
-          ]
+          "skills_add": ["*"],
+          "mcps": ["ludus-mcp","librarian"]
+     	},
+	  	"explorer": {
+          "model": "openai/gpt-5.6-luna-fast",
+          "variant": "low",
+          "skills": [],
+          "mcps": ["default","librarian","ludus-mcp"]
         },
         "fixer": {
-          "skills_add": [
-            "range-config",
-            "ludus-template-naming",
-            "update-os-template",
-            "change-template-input-language"
-          ]
+          "skills_add": ["*"]
         },
         "oracle": {
-          "skills_add": [
-            "range-config",
-            "ludus-template-naming",
-            "ludus-troubleshoot"
-          ]
+          "skills_add": ["*"]
         }
       }
     }
