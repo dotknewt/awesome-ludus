@@ -1,10 +1,5 @@
 ---
-<<<<<<< HEAD
 galaxy_info:
   role_name: ludus_install_malcolm
   author: dotknewt
-=======
-role_name: ludus_install_malcolm
-author: dotknewt
->>>>>>> 408a5241f6ab8bc0d63a1894c7e9293842035fa4
 dependencies: []

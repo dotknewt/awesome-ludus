@@ -1,4 +1,7 @@
 ---
+galaxy_info:
+  role_name: role_splunk_collector_certer
+  author: dotknewt
 dependencies: []
 
 collections: [] # Add any collections needed here

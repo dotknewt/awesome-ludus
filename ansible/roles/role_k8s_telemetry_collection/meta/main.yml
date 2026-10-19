@@ -1,4 +1,7 @@
 ---
+galaxy_info:
+  role_name: role_k8s_telemetry_collection
+  author: dotknewt
 dependencies: []
 
 collections: [] # Add any collections needed here
