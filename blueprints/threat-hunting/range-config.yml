@@ -10,7 +10,7 @@ ludus:
     vlan: 10
     ip_last_octet: 11
     roles:
-      - ludus_splunk_server
+      - dotknewt.ludus_splunk_server
     role_vars:
       ludus_splunk_server_accept_license: true
 
@@ -23,7 +23,7 @@ ludus:
     vlan: 10
     ip_last_octet: 17
     roles:
-      - ludus_install_malcolm
+      - dotknewt.ludus_install_malcolm
 
   - vm_name: "{{ range_id }}-gitlab"
     hostname: "{{ range_id }}-gitlab"
@@ -34,4 +34,4 @@ ludus:
     vlan: 10
     ip_last_octet: 18
     roles:
-      - ludus_gitlab_ce
+      - dotknewt.ludus_gitlab_ce
