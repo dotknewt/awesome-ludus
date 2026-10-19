@@ -29,7 +29,8 @@ applyTo: '**/*.yaml, **/*.yml'
 
 ## Secret Management
 
-- When using Ansible alone, store secrets with Ansible Vault:
+- For disposable Ludus lab credentials, follow the mandatory [Ludus authoring policy](../../docs/instructions/ludus-authoring.md).
+- For real external secrets (not disposable Ludus lab defaults), when using Ansible alone, store secrets with Ansible Vault:
   1. Create a `group_vars/` subdirectory named after the group.
   2. Create `vars` and `vault` files inside it.
   3. Define required variables, including sensitive ones, in `vars`.
@@ -37,7 +38,7 @@ applyTo: '**/*.yaml, **/*.yml'
   5. Reference matching vaulted variables from `vars`, for example `db_password: "{{ vault_db_password }}"`.
   6. Encrypt the `vault` file.
   7. Use the variable from `vars` in playbooks.
-- When using Ansible with other tools, store secrets in a shared third-party secrets manager such as HashiCorp Vault or AWS Secrets Manager.
+- For real external secrets used with other tools, store them in an appropriate external secrets manager, such as HashiCorp Vault or AWS Secrets Manager.
 
 ## Style
 
@@ -56,7 +57,7 @@ applyTo: '**/*.yaml, **/*.yml'
 
 - Use `ansible-lint` and `yamllint` to check syntax and enforce standards.
 - Use `ansible-playbook --syntax-check` to check for syntax errors.
-- Use `ansible-playbook --check --diff` for a dry run.
+- For Ludus artifacts, follow the [static-and-live verification policy](../../docs/instructions/ludus-authoring.md#verification-and-evidence); use separately authorized live runs rather than check-mode simulations to verify runtime behavior.
 
 ## Sources
 

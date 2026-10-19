@@ -3,6 +3,11 @@
 ## Ludus skill documentation accuracy
 
 When reviewing, adding, or creating Ludus skills, follow [the official documentation verification instructions](docs/instructions/ludus-skill-documentation.md). Verify factual guidance against current official Ludus documentation before completing the work.
+
+## Ludus artifact authoring and review
+
+When authoring or reviewing Ludus sources, blueprints, range configs, or roles, follow the mandatory [Ludus authoring policy](docs/instructions/ludus-authoring.md). It distinguishes repository policy from official behavior and defines verification and evidence requirements.
+
 # Project workflow
 
 ## Router state and recovery
@@ -15,10 +20,9 @@ When reviewing, adding, or creating Ludus skills, follow [the official documenta
 ## Behavioral verification
 
 - Before parallel role implementation, check shared input/output shapes, ownership, and failure semantics against the project's approved contracts. Resolve incompatible interfaces before dispatch.
-- Exercise the actual role entrypoint for fresh installation, convergence, and relevant failure paths; task-include tests supplement rather than replace entrypoint coverage.
-- Stateful fakes must reject impossible transitions: starting a missing unit, using the wrong user/HOME/context, reading inaccessible sources, or executing an unextracted archive. Derive responses from modeled state rather than unconditional success.
-- For cleanup and credential lifecycles, inject failures before and after mutation; assert final service state, credential disposition, authoritative markers, and preservation of unrelated resources.
-- Sanitization tests must feed representative canary-bearing events through production processing or explicitly identify a model-only approximation. Rendered configuration alone does not prove sanitized output.
-- Report separately what was executed, what was simulated, what evidence was reused, and what remains unverified. Offline tests do not establish selected-version compatibility or deployment readiness.
+- For Ludus roles, follow the static-and-live-only verification policy in `docs/instructions/ludus-authoring.md`; simulations and stateful fakes are not verification evidence.
+- When authorized, exercise the actual role entrypoint for fresh installation, convergence, and relevant failure paths. For cleanup and credential lifecycles, verify failures before and after mutation and the resulting service state, credential disposition, authoritative markers, and preservation of unrelated resources.
+- Verify sanitization using representative canary-bearing events through production processing. Rendered configuration alone does not prove sanitized output.
+- Report separately what static and live verification was executed, what evidence was reused, and what remains unverified. Static evidence does not establish selected-version compatibility or deployment readiness.
 - Reuse validation only while the reviewed artifact and relevant dependencies remain unchanged. Record a scoped diff and exact evidence provenance for each re-review.
 - Live deployment, guest probes, and destructive cleanup require their own authorization; verification gaps do not authorize those actions.
