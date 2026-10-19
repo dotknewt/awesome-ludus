@@ -1,8 +1,0 @@
----
-# Exact dependencies used by the packaged Malcolm role. Detection roles use
-# ansible.builtin modules only; all private roles are bundled in this source.
-collections:
-  - name: ansible.posix
-    version: 2.2.2
-  - name: community.crypto
-    version: 3.5.0
