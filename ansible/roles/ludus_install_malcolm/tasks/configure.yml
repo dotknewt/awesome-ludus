@@ -93,7 +93,9 @@
     - {file: auth-common.env, key: NGINX_AUTH_MODE, value: basic}
     - {file: pcap-capture.env, key: PCAP_ENABLE_NETSNIFF, value: "{{ ludus_install_malcolm_capture_enabled | bool | ternary('true', 'false') }}"}
     - {file: pcap-capture.env, key: PCAP_ENABLE_TCPDUMP, value: "false"}
-    - {file: pcap-capture.env, key: PCAP_IFACE, value: "{{ _ludus_install_malcolm_capture_interface if ludus_install_malcolm_capture_enabled | bool else 'lo' }}"}
+    - file: pcap-capture.env
+      key: PCAP_IFACE
+      value: "{{ _ludus_install_malcolm_capture_interface if ludus_install_malcolm_capture_enabled | bool else 'lo' }}"
     - {file: pcap-capture.env, key: PCAP_FILTER, value: "{{ ludus_install_malcolm_capture_filter }}"}
     - {file: pcap-capture.env, key: PCAP_ROTATE_MEGABYTES, value: "{{ ludus_install_malcolm_capture_rotation_megabytes }}"}
     - {file: pcap-capture.env, key: PCAP_ROTATE_MINUTES, value: "{{ ludus_install_malcolm_capture_rotation_minutes }}"}
@@ -125,13 +127,40 @@
       - "'MALCOLM_PROFILE=malcolm' in (_ludus_install_malcolm_managed_env.results[0].content | b64decode).splitlines()"
       - "'MALCOLM_CONTAINER_RUNTIME=docker' in (_ludus_install_malcolm_managed_env.results[0].content | b64decode).splitlines()"
       - "'NGINX_AUTH_MODE=basic' in (_ludus_install_malcolm_managed_env.results[1].content | b64decode).splitlines()"
-      - "((_ludus_install_malcolm_managed_env.results[2].content | b64decode) | regex_findall('(?m)^PCAP_ENABLE_NETSNIFF=(.*)$')) == [ludus_install_malcolm_capture_enabled | bool | ternary('true', 'false')]"
-      - "((_ludus_install_malcolm_managed_env.results[2].content | b64decode) | regex_findall('(?m)^PCAP_ENABLE_TCPDUMP=(.*)$')) == ['false']"
-      - "((_ludus_install_malcolm_managed_env.results[2].content | b64decode) | regex_findall('(?m)^PCAP_IFACE=(.*)$')) == [_ludus_install_malcolm_capture_interface if ludus_install_malcolm_capture_enabled | bool else 'lo']"
-      - "((_ludus_install_malcolm_managed_env.results[2].content | b64decode) | regex_findall('(?m)^PCAP_FILTER=(.*)$')) == [ludus_install_malcolm_capture_filter | string]"
-      - "((_ludus_install_malcolm_managed_env.results[2].content | b64decode) | regex_findall('(?m)^PCAP_ROTATE_MEGABYTES=(.*)$')) == [ludus_install_malcolm_capture_rotation_megabytes | string]"
-      - "((_ludus_install_malcolm_managed_env.results[2].content | b64decode) | regex_findall('(?m)^PCAP_ROTATE_MINUTES=(.*)$')) == [ludus_install_malcolm_capture_rotation_minutes | string]"
-      - "((_ludus_install_malcolm_managed_env.results[3].content | b64decode) | regex_findall('(?m)^ARKIME_LIVE_CAPTURE=(.*)$')) == [ludus_install_malcolm_capture_enabled | bool | ternary('true', 'false')]"
-      - "((_ludus_install_malcolm_managed_env.results[4].content | b64decode) | regex_findall('(?m)^ZEEK_LIVE_CAPTURE=(.*)$')) == [ludus_install_malcolm_capture_enabled | bool | ternary('true', 'false')]"
-      - "((_ludus_install_malcolm_managed_env.results[5].content | b64decode) | regex_findall('(?m)^SURICATA_LIVE_CAPTURE=(.*)$')) == [ludus_install_malcolm_capture_enabled | bool | ternary('true', 'false')]"
+      - >-
+        ((_ludus_install_malcolm_managed_env.results[2].content | b64decode)
+        | regex_findall('(?m)^PCAP_ENABLE_NETSNIFF=(.*)$'))
+        == [ludus_install_malcolm_capture_enabled | bool | ternary('true', 'false')]
+      - >-
+        ((_ludus_install_malcolm_managed_env.results[2].content | b64decode)
+        | regex_findall('(?m)^PCAP_ENABLE_TCPDUMP=(.*)$'))
+        == ['false']
+      - >-
+        ((_ludus_install_malcolm_managed_env.results[2].content | b64decode)
+        | regex_findall('(?m)^PCAP_IFACE=(.*)$'))
+        == [_ludus_install_malcolm_capture_interface if ludus_install_malcolm_capture_enabled | bool else 'lo']
+      - >-
+        ((_ludus_install_malcolm_managed_env.results[2].content | b64decode)
+        | regex_findall('(?m)^PCAP_FILTER=(.*)$'))
+        == [ludus_install_malcolm_capture_filter | string]
+      - >-
+        ((_ludus_install_malcolm_managed_env.results[2].content | b64decode)
+        | regex_findall('(?m)^PCAP_ROTATE_MEGABYTES=(.*)$'))
+        == [ludus_install_malcolm_capture_rotation_megabytes | string]
+      - >-
+        ((_ludus_install_malcolm_managed_env.results[2].content | b64decode)
+        | regex_findall('(?m)^PCAP_ROTATE_MINUTES=(.*)$'))
+        == [ludus_install_malcolm_capture_rotation_minutes | string]
+      - >-
+        ((_ludus_install_malcolm_managed_env.results[3].content | b64decode)
+        | regex_findall('(?m)^ARKIME_LIVE_CAPTURE=(.*)$'))
+        == [ludus_install_malcolm_capture_enabled | bool | ternary('true', 'false')]
+      - >-
+        ((_ludus_install_malcolm_managed_env.results[4].content | b64decode)
+        | regex_findall('(?m)^ZEEK_LIVE_CAPTURE=(.*)$'))
+        == [ludus_install_malcolm_capture_enabled | bool | ternary('true', 'false')]
+      - >-
+        ((_ludus_install_malcolm_managed_env.results[5].content | b64decode)
+        | regex_findall('(?m)^SURICATA_LIVE_CAPTURE=(.*)$'))
+        == [ludus_install_malcolm_capture_enabled | bool | ternary('true', 'false')]
     fail_msg: Malcolm environment generation did not reach the requested semantic state.

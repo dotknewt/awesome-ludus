@@ -48,14 +48,50 @@
 - name: Converge independent Malcolm backend secrets
   ansible.builtin.include_tasks: secret-key.yml
   loop:
-    - {file: netbox-secret.env, key: SECRET_KEY, length: 50, alphabet: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789%@<=>?~^_-", pattern: "^[A-Za-z0-9%@<=>?~^_-]{50,}$"}
-    - {file: netbox-secret.env, key: SUPERUSER_PASSWORD, length: 24, alphabet: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_", pattern: "^[A-Za-z0-9_]{24,}$"}
-    - {file: netbox-secret.env, key: SUPERUSER_API_TOKEN, length: 40, alphabet: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_", pattern: "^[A-Za-z0-9_]{40,}$", finalize_file: true}
-    - {file: postgres.env, key: POSTGRES_PASSWORD, length: 24, alphabet: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_", pattern: "^[A-Za-z0-9_]{24,}$"}
-    - {file: postgres.env, key: POSTGRES_NETBOX_PASSWORD, length: 24, alphabet: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_", pattern: "^[A-Za-z0-9_]{24,}$"}
-    - {file: postgres.env, key: POSTGRES_KEYCLOAK_PASSWORD, length: 24, alphabet: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_", pattern: "^[A-Za-z0-9_]{24,}$", finalize_file: true}
-    - {file: valkey.env, key: VALKEY_PASSWORD, length: 24, alphabet: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_", pattern: "^[A-Za-z0-9_]{24,}$", finalize_file: true}
-    - {file: arkime-secret.env, key: ARKIME_PASSWORD_SECRET, length: 32, alphabet: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_", pattern: "^[A-Za-z0-9_]{16,}$", finalize_file: true}
+    - file: netbox-secret.env
+      key: SECRET_KEY
+      length: 50
+      alphabet: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789%@<=>?~^_-"
+      pattern: "^[A-Za-z0-9%@<=>?~^_-]{50,}$"
+    - file: netbox-secret.env
+      key: SUPERUSER_PASSWORD
+      length: 24
+      alphabet: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+      pattern: "^[A-Za-z0-9_]{24,}$"
+    - file: netbox-secret.env
+      key: SUPERUSER_API_TOKEN
+      length: 40
+      alphabet: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+      pattern: "^[A-Za-z0-9_]{40,}$"
+      finalize_file: true
+    - file: postgres.env
+      key: POSTGRES_PASSWORD
+      length: 24
+      alphabet: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+      pattern: "^[A-Za-z0-9_]{24,}$"
+    - file: postgres.env
+      key: POSTGRES_NETBOX_PASSWORD
+      length: 24
+      alphabet: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+      pattern: "^[A-Za-z0-9_]{24,}$"
+    - file: postgres.env
+      key: POSTGRES_KEYCLOAK_PASSWORD
+      length: 24
+      alphabet: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+      pattern: "^[A-Za-z0-9_]{24,}$"
+      finalize_file: true
+    - file: valkey.env
+      key: VALKEY_PASSWORD
+      length: 24
+      alphabet: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+      pattern: "^[A-Za-z0-9_]{24,}$"
+      finalize_file: true
+    - file: arkime-secret.env
+      key: ARKIME_PASSWORD_SECRET
+      length: 32
+      alphabet: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+      pattern: "^[A-Za-z0-9_]{16,}$"
+      finalize_file: true
   loop_control:
     label: "{{ item.file }}:{{ item.key }}"
   vars:
@@ -242,7 +278,11 @@
     mode: "0600"
   loop:
     - {key: MALCOLM_USERNAME, value: "{{ ludus_install_malcolm_admin_username }}"}
-    - {key: MALCOLM_PASSWORD, value: "{{ (_ludus_install_malcolm_admin_crypt.stdout | b64encode) if _ludus_install_malcolm_admin_update else _ludus_install_malcolm_previous_crypt_b64 }}"}
+    - key: MALCOLM_PASSWORD
+      value: >-
+        {{ (_ludus_install_malcolm_admin_crypt.stdout | b64encode)
+        if _ludus_install_malcolm_admin_update
+        else _ludus_install_malcolm_previous_crypt_b64 }}
   notify: Restart Malcolm
   no_log: true
   diff: false
@@ -264,7 +304,8 @@
     argv:
       - "{{ ludus_install_malcolm_venv_dir }}/bin/python"
       - -c
-      - "from passlib.apache import HtpasswdFile; import sys; h=HtpasswdFile(sys.argv[1]); sys.exit(0 if h.check_password(sys.argv[2], sys.stdin.read().rstrip('\\n')) else 1)"
+      - "from passlib.apache import HtpasswdFile; import sys; h=HtpasswdFile(sys.argv[1]); \
+        sys.exit(0 if h.check_password(sys.argv[2], sys.stdin.read().rstrip('\\n')) else 1)"
       - "{{ ludus_install_malcolm_install_dir }}/nginx/htpasswd"
       - "{{ ludus_install_malcolm_admin_username }}"
     stdin: "{{ ludus_install_malcolm_admin_password }}"
@@ -279,7 +320,9 @@
     argv:
       - "{{ ludus_install_malcolm_venv_dir }}/bin/python"
       - -c
-      - "from passlib.apache import HtpasswdFile; import sys; h=HtpasswdFile(sys.argv[1]); changed=h.delete(sys.argv[2]); h.save() if changed else None; sys.exit(0 if changed else 1)"
+      - "from passlib.apache import HtpasswdFile; import sys; h=HtpasswdFile(sys.argv[1]); \
+        changed=h.delete(sys.argv[2]); h.save() if changed else None; \
+        sys.exit(0 if changed else 1)"
       - "{{ ludus_install_malcolm_install_dir }}/nginx/htpasswd"
       - "{{ _ludus_install_malcolm_previous_admin }}"
   register: _ludus_install_malcolm_old_admin_removal
@@ -298,7 +341,8 @@
     argv:
       - "{{ ludus_install_malcolm_venv_dir }}/bin/python"
       - -c
-      - "from passlib.apache import HtpasswdFile; import sys; h=HtpasswdFile(sys.argv[1], default_scheme='bcrypt'); h.set_password(sys.argv[2], sys.stdin.read().rstrip('\\n')); h.save()"
+      - "from passlib.apache import HtpasswdFile; import sys; h=HtpasswdFile(sys.argv[1], default_scheme='bcrypt'); \
+        h.set_password(sys.argv[2], sys.stdin.read().rstrip('\\n')); h.save()"
       - "{{ ludus_install_malcolm_install_dir }}/nginx/htpasswd"
       - "{{ ludus_install_malcolm_admin_username }}"
     stdin: "{{ ludus_install_malcolm_admin_password }}"

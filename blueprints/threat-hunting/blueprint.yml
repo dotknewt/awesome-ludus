@@ -1,0 +1,7 @@
+---
+manifest_version: 1
+id: threat-hunting
+name: Threat Hunting
+version: '0.1'
+config: range-config.yml
+description: Threat hunting range with Splunk, Malcolm, and GitLab servers.

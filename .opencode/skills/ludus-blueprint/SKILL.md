@@ -9,13 +9,14 @@ Own the **package**, composing the upstream [Ludus skills](https://gitlab.com/ba
 
 ## Required handoffs
 
-| Work | Required upstream skill |
+| Work | Required skill |
 |---|---|
 | Author, edit, inspect, or validate range YAML | `range-config` |
 | Commands, read-only server inventory, requested deployment | `ludus-cli` |
 | Choose an existing pre-built lab | `environment-guide` |
+| Static Ansible/YAML validation before live authorization | `ansible-validation` |
 
-Load the named skill when its branch applies. If unavailable, report the missing prerequisite and use upstream's installation instructions; resume that branch after it is available. Reference upstream skills directly rather than copying their schema rules, command catalogs, or environment lists.
+Load the named skill when its branch applies. For `range-config`, `ludus-cli`, or `environment-guide`, report an unavailable skill and use upstream's installation instructions before resuming that branch. `ansible-validation` is bundled with this repository; if it is missing, report a repository defect and an unverified validation gap, then restore the bundled skill before resuming. Reference upstream skills directly rather than copying their schema rules, command catalogs, or environment lists.
 
 ## Workflow
 
@@ -23,8 +24,8 @@ Load the named skill when its branch applies. If unavailable, report the missing
 2. **Agree.** Ask only about missing requirements: lab purpose, topology, provisioning, success criteria, identity/version, and distribution target. Use `range-config` for topology decisions. Obtain approval of the package design before writing. Conversion preserves existing behavior; present necessary changes for approval. Identify missing roles/templates as blockers for future component-authoring skills.
 3. **Package.** Create the blueprint directory below. Preserve existing source metadata; add `source.yml` for a new source with user-supplied attribution/license. Write dependency declarations using verified versions or immutable refs; report unresolved pins rather than inventing them.
 4. **Account for dependencies.** For every role/collection identified through `range-config`, record its declaration or source-root vendored path. Collections are identified by `galaxy.yml`, not directory name. An undeclared, unbundled role/collection blocks package completion; a README prerequisite alone does not satisfy coverage. Record templates separately as bundled build definitions or external prerequisites. Server-installed assets alone do not make a portable package. Subscription roles carry names only. Defer missing component creation.
-5. **Validate.** Run the package checker below, upstream range validation, and dependency coverage review. When connected, use `ludus-cli` for read-only role/template inventory. Registration, installation, apply, build, and deployment require explicit requests; they are not validation steps.
-6. **Deliver.** Report files, package-check results, range-validation results, dependency coverage, server checks, and unresolved prerequisites separately. Include reproducible deployment instructions through `ludus-cli`; claim runtime success only with runtime evidence.
+5. **Validate.** Run the package checker below and upstream range validation. Use `ansible-validation` to inventory the blueprint artifact YAML, every referenced or declared role/dependency, source-local role, and locally inspectable external role while excluding unrelated roles; unresolved targets are coverage errors. When connected, use `ludus-cli` for read-only role/template inventory. Registration, installation, apply, build, and deployment require explicit requests; they are not validation steps.
+6. **Deliver.** Report files, package-check results, range-validation results, static tool results, dependency coverage, server checks, and unresolved prerequisites separately. Preserve `PASS WITH WARNINGS — NOT VERIFIED` and its unavailable checks/targets. Include reproducible deployment instructions through `ludus-cli`; static results do not authorize deployment, and runtime success requires separately authorized runtime evidence.
 
 ## Package example
 

@@ -57,13 +57,13 @@
         - .ludus-initialization/config__arkime-secret.env
         - .ludus-initialization/opensearch-primary-curlrc
         - .ludus-initialization/forwarding-ca
-      register: _malcolm_acceptance_fingerprints
+      register: _ludus_install_malcolm_acceptance_fingerprints
       no_log: true
 
     - name: Report secret fingerprints for cross-run comparison
       ansible.builtin.debug:
         msg: >-
           {{ item.item }} sha256={{ item.stat.checksum | default('missing') }}
-      loop: "{{ _malcolm_acceptance_fingerprints.results }}"
+      loop: "{{ _ludus_install_malcolm_acceptance_fingerprints.results }}"
       loop_control:
         label: "{{ item.item }}"

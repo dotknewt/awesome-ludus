@@ -1,6 +1,6 @@
 ---
 manifest_version: 1
-id: thrunt-gitlab
+id: detection-engineering
 name: Threat Hunting on GitLab and CI/CD
 description: >-
   Save-ready five-VM detection-engineering range configuration. Applying or

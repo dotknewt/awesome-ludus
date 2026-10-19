@@ -1,37 +1,43 @@
 ---
-
-- name: Install prerequisites for Ansible Gitlab
-  package:
+# Preserve existing prerequisite refresh policy.
+- name: Install prerequisites for Ansible Gitlab  # noqa: package-latest
+  ansible.builtin.package:
     name: "{{ package }}"
     state: latest
-  loop: 
+  loop:
     - python3-gitlab
   loop_control:
     loop_var: package
 
-- name: "Set gitlab_url from ip to http://{{ansible_default_ipv4.address}}"
-  set_fact:
-    gitlab_url: "http://{{ansible_default_ipv4.address}}"
+- name: "Set GitLab URL from IP to http://{{ ansible_default_ipv4.address }}"
+  ansible.builtin.set_fact:
+    ludus_gitlab_ce_url: "http://{{ ansible_default_ipv4.address }}"
   run_once: true
 
 # Get root access tokens number
 
 - name: Check if root access token exists
-  ansible.builtin.command: "gitlab-rails runner \"puts User.find_by_username('root').personal_access_tokens.size()\""
-  register: root_access_tokens_size
+  ansible.builtin.command: >-
+    gitlab-rails runner "puts User.find_by_username('root').personal_access_tokens.size()"
+  register: ludus_gitlab_ce_root_access_tokens_size
+  changed_when: false
   run_once: true
 
 # Create root access token
 
 - name: Create gitlab root access token
-  ansible.builtin.command: "gitlab-rails runner \"token = User.find_by_username('root').personal_access_tokens.create(scopes: ['api', 'sudo'], name: 'Ansible Ludus', expires_at: 365.days.from_now); token.set_token('token-ansible-for-ludus'); token.save!\""
-  when: root_access_tokens_size.stdout == "0"
+  ansible.builtin.command: >-
+    gitlab-rails runner "token = User.find_by_username('root').personal_access_tokens.create(scopes:
+    ['api', 'sudo'], name: 'Ansible Ludus', expires_at: 365.days.from_now); token.set_token('token-ansible-for-ludus');
+    token.save!"
+  changed_when: true
+  when: ludus_gitlab_ce_root_access_tokens_size.stdout == "0"
 
 # Groups
 
 - name: Create GitLab Groups
   community.general.gitlab_group:
-    api_url: "{{ gitlab_url }}"
+    api_url: "{{ ludus_gitlab_ce_url }}"
     validate_certs: false
     api_token: "token-ansible-for-ludus"
     name: "{{ group.name }}"
@@ -50,7 +56,7 @@
 
 - name: Create GitLab Users
   community.general.gitlab_user:
-    api_url: "{{ gitlab_url }}"
+    api_url: "{{ ludus_gitlab_ce_url }}"
     validate_certs: false
     api_token: "token-ansible-for-ludus"
     name: "{{ user.display_name }}"
@@ -67,7 +73,9 @@
   when: ludus_gitlab.users is defined
 
 - name: Unset password expiration for users with gitlab-rails
-  ansible.builtin.command: "gitlab-rails runner \"user = User.find_by_username('{{ user.name }}'); user.password_expires_at = Time.now + 86400; user.save!\""
+  ansible.builtin.command: >-
+    gitlab-rails runner "user = User.find_by_username('{{ user.name }}'); user.password_expires_at = Time.now + 86400; user.save!"
+  changed_when: true
   loop: "{{ ludus_gitlab.users }}"
   loop_control:
     loop_var: user

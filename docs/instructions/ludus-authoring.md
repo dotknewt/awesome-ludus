@@ -29,6 +29,7 @@ Use this policy when creating or reviewing Ludus source content, blueprints, ran
 ## Verification and evidence
 
 - Verification is static and live only; do not add or rely on simulations, stateful fakes, or mocked behavior as verification evidence. Static checks may validate structure, syntax, manifests, schema conformance, and code patterns, but do not prove runtime behavior. Follow [AGENTS.md's behavioral verification requirements](../../AGENTS.md#behavioral-verification) for actual-entrypoint evidence, lifecycle and sanitization checks, evidence reporting/reuse, and authorization.
+- For Ansible/YAML checks, use the repository's `ansible-validation` skill and `.opencode/skills/ansible-validation/scripts/validate.py`. Inventory every role and declared dependency in the selected artifact while excluding unrelated roles. Actual check failures and coverage errors block a live-authorization request; `PASS WITH WARNINGS — NOT VERIFIED` may proceed only when every unavailable check and unverified target remains prominent. Static output never proves runtime readiness or grants deployment authorization.
 
 ## Official references
 

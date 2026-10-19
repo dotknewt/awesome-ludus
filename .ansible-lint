@@ -1,0 +1,3 @@
+---
+# Prevent ansible-lint from installing requirements or refreshing schemas.
+offline: true

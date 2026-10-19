@@ -1,0 +1,37 @@
+# yaml-language-server: $schema=https://docs.ludus.cloud/schemas/range-config.json
+---
+ludus:
+  - vm_name: "{{ range_id }}-splunk"
+    hostname: "{{ range_id }}-splunk"
+    template: debian-13.5-x64-server-no-template
+    linux: true
+    cpus: 4
+    ram_gb: 16
+    vlan: 10
+    ip_last_octet: 11
+    roles:
+      - dotknewt.ludus_splunk_server
+    role_vars:
+      ludus_splunk_server_accept_license: true
+
+  - vm_name: "{{ range_id }}-malcolm"
+    hostname: "{{ range_id }}-malcolm"
+    template: debian-13.5-x64-server-no-template
+    linux: true
+    cpus: 8
+    ram_gb: 64
+    vlan: 10
+    ip_last_octet: 17
+    roles:
+      - dotknewt.ludus_install_malcolm
+
+  - vm_name: "{{ range_id }}-gitlab"
+    hostname: "{{ range_id }}-gitlab"
+    template: debian-13.5-x64-server-no-template
+    linux: true
+    cpus: 4
+    ram_gb: 8
+    vlan: 10
+    ip_last_octet: 18
+    roles:
+      - dotknewt.ludus_gitlab_ce
