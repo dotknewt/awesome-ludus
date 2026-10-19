@@ -1,6 +1,7 @@
 ---
 ludus_splunk_server_package_url: "https://download.splunk.com/products/splunk/releases/10.6.1.1/linux/splunk-10.6.1.1-b2ae2962645c-linux-amd64.deb"
-ludus_splunk_server_package_checksum: "sha512:f3f67f699fcd893ffd280b602a47215f5e7eb9b481cb242b08705a4db8ada489febb3fa49cb90f9bd1397603d9207ea5ac9bf59eec62f99d030c3f2ff738eb89"
+ludus_splunk_server_package_checksum: "sha512:f3f67f699fcd893ffd280b602a47215f5e7eb9b481cb242b08705a4db8ada489febb3fa\
+  49cb90f9bd1397603d9207ea5ac9bf59eec62f99d030c3f2ff738eb89"
 ludus_splunk_server_version: "10.6.1.1"
 ludus_splunk_server_accept_license: false
 ludus_splunk_server_admin_username: admin

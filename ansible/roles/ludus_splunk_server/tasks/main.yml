@@ -100,15 +100,41 @@
         - name: Validate installed package status and version
           ansible.builtin.assert:
             that:
-              - ludus_splunk_server_installed.rc != 0 or (ludus_splunk_server_installed.stdout.split('\t') | length == 2 and ludus_splunk_server_installed.stdout.split('\t')[0] == 'installed' and ludus_splunk_server_installed.stdout.split('\t')[1] == ludus_splunk_server_version)
+              - >-
+                ludus_splunk_server_installed.rc != 0 or (
+                ludus_splunk_server_installed.stdout.split('\t') | length == 2
+                and ludus_splunk_server_installed.stdout.split('\t')[0] == 'installed'
+                and ludus_splunk_server_installed.stdout.split('\t')[1] == ludus_splunk_server_version)
               - not (ludus_splunk_server_home.stat.get('islnk', false) | bool)
-              - ludus_splunk_server_installed.rc != 0 or (ludus_splunk_server_home.stat.get('exists', false) and ludus_splunk_server_home.stat.get('isdir', false))
+              - >-
+                ludus_splunk_server_installed.rc != 0 or (
+                ludus_splunk_server_home.stat.get('exists', false)
+                and ludus_splunk_server_home.stat.get('isdir', false))
               - ludus_splunk_server_installed.rc == 0 or not ludus_splunk_server_home.stat.get('exists', false)
               - not (ludus_splunk_server_unit.stat.get('islnk', false) | bool)
               - ludus_splunk_server_installed.rc == 0 or not ludus_splunk_server_unit.stat.get('exists', false)
               - ludus_splunk_server_installed.rc == 0 or ludus_splunk_server_unit_loadstate.stdout == 'not-found'
-              - ludus_splunk_server_installed.rc != 0 or (ludus_splunk_server_user_record.rc == 0 and ludus_splunk_server_user_record.stdout.split(':') | length == 7 and ludus_splunk_server_user_record.stdout.split(':')[2] | int > 0 and ludus_splunk_server_user_record.stdout.split(':')[5] == '/opt/splunk' and ludus_splunk_server_user_record.stdout.split(':')[6] == '/usr/sbin/nologin' and ludus_splunk_server_user_group.rc == 0 and ludus_splunk_server_user_group.stdout == 'splunk' and ludus_splunk_server_group.rc == 0)
-              - ludus_splunk_server_installed.rc == 0 or ((ludus_splunk_server_user_record.rc == 2 and ludus_splunk_server_group.rc == 2) or (ludus_splunk_server_user_record.rc == 0 and ludus_splunk_server_user_record.stdout.split(':') | length == 7 and ludus_splunk_server_user_record.stdout.split(':')[2] | int > 0 and ludus_splunk_server_user_record.stdout.split(':')[5] == '/opt/splunk' and ludus_splunk_server_user_record.stdout.split(':')[6] == '/usr/sbin/nologin' and ludus_splunk_server_user_group.rc == 0 and ludus_splunk_server_user_group.stdout == 'splunk' and ludus_splunk_server_group.rc == 0))
+              - >-
+                ludus_splunk_server_installed.rc != 0 or (
+                ludus_splunk_server_user_record.rc == 0
+                and ludus_splunk_server_user_record.stdout.split(':') | length == 7
+                and ludus_splunk_server_user_record.stdout.split(':')[2] | int > 0
+                and ludus_splunk_server_user_record.stdout.split(':')[5] == '/opt/splunk'
+                and ludus_splunk_server_user_record.stdout.split(':')[6] == '/usr/sbin/nologin'
+                and ludus_splunk_server_user_group.rc == 0
+                and ludus_splunk_server_user_group.stdout == 'splunk'
+                and ludus_splunk_server_group.rc == 0)
+              - >-
+                ludus_splunk_server_installed.rc == 0 or (
+                (ludus_splunk_server_user_record.rc == 2 and ludus_splunk_server_group.rc == 2)
+                or (ludus_splunk_server_user_record.rc == 0
+                and ludus_splunk_server_user_record.stdout.split(':') | length == 7
+                and ludus_splunk_server_user_record.stdout.split(':')[2] | int > 0
+                and ludus_splunk_server_user_record.stdout.split(':')[5] == '/opt/splunk'
+                and ludus_splunk_server_user_record.stdout.split(':')[6] == '/usr/sbin/nologin'
+                and ludus_splunk_server_user_group.rc == 0
+                and ludus_splunk_server_user_group.stdout == 'splunk'
+                and ludus_splunk_server_group.rc == 0))
               - ludus_splunk_server_unit.stat.get('exists', false) or ludus_splunk_server_process.rc == 1
             fail_msg: >-
               Refusing an incompatible/removed package, existing unmanaged
@@ -162,7 +188,10 @@
               - ludus_splunk_server_existing_unit_dropins.stdout | trim == ''
               - ludus_splunk_server_existing_unit_user.stdout == 'splunk'
               - ludus_splunk_server_existing_unit_group.stdout == 'splunk'
-              - "ludus_splunk_server_existing_unit_content.content | b64decode | regex_findall('(?m)^ExecStart=.*$') == ['ExecStart=/opt/splunk/bin/splunk _internal_launch_under_systemd']"
+              - >-
+                ludus_splunk_server_existing_unit_content.content | b64decode
+                | regex_findall('(?m)^ExecStart=.*$')
+                == ['ExecStart=/opt/splunk/bin/splunk _internal_launch_under_systemd']
             fail_msg: Existing Splunkd.service is not the expected non-root vendor-managed Splunk service.
 
     - name: Prepare a fresh package only after all existing-state guards pass
@@ -260,7 +289,11 @@
         expand_argument_vars: false
       register: ludus_splunk_server_final_package
       changed_when: false
-      failed_when: ludus_splunk_server_final_package.rc != 0 or ludus_splunk_server_final_package.stdout.split('\t') | length != 2 or ludus_splunk_server_final_package.stdout.split('\t')[0] != 'installed' or ludus_splunk_server_final_package.stdout.split('\t')[1] != ludus_splunk_server_version
+      failed_when: >-
+        ludus_splunk_server_final_package.rc != 0
+        or ludus_splunk_server_final_package.stdout.split('\t') | length != 2
+        or ludus_splunk_server_final_package.stdout.split('\t')[0] != 'installed'
+        or ludus_splunk_server_final_package.stdout.split('\t')[1] != ludus_splunk_server_version
 
     - name: Inspect first-run authentication and seed state
       block:
@@ -363,7 +396,10 @@
           - ludus_splunk_server_effective_fragment.stdout | length > 0
           - not (ludus_splunk_server_effective_fragment_stat.stat.get('islnk', false) | bool)
           - ludus_splunk_server_effective_dropins.stdout | trim == ''
-          - "ludus_splunk_server_effective_unit_content.content | b64decode | regex_findall('(?m)^ExecStart=.*$') == ['ExecStart=/opt/splunk/bin/splunk _internal_launch_under_systemd']"
+          - >-
+            ludus_splunk_server_effective_unit_content.content | b64decode
+            | regex_findall('(?m)^ExecStart=.*$')
+            == ['ExecStart=/opt/splunk/bin/splunk _internal_launch_under_systemd']
         fail_msg: Refusing to start a root-run or unrelated systemd unit.
 
     - name: Enable and start vendor-generated Splunk service
