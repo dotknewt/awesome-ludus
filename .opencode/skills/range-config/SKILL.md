@@ -1,5 +1,5 @@
 ---
-name: ludus-range-config
+name: range-config
 description: Create, edit, and validate Ludus range configuration YAML including VM definitions, domains, networking, router settings, testing behavior, and role configuration. Use when users need help authoring or reviewing `ludus` range config files.
 ---
 

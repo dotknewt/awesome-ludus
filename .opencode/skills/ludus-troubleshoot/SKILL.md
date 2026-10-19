@@ -1,46 +1,24 @@
 ---
 name: ludus-troubleshoot
-description: Diagnose and resolve Ludus deployment, networking, template, WireGuard, Proxmox, and Ansible issues. Use when users report failures, errors, unreachable systems, failed joins, or unexpected behavior during build or deploy.
+description: Use when diagnosing Ludus VM reachability or power-state issues, missing or misidentified source roles, or blueprint dependency installation failures requiring project-specific checks.
 ---
 
-# Ludus Troubleshooting
+# Ludus Troubleshooting Extensions
 
-Use this skill to triage user-reported failures quickly, categorize errors, and provide targeted remediation steps.
+**REQUIRED SUB-SKILL:** Load `troubleshooting` from [upstream Ludus skills](https://gitlab.com/badsectorlabs/ludus-skills) for the diagnostic workflow and common-error catalog. If unavailable, report the missing prerequisite and follow upstream installation instructions before proceeding. Apply the relevant local checks below alongside that workflow.
 
-## Diagnostic Workflow
+## VM reachability and power state
 
-1. Gather context and exact error output.
-2. Check range deployment status and recent errors.
-3. When debugging range VMs, verify each VM's power state by its assigned Proxmox VM ID (numeric `proxmoxID`), not by name:
-   `ludus range status --json | jq --argjson vmid "$VMID" '.VMs[] | select(.proxmoxID == $vmid)'`
-   Inspect `poweredOn` in the matching result. No match is not proof the VM is powered off; confirm the range and assigned ID. A query failure does not establish power state. Do not automatically change power state.
-4. Review deployment logs for failure details.
-5. Identify the failure category using the known error catalog.
-6. Inspect the current range config for misconfigurations.
-7. Provide targeted fixes with concrete steps.
-8. Define clear verification steps to confirm recovery.
+Verify each VM by its assigned numeric Proxmox VM ID (`proxmoxID`), not its name. Use `ludus-cli` and installed CLI help to confirm command syntax:
 
-## Key Diagnostic Information
+```bash
+ludus range status --json | jq --argjson vmid "$VMID" '.VMs[] | select(.proxmoxID == $vmid)'
+```
 
-When triaging, gather these in order of usefulness:
+Inspect `poweredOn` in the matching result. No match is not proof the VM is powered off; confirm the range and assigned ID. A query failure does not establish power state. Do not automatically change power state.
 
-- **Range status** — is the deployment running, failed, or complete?
-- **Deployment errors** — the most recent error output from a deploy.
-- **Deployment logs** — full log stream for tracing failure context.
-- **Template status** — are required templates built and available?
-- **Range config** — does the YAML match what the user intended?
-- **Testing mode status** — is testing mode active, and are network rules in effect?
+## Source roles and blueprint dependencies
 
-## Common Patterns
+When a source role is missing, appears under an unexpected name, or dependency installation fails, read [source-role diagnostics](references/source-role-diagnostics.md) and apply its evidence checks before proposing changes.
 
-- Network issues often trace back to dnsmasq or NAT bridge state.
-- Ansible failures often involve WinRM (Windows) or SSH reachability (Linux).
-- Domain join failures usually involve DNS ordering or timing.
-- Template failures are commonly ISO download or disk-space related.
-
-## References
-
-- Use `references/common-errors.md` for known errors, root causes, and fix procedures.
-- Use `https://docs.ludus.cloud/docs/troubleshooting/client` for client and CLI troubleshooting details.
-- Use `https://docs.ludus.cloud/docs/troubleshooting/network/` and `https://docs.ludus.cloud/docs/troubleshooting/wireguard/` for network and connectivity issues.
-- For uninstalling Ludus, direct users to the official guide at `https://docs.ludus.cloud/docs/troubleshooting/uninstall` rather than performing the steps yourself.
+Report the failing boundary, supporting evidence, and remaining uncertainty. Verify recovery after an approved correction; successful catalog discovery alone does not prove deployment succeeds.
