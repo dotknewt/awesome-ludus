@@ -55,8 +55,7 @@ applyTo: '**/*.yaml, **/*.yml'
 
 ## Linting
 
-- Use `ansible-lint` and `yamllint` to check syntax and enforce standards.
-- Use `ansible-playbook --syntax-check` to check for syntax errors.
+- Use the `ansible-validation` skill and bundled validator for scoped `ansible-playbook --syntax-check`, `ansible-lint`, and `yamllint` checks. Its inventory must cover every in-scope target and represent unresolved paths or harnesses as coverage errors; missing executables remain prominent unverified warnings.
 - For Ludus artifacts, follow the [static-and-live verification policy](../../docs/instructions/ludus-authoring.md#verification-and-evidence); use separately authorized live runs rather than check-mode simulations to verify runtime behavior.
 
 ## Sources

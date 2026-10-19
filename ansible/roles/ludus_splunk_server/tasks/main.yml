@@ -1,0 +1,421 @@
+---
+- name: Install and bootstrap native Splunk Enterprise
+  become: true
+  block:
+    - name: Validate non-secret platform and artifact inputs before mutation
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == "Debian"
+          - ansible_distribution_major_version | int == 13
+          - ansible_architecture == "x86_64"
+          - ansible_service_mgr == "systemd"
+          - ludus_splunk_server_package_url is string
+          - ludus_splunk_server_package_url is match('^https://[^/@]+(?:/|$)')
+          - ludus_splunk_server_package_url is not search('@')
+          - ludus_splunk_server_package_checksum is string
+          - ludus_splunk_server_package_checksum is match('^(sha256:[0-9a-fA-F]{64}|sha512:[0-9a-fA-F]{128})$')
+          - ludus_splunk_server_version is string
+          - ludus_splunk_server_version is match('^[0-9][A-Za-z0-9.+:~_-]*$')
+          - ludus_splunk_server_accept_license is boolean
+          - ludus_splunk_server_accept_license
+        fail_msg: Supply a valid authorized artifact/version/checksum and explicitly confirm accepted terms.
+
+    - name: Validate credentials without exposing assertion operands
+      ansible.builtin.assert:
+        that:
+          - ludus_splunk_server_admin_username is string
+          - ludus_splunk_server_admin_username is match('^[A-Za-z0-9_.-]+$')
+          - "'\\n' not in ludus_splunk_server_admin_username"
+          - "'\\r' not in ludus_splunk_server_admin_username"
+          - ludus_splunk_server_admin_password is string
+          - ludus_splunk_server_admin_password | length >= 8
+          - ludus_splunk_server_admin_password is match('^[ -~]+$')
+          - "'\\n' not in ludus_splunk_server_admin_password"
+          - "'\\r' not in ludus_splunk_server_admin_password"
+          - "ludus_splunk_server_admin_password == ludus_splunk_server_admin_password.strip()"
+          - "not ludus_splunk_server_admin_password.endswith('\\\\')"
+        fail_msg: Credentials must be valid single-line ASCII; password must be at least 8 characters and not end in a backslash.
+      no_log: true
+
+    - name: Read existing package, filesystem, identity, process, and unit state
+      block:
+        - name: Query exact dpkg package status and version
+          ansible.builtin.command:
+            argv:
+              - dpkg-query
+              - -W
+              - "-f=${db:Status-Status}\\t${Version}\\n"
+              - splunk
+            expand_argument_vars: false
+          register: ludus_splunk_server_installed
+          changed_when: false
+          failed_when: ludus_splunk_server_installed.rc not in [0, 1]
+
+        - name: Inspect application directory without following symlinks
+          ansible.builtin.stat:
+            path: /opt/splunk
+            follow: false
+          register: ludus_splunk_server_home
+
+        - name: Inspect generated service unit without following symlinks
+          ansible.builtin.stat:
+            path: /etc/systemd/system/Splunkd.service
+            follow: false
+          register: ludus_splunk_server_unit
+
+        - name: Read existing Splunk account record
+          ansible.builtin.command:
+            argv: [getent, passwd, splunk]
+          register: ludus_splunk_server_user_record
+          changed_when: false
+          failed_when: ludus_splunk_server_user_record.rc not in [0, 2]
+
+        - name: Read existing Splunk account primary group
+          ansible.builtin.command:
+            argv: [id, -gn, splunk]
+          register: ludus_splunk_server_user_group
+          changed_when: false
+          failed_when: ludus_splunk_server_user_group.rc not in [0, 1]
+
+        - name: Read existing Splunk group
+          ansible.builtin.command:
+            argv: [getent, group, splunk]
+          register: ludus_splunk_server_group
+          changed_when: false
+          failed_when: ludus_splunk_server_group.rc not in [0, 2]
+
+        - name: Check whether a manually started daemon is running
+          ansible.builtin.command:
+            argv: [pgrep, -x, splunkd]
+          register: ludus_splunk_server_process
+          changed_when: false
+          failed_when: ludus_splunk_server_process.rc not in [0, 1]
+
+        - name: Check whether systemd already resolves Splunkd.service
+          ansible.builtin.command:
+            argv: [systemctl, show, Splunkd.service, --property=LoadState, --value]
+          register: ludus_splunk_server_unit_loadstate
+          changed_when: false
+
+        - name: Validate installed package status and version
+          ansible.builtin.assert:
+            that:
+              - ludus_splunk_server_installed.rc != 0 or (ludus_splunk_server_installed.stdout.split('\t') | length == 2 and ludus_splunk_server_installed.stdout.split('\t')[0] == 'installed' and ludus_splunk_server_installed.stdout.split('\t')[1] == ludus_splunk_server_version)
+              - not (ludus_splunk_server_home.stat.get('islnk', false) | bool)
+              - ludus_splunk_server_installed.rc != 0 or (ludus_splunk_server_home.stat.get('exists', false) and ludus_splunk_server_home.stat.get('isdir', false))
+              - ludus_splunk_server_installed.rc == 0 or not ludus_splunk_server_home.stat.get('exists', false)
+              - not (ludus_splunk_server_unit.stat.get('islnk', false) | bool)
+              - ludus_splunk_server_installed.rc == 0 or not ludus_splunk_server_unit.stat.get('exists', false)
+              - ludus_splunk_server_installed.rc == 0 or ludus_splunk_server_unit_loadstate.stdout == 'not-found'
+              - ludus_splunk_server_installed.rc != 0 or (ludus_splunk_server_user_record.rc == 0 and ludus_splunk_server_user_record.stdout.split(':') | length == 7 and ludus_splunk_server_user_record.stdout.split(':')[2] | int > 0 and ludus_splunk_server_user_record.stdout.split(':')[5] == '/opt/splunk' and ludus_splunk_server_user_record.stdout.split(':')[6] == '/usr/sbin/nologin' and ludus_splunk_server_user_group.rc == 0 and ludus_splunk_server_user_group.stdout == 'splunk' and ludus_splunk_server_group.rc == 0)
+              - ludus_splunk_server_installed.rc == 0 or ((ludus_splunk_server_user_record.rc == 2 and ludus_splunk_server_group.rc == 2) or (ludus_splunk_server_user_record.rc == 0 and ludus_splunk_server_user_record.stdout.split(':') | length == 7 and ludus_splunk_server_user_record.stdout.split(':')[2] | int > 0 and ludus_splunk_server_user_record.stdout.split(':')[5] == '/opt/splunk' and ludus_splunk_server_user_record.stdout.split(':')[6] == '/usr/sbin/nologin' and ludus_splunk_server_user_group.rc == 0 and ludus_splunk_server_user_group.stdout == 'splunk' and ludus_splunk_server_group.rc == 0))
+              - ludus_splunk_server_unit.stat.get('exists', false) or ludus_splunk_server_process.rc == 1
+            fail_msg: >-
+              Refusing an incompatible/removed package, existing unmanaged
+              home, symlinked unit, conflicting identity, or running daemon
+              without a service unit. Reconcile state explicitly first.
+
+    - name: Inspect effective identity of an existing service before mutation
+      when: ludus_splunk_server_unit.stat.get('exists', false) or ludus_splunk_server_unit_loadstate.stdout != 'not-found'
+      block:
+        - name: Read existing systemd service fragment path
+          ansible.builtin.command:
+            argv: [systemctl, show, Splunkd.service, --property=FragmentPath, --value]
+          register: ludus_splunk_server_existing_unit_fragment
+          changed_when: false
+
+        - name: Read existing systemd service drop-ins
+          ansible.builtin.command:
+            argv: [systemctl, show, Splunkd.service, --property=DropInPaths, --value]
+          register: ludus_splunk_server_existing_unit_dropins
+          changed_when: false
+
+        - name: Inspect existing systemd service fragment without following symlinks
+          ansible.builtin.stat:
+            path: "{{ ludus_splunk_server_existing_unit_fragment.stdout }}"
+            follow: false
+          register: ludus_splunk_server_existing_unit_fragment_stat
+
+        - name: Read existing systemd service user
+          ansible.builtin.command:
+            argv: [systemctl, show, Splunkd.service, --property=User, --value]
+          register: ludus_splunk_server_existing_unit_user
+          changed_when: false
+
+        - name: Read existing systemd service group
+          ansible.builtin.command:
+            argv: [systemctl, show, Splunkd.service, --property=Group, --value]
+          register: ludus_splunk_server_existing_unit_group
+          changed_when: false
+
+        - name: Read existing unit definition
+          ansible.builtin.slurp:
+            src: "{{ ludus_splunk_server_existing_unit_fragment.stdout }}"
+          register: ludus_splunk_server_existing_unit_content
+          no_log: true
+
+        - name: Reject an unrelated or root-run existing service
+          ansible.builtin.assert:
+            that:
+              - ludus_splunk_server_existing_unit_fragment.stdout | length > 0
+              - not (ludus_splunk_server_existing_unit_fragment_stat.stat.get('islnk', false) | bool)
+              - ludus_splunk_server_existing_unit_dropins.stdout | trim == ''
+              - ludus_splunk_server_existing_unit_user.stdout == 'splunk'
+              - ludus_splunk_server_existing_unit_group.stdout == 'splunk'
+              - "ludus_splunk_server_existing_unit_content.content | b64decode | regex_findall('(?m)^ExecStart=.*$') == ['ExecStart=/opt/splunk/bin/splunk _internal_launch_under_systemd']"
+            fail_msg: Existing Splunkd.service is not the expected non-root vendor-managed Splunk service.
+
+    - name: Prepare a fresh package only after all existing-state guards pass
+      when: ludus_splunk_server_installed.rc != 0
+      block:
+        - name: Create protected package cache directory
+          ansible.builtin.file:
+            path: /var/cache/ludus-splunk-server
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+
+        - name: Download Enterprise package with publisher checksum verification
+          ansible.builtin.get_url:
+            url: "{{ ludus_splunk_server_package_url }}"
+            dest: /var/cache/ludus-splunk-server/splunk-enterprise.deb
+            checksum: "{{ ludus_splunk_server_package_checksum }}"
+            owner: root
+            group: root
+            mode: "0600"
+            validate_certs: true
+            force: true
+
+        - name: Read package identity using dpkg-deb showformat fields
+          ansible.builtin.command:
+            argv:
+              - dpkg-deb
+              - -W
+              - "--showformat=${Package}\\n${Version}\\n${Architecture}\\n"
+              - /var/cache/ludus-splunk-server/splunk-enterprise.deb
+            expand_argument_vars: false
+          register: ludus_splunk_server_deb_metadata
+          changed_when: false
+
+        - name: Require exact Enterprise package identity and version
+          ansible.builtin.assert:
+            that:
+              - ludus_splunk_server_deb_metadata.stdout_lines | length == 3
+              - ludus_splunk_server_deb_metadata.stdout_lines[0] == 'splunk'
+              - ludus_splunk_server_deb_metadata.stdout_lines[1] == ludus_splunk_server_version
+              - ludus_splunk_server_deb_metadata.stdout_lines[2] == 'amd64'
+            fail_msg: The verified artifact is not the requested Splunk Enterprise amd64 package/version.
+
+        - name: Create dedicated Splunk service group
+          ansible.builtin.group:
+            name: splunk
+            system: true
+            state: present
+
+        - name: Create dedicated non-root Splunk service user
+          ansible.builtin.user:
+            name: splunk
+            group: splunk
+            home: /opt/splunk
+            create_home: false
+            system: true
+            shell: /usr/sbin/nologin
+            state: present
+
+        - name: Install the verified local package without an implicit upgrade path
+          ansible.builtin.apt:
+            deb: /var/cache/ludus-splunk-server/splunk-enterprise.deb
+            state: present
+            allow_downgrade: false
+
+        - name: Inspect freshly installed application directory
+          ansible.builtin.stat:
+            path: /opt/splunk
+            follow: false
+          register: ludus_splunk_server_fresh_home
+
+        - name: Require the package to have created a real application directory
+          ansible.builtin.assert:
+            that:
+              - ludus_splunk_server_fresh_home.stat.get('exists', false)
+              - ludus_splunk_server_fresh_home.stat.get('isdir', false)
+              - not (ludus_splunk_server_fresh_home.stat.get('islnk', false) | bool)
+
+        - name: Set ownership of the newly installed Splunk application tree
+          ansible.builtin.file:
+            path: /opt/splunk
+            state: directory
+            owner: splunk
+            group: splunk
+            recurse: true
+
+    - name: Confirm installed package status and exact version
+      ansible.builtin.command:
+        argv:
+          - dpkg-query
+          - -W
+          - "-f=${db:Status-Status}\\t${Version}\\n"
+          - splunk
+        expand_argument_vars: false
+      register: ludus_splunk_server_final_package
+      changed_when: false
+      failed_when: ludus_splunk_server_final_package.rc != 0 or ludus_splunk_server_final_package.stdout.split('\t') | length != 2 or ludus_splunk_server_final_package.stdout.split('\t')[0] != 'installed' or ludus_splunk_server_final_package.stdout.split('\t')[1] != ludus_splunk_server_version
+
+    - name: Inspect first-run authentication and seed state
+      block:
+        - name: Check initialized authentication database
+          ansible.builtin.stat:
+            path: /opt/splunk/etc/passwd
+          register: ludus_splunk_server_passwd
+
+        - name: Check existing seed file
+          ansible.builtin.stat:
+            path: /opt/splunk/etc/system/local/user-seed.conf
+          register: ludus_splunk_server_seed
+
+        - name: Reject an unmanaged seed for an uninitialized instance
+          ansible.builtin.assert:
+            that:
+              - ludus_splunk_server_passwd.stat.get('exists', false) or not ludus_splunk_server_seed.stat.get('exists', false)
+            fail_msg: Existing seed with no initialized passwd is unmanaged; recover it explicitly before retrying.
+
+        - name: Create initial administrator seed only for an uninitialized instance
+          ansible.builtin.template:
+            src: user-seed.conf.j2
+            dest: /opt/splunk/etc/system/local/user-seed.conf
+            owner: splunk
+            group: splunk
+            mode: "0600"
+          when: not ludus_splunk_server_passwd.stat.get('exists', false)
+          no_log: true
+          diff: false
+          register: ludus_splunk_server_seed_created
+
+    - name: Generate vendor-managed systemd unit before first start
+      ansible.builtin.command:
+        argv:
+          - /opt/splunk/bin/splunk
+          - enable
+          - boot-start
+          - -systemd-managed
+          - "1"
+          - -user
+          - splunk
+          - -group
+          - splunk
+          - -systemd-unit-file-name
+          - Splunkd
+          - --accept-license
+          - --answer-yes
+          - --no-prompt
+      when: not ludus_splunk_server_unit.stat.get('exists', false) and ludus_splunk_server_unit_loadstate.stdout == 'not-found'
+      changed_when: true
+      no_log: true
+      diff: false
+
+    - name: Reload systemd unit definitions before checking effective service properties
+      ansible.builtin.systemd_service:
+        name: Splunkd.service
+        daemon_reload: true
+
+    - name: Read effective generated service user
+      ansible.builtin.command:
+        argv: [systemctl, show, Splunkd.service, --property=User, --value]
+      register: ludus_splunk_server_effective_user
+      changed_when: false
+
+    - name: Read effective generated service group
+      ansible.builtin.command:
+        argv: [systemctl, show, Splunkd.service, --property=Group, --value]
+      register: ludus_splunk_server_effective_group
+      changed_when: false
+
+    - name: Read effective generated service fragment path
+      ansible.builtin.command:
+        argv: [systemctl, show, Splunkd.service, --property=FragmentPath, --value]
+      register: ludus_splunk_server_effective_fragment
+      changed_when: false
+
+    - name: Read effective generated service drop-ins
+      ansible.builtin.command:
+        argv: [systemctl, show, Splunkd.service, --property=DropInPaths, --value]
+      register: ludus_splunk_server_effective_dropins
+      changed_when: false
+
+    - name: Inspect effective unit file without following symlinks
+      ansible.builtin.stat:
+        path: "{{ ludus_splunk_server_effective_fragment.stdout }}"
+        follow: false
+      register: ludus_splunk_server_effective_fragment_stat
+
+    - name: Read effective generated service definition
+      ansible.builtin.slurp:
+        src: "{{ ludus_splunk_server_effective_fragment.stdout }}"
+      register: ludus_splunk_server_effective_unit_content
+      no_log: true
+
+    - name: Require effective non-root vendor Splunk service identity
+      ansible.builtin.assert:
+        that:
+          - ludus_splunk_server_effective_user.stdout == 'splunk'
+          - ludus_splunk_server_effective_group.stdout == 'splunk'
+          - ludus_splunk_server_effective_fragment.stdout | length > 0
+          - not (ludus_splunk_server_effective_fragment_stat.stat.get('islnk', false) | bool)
+          - ludus_splunk_server_effective_dropins.stdout | trim == ''
+          - "ludus_splunk_server_effective_unit_content.content | b64decode | regex_findall('(?m)^ExecStart=.*$') == ['ExecStart=/opt/splunk/bin/splunk _internal_launch_under_systemd']"
+        fail_msg: Refusing to start a root-run or unrelated systemd unit.
+
+    - name: Enable and start vendor-generated Splunk service
+      ansible.builtin.systemd_service:
+        name: Splunkd.service
+        enabled: true
+        state: started
+
+    - name: Wait for the Splunk web listener
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 8000
+        timeout: 600
+        state: started
+
+    - name: Verify fresh administrator authentication over loopback management API
+      ansible.builtin.uri:
+        url: https://127.0.0.1:8089/services/server/info?output_mode=json
+        method: GET
+        user: "{{ ludus_splunk_server_admin_username }}"
+        password: "{{ ludus_splunk_server_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        status_code: 200
+        timeout: 15
+        use_proxy: false
+        follow_redirects: none
+        unredirected_headers: [Authorization]
+        return_content: false
+      register: ludus_splunk_server_auth_check
+      until: ludus_splunk_server_auth_check.status | default(0) == 200
+      retries: 30
+      delay: 10
+      when: ludus_splunk_server_seed_created is defined and ludus_splunk_server_seed_created.changed
+      no_log: true
+      diff: false
+
+    - name: Confirm initialized authentication database before seed cleanup
+      ansible.builtin.stat:
+        path: /opt/splunk/etc/passwd
+      register: ludus_splunk_server_passwd_after_bootstrap
+      when: ludus_splunk_server_seed_created is defined and ludus_splunk_server_seed_created.changed
+
+    - name: Require non-empty initialized authentication database
+      ansible.builtin.assert:
+        that:
+          - ludus_splunk_server_passwd_after_bootstrap.stat.get('exists', false)
+          - ludus_splunk_server_passwd_after_bootstrap.stat.get('size', 0) | int > 0
+      when: ludus_splunk_server_seed_created is defined and ludus_splunk_server_seed_created.changed
+
+    - name: Remove only the seed created successfully by this invocation
+      ansible.builtin.file:
+        path: /opt/splunk/etc/system/local/user-seed.conf
+        state: absent
+      when: ludus_splunk_server_seed_created is defined and ludus_splunk_server_seed_created.changed

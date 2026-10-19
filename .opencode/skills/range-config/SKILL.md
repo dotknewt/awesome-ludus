@@ -39,6 +39,7 @@ Use this skill to build safe, valid Ludus YAML configurations and explain tradeo
 5. Propose network rules and testing behavior appropriate for the scenario.
 6. Verify that required Ansible roles/collections are installed; recommend any that need to be added.
 7. Validate structure and values against the schema reference.
+8. Before requesting live authorization, use `ansible-validation` to inventory the range YAML as data plus every VM/router role, `depends_on` role, and declared dependency that can be resolved locally. Exclude unrelated roles and record every unresolved path or truthful harness as a coverage error. Actual failures and coverage errors block the request; carry forward `PASS WITH WARNINGS — NOT VERIFIED` with every unavailable check and target. Static results do not authorize deployment.
 
 ## References
 

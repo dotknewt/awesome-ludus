@@ -1,0 +1,9 @@
+---
+extends: default
+
+rules:
+  # Ansible content commonly omits document markers; syntax is checked separately.
+  document-start: disable
+  # Keep long task/module values readable without repository-wide wrapping churn.
+  line-length:
+    max: 160

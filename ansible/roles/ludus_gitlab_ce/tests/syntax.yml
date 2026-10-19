@@ -1,0 +1,13 @@
+---
+# Static-only syntax harness. Do not execute as a deployment playbook.
+# Inherit the complete role default mapping with no optional groups/users.
+# Syntax checking does not establish coverage of dynamically included tasks.
+- name: Parse the GitLab CE role entrypoint
+  hosts: localhost
+  gather_facts: false
+  pre_tasks:
+    - name: Prevent accidental role execution
+      ansible.builtin.fail:
+        msg: This playbook is for --syntax-check only; do not run it normally.
+  roles:
+    - role: ludus_gitlab_ce
