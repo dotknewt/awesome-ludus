@@ -1,8 +1,0 @@
----
-- name: Restart Universal Forwarder
-  ansible.builtin.command:
-    argv:
-      - "{{ detection_forwarder_systemctl }}"
-      - restart
-      - "{{ detection_forwarder_service_name }}"
-  changed_when: true

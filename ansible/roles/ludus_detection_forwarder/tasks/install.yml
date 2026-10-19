@@ -1,6 +1,0 @@
----
-- name: Install exact selected package and provenance
-  ansible.builtin.include_tasks: package.yml
-
-- name: Bootstrap selected package without secret arguments
-  ansible.builtin.include_tasks: bootstrap.yml

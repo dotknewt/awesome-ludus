@@ -1,0 +1,5 @@
+---
+galaxy_info:
+  role_name: ludus_detection_gitlab
+  author: dotknewt
+dependencies: []

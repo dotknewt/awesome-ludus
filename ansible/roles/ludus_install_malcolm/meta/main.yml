@@ -1,2 +1,5 @@
 ---
+galaxy_info:
+  role_name: ludus_install_malcolm
+  author: dotknewt
 dependencies: []

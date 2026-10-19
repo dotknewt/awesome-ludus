@@ -1,3 +1,0 @@
----
-# Native auditd application is deliberately performed and verified inline.
-# A failed application must be retried even when rendered files are unchanged.

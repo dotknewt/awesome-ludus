@@ -1,6 +1,0 @@
----
-- name: Syntax check dedicated workload role
-  hosts: all
-  gather_facts: false
-  roles:
-    - role: "{{ playbook_dir }}/.."  # noqa role-name[path]

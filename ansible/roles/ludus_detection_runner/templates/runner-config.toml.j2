@@ -1,7 +1,0 @@
-# Managed by ludus_detection_runner. The service remains masked and inactive.
-concurrent = 1
-
-[[runners]]
-  name = {{ detection_runner_description | to_json }}
-  url = {{ detection_runner_gitlab_url | regex_replace('/+$', '') | to_json }}
-  token = {{ detection_runner_manager_token | to_json }}

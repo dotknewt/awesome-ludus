@@ -32,10 +32,10 @@ ludus:
       fqdn: condef.internal
       role: primary-dc
     roles:
-      - role_gpo_deploy
-      - role_splunk_install
-      - role_splunk_hec_validate
-      - ludus_install_sysmon
+      - dotknewt.role_gpo_deploy
+      - dotknewt.role_splunk_install
+      - dotknewt.role_splunk_hec_validate
+      - dotknewt.ludus_install_sysmon
     role_vars:
       splunk_admin_password: "Temp1234!!"
       splunk_hec_token_name: "K8s"
@@ -63,8 +63,8 @@ ludus:
       role: member
     roles:
       - badsectorlabs.ludus_adcs
-      - role_splunk_collector_certer
-      - ludus_install_sysmon
+      - dotknewt.role_splunk_collector_certer
+      - dotknewt.ludus_install_sysmon
     role_vars:
       ludus_adcs_domain: condef.internal
       ludus_adcs_ca_host: CERTER
@@ -101,8 +101,8 @@ ludus:
       fqdn: condef.internal
       role: member
     roles:
-      - role_splunk_collector_win11v
-      - ludus_install_sysmon
+      - dotknewt.role_splunk_collector_win11v
+      - dotknewt.ludus_install_sysmon
 
   - vm_name: "WIN11A"
     hostname: "WIN11A"
@@ -123,8 +123,8 @@ ludus:
       fqdn: condef.internal
       role: member
     roles:
-      - role_splunk_collector_win11a
-      - ludus_install_sysmon
+      - dotknewt.role_splunk_collector_win11a
+      - dotknewt.ludus_install_sysmon
 
   - vm_name: "linuxa"
     hostname: "linuxa"
@@ -162,13 +162,13 @@ ludus:
         - php
         - libapache2-mod-php
     roles:
-      - role_linux_logging
-      - ludus_install_minikube
-      - role_splunk_collector_linuxv
-      - name: role_k8s_telemetry_collection
+      - dotknewt.role_linux_logging
+      - dotknewt.ludus_install_minikube
+      - dotknewt.role_splunk_collector_linuxv
+      - name: dotknewt.role_k8s_telemetry_collection
         depends_on:
           - vm_name: "DC"
-            role: role_splunk_hec_validate
+            role: dotknewt.role_splunk_hec_validate
     role_vars:
       k8s_cluster_name: "minkube"
       k8s_splunk_index: "kube"
@@ -184,7 +184,7 @@ ludus:
     cpus: 8
     linux: true
     roles:
-      - ludus_install_malcolm
+      - dotknewt.ludus_install_malcolm
     role_vars:
       # Existing Constructing Defense lab credential; replace outside this lab.
       ludus_install_malcolm_admin_username: condef

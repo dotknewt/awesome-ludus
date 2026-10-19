@@ -1,8 +1,0 @@
----
-- name: Restart Splunk
-  ansible.builtin.command:
-    argv:
-      - "{{ detection_splunk_systemctl }}"
-      - restart
-      - "{{ detection_splunk_service_name }}"
-  changed_when: true

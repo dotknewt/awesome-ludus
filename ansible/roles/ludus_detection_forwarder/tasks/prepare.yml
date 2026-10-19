@@ -1,9 +1,0 @@
----
-- name: Validate all forwarder preparation contracts before target mutation
-  ansible.builtin.include_tasks: validate.yml
-
-- name: Independently inspect protected package and lifecycle state
-  ansible.builtin.include_tasks: inspect.yml
-
-- name: Install only the selected package and protected provenance
-  ansible.builtin.include_tasks: package.yml

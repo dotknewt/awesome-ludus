@@ -1,3 +1,0 @@
----
-- name: Configure detection guest firewall
-  ansible.builtin.include_tasks: configure.yml

@@ -1,3 +1,6 @@
 ---
+galaxy_info:
+  role_name: ludus_install_minikube
+  author: dotknewt
 dependencies:
-  - role: ludus_install_docker
+  - role: dotknewt.ludus_install_docker

@@ -25,7 +25,7 @@ ludus:
       - python3
       - rsyslog
     roles:
-      - ludus_detection_splunk
+      - dotknewt.ludus_detection_splunk
 
   - vm_name: "{{ range_id }}-pcap"
     hostname: "{{ range_id }}-pcap"
@@ -36,7 +36,7 @@ ludus:
     cpus: 8
     linux: true
     roles:
-      - ludus_install_malcolm
+      - dotknewt.ludus_install_malcolm
     role_vars:
       # Malcolm webGUI credentials; replace outside this lab.
       ludus_install_malcolm_admin_username: thrunt
@@ -61,13 +61,13 @@ ludus:
         - php
         - libapache2-mod-php
     roles:
-      - role_linux_logging
-      - ludus_install_minikube
-      - role_splunk_collector_linuxv
-      - name: role_k8s_telemetry_collection
+      - dotknewt.role_linux_logging
+      - dotknewt.ludus_install_minikube
+      - dotknewt.role_splunk_collector_linuxv
+      - name: dotknewt.role_k8s_telemetry_collection
         depends_on:
           - vm_name: "DC"
-            role: role_splunk_hec_validate
+            role: dotknewt.role_splunk_hec_validate
     role_vars:
       k8s_cluster_name: "minkube"
       k8s_splunk_index: "kube"

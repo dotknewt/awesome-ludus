@@ -1,5 +1,0 @@
----
-- name: Apply detection firewall table
-  ansible.builtin.include_tasks: ../tasks/apply.yml
-  when: detection_firewall_apply | bool
-  listen: Apply detection firewall table
