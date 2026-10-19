@@ -7,7 +7,7 @@
       "agents": {
         "librarian": {
           "skills_add": ["*"],
-          "mcps": ["ludus-mcp","librarian"]
+          "mcps": ["ludus-mcp","librarian","firecrawl"]
      	},
 	  	"explorer": {
           "model": "openai/gpt-5.6-luna-fast",
