@@ -1,7 +1,7 @@
 ---
 manifest_version: 1
-id: detection-engineering
-name: Detection Engineering
+id: thrunt-gitlab
+name: Threat Hunting on GitLab and CI/CD
 description: >-
   Save-ready five-VM detection-engineering range configuration. Applying or
   deploying it remains a separate operator-authorized lifecycle action.
@@ -9,7 +9,9 @@ version: 0.2.0
 config: range-config.yml
 tags:
   - detection-engineering
+  - threat-hunting
   - gitlab
+  - ci-cd
   - kubernetes
   - malcolm
   - splunk
