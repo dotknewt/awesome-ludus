@@ -14,6 +14,7 @@
     detection_runner_signing_key_url: https://packages.synthetic.invalid/key.gpg
     detection_runner_signing_key_fingerprint: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
     detection_gitlab_readiness_contract:
+      transport_base_url: http://localhost
       endpoint: /synthetic-ready
       method: GET
       success_statuses: [200]
@@ -25,7 +26,7 @@
     detection_runner_api_contract:
       bootstrap_auth:
         credential_type: personal_access_token
-        scopes: [synthetic_create_runner, synthetic_manage_runner]
+        scopes: [create_runner, manage_runner, read_api]
         expiration_days: 1
         creation_argv: [gitlab-rails, runner, '-']
         protected_path: /etc/detection-engineering/secrets/runner-api-bootstrap.token
@@ -34,8 +35,9 @@
         revoke_method: DELETE
       manager:
         runner_type: instance_type
-        create_scope: synthetic_create_runner
-        manage_scope: synthetic_manage_runner
+        create_scope: create_runner
+        manage_scope: manage_runner
+        read_scope: read_api
         create_endpoint: /api/v4/user/runners
         create_method: POST
         lookup_endpoint: /api/v4/runners/all

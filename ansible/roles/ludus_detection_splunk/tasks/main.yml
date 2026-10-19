@@ -10,6 +10,19 @@
       - detection_splunk_restore_authorized is boolean
       - detection_splunk_hec_supported is boolean
       - detection_splunk_search_api_supported is boolean
+      - detection_splunk_admin_username is string
+      - detection_splunk_admin_username | length > 0
+      - detection_splunk_admin_username is match('^[A-Za-z0-9._-]+$')
+      - detection_linux_host_id is defined
+      - detection_linux_host_id is string
+      - detection_linux_host_id | length > 0
+      - detection_laurel_artifact is defined
+      - detection_laurel_artifact is mapping
+      - detection_laurel_read_user is defined
+      - detection_laurel_read_user == 'splunk'
+      - detection_splunk_file_owner == detection_laurel_read_user
+      - detection_splunk_file_owner == 'splunk'
+      - detection_splunk_file_group == 'splunk'
     fail_msg: Splunk deployment inputs are missing or have invalid types
 
 - name: Validate verified Splunk artifact facts
@@ -44,7 +57,7 @@
       - detection_splunk_search_api_supported is sameas true
       - detection_splunk_bind_ip is match('^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}$')
       - detection_splunk_admin_password is string
-      - detection_splunk_admin_password | length >= 12
+      - detection_splunk_admin_password | length > 0
     fail_msg: Refusing Splunk mutation without verified trial HEC, search, expiry, and authentication facts
 
 - name: Validate protected authenticated-download input
@@ -199,6 +212,41 @@
     path: "{{ detection_splunk_bootstrap_state_path }}"
   register: _detection_splunk_bootstrap
 
+- name: Inspect existing Splunk password database before first-start seeding
+  ansible.builtin.stat:
+    path: "{{ detection_splunk_password_file_path }}"
+  register: _detection_splunk_password_file
+  when: not _detection_splunk_bootstrap.stat.exists
+
+- name: Inspect preexisting first-start Splunk configuration before staging
+  ansible.builtin.stat:
+    path: "{{ item.path }}"
+  loop:
+    - {path: "{{ detection_splunk_seed_path }}", name: "user-seed.conf"}
+    - {path: "{{ detection_splunk_initial_auth_policy_path }}", name: "authentication.conf"}
+  register: _detection_splunk_first_start_config
+  when: not _detection_splunk_bootstrap.stat.exists
+
+- name: Refuse unmarked Splunk instances with an initialized password database
+  ansible.builtin.assert:
+    that:
+      - not _detection_splunk_password_file.stat.exists
+    fail_msg: >-
+      Splunk has an existing password database but no role-owned bootstrap marker;
+      user-seed.conf would be ignored. Recover the correct administrator state
+      explicitly rather than claiming machine-credential bootstrap.
+  when: not _detection_splunk_bootstrap.stat.exists
+
+- name: Refuse unmarked Splunk instances with preexisting first-start configuration
+  ansible.builtin.assert:
+    that:
+      - not (_detection_splunk_first_start_config.results | selectattr('stat.exists') | list | length > 0)
+    fail_msg: >-
+      Splunk has preexisting user-seed.conf or authentication.conf without a
+      role-owned bootstrap marker. Refusing to overwrite or remove administrator
+      configuration; recover or adopt the instance explicitly.
+  when: not _detection_splunk_bootstrap.stat.exists
+
 - name: Require preserved bootstrap state for every durable lifecycle manifest
   ansible.builtin.assert:
     that:
@@ -317,6 +365,11 @@
   register: _detection_splunk_package_install
   changed_when: true
 
+- name: Configure native Linux logging for the local Splunk reader
+  ansible.builtin.include_role:
+    name: ludus_detection_linux_logging
+    tasks_from: main
+
 - name: Create protected Splunk configuration and state directories
   ansible.builtin.file:
     path: "{{ item.path }}"
@@ -326,24 +379,82 @@
     mode: "{{ item.mode }}"
   loop:
     - {path: "{{ detection_splunk_secret_dir }}", owner: "{{ detection_splunk_root_owner }}", group: "{{ detection_splunk_root_group }}", mode: "0700"}
-    - {path: "{{ detection_splunk_maintenance_state_path | dirname }}", owner: "{{ detection_splunk_root_owner }}", group: "{{ detection_splunk_root_group }}", mode: "0750"}
+    - {path: "{{ detection_splunk_maintenance_state_path | dirname }}", owner: "{{ detection_splunk_root_owner }}", group: "{{ detection_splunk_root_group }}", mode: "0700"}
     - {path: "{{ detection_splunk_provenance_path | dirname }}", owner: "{{ detection_splunk_root_owner }}", group: "{{ detection_splunk_root_group }}", mode: "0750"}
     - {path: "{{ detection_splunk_indexes_path | dirname }}", owner: "{{ detection_splunk_file_owner }}", group: "{{ detection_splunk_file_group }}", mode: "0750"}
     - {path: "{{ detection_splunk_hec_input_path | dirname }}", owner: "{{ detection_splunk_file_owner }}", group: "{{ detection_splunk_file_group }}", mode: "0750"}
 
+- name: Install scoped atomic first-start file helper
+  ansible.builtin.copy:
+    src: splunk_first_start.py
+    dest: "{{ detection_splunk_bootstrap_state_path | dirname }}/splunk-first-start.py"
+    owner: "{{ detection_splunk_root_owner }}"
+    group: "{{ detection_splunk_root_group }}"
+    mode: "0750"
+  when: not _detection_splunk_bootstrap.stat.exists
+
+- name: Acquire exclusive first-start bootstrap lock
+  ansible.builtin.command:
+    argv:
+      - "{{ detection_splunk_python }}"
+      - "{{ detection_splunk_bootstrap_state_path | dirname }}/splunk-first-start.py"
+      - acquire
+      - --lock
+      - "{{ detection_splunk_bootstrap_state_path | dirname }}/splunk-first-start.lock"
+  register: _detection_splunk_first_start_lock
+  changed_when: true
+  when: not _detection_splunk_bootstrap.stat.exists
+  no_log: true
+
 - name: Bootstrap Splunk without credentials in process arguments
   when: not _detection_splunk_bootstrap.stat.exists
   block:
+    - name: Stage permissive one-time password policy for the approved lab credential
+      ansible.builtin.command:
+        argv:
+          - "{{ detection_splunk_python }}"
+          - "{{ detection_splunk_bootstrap_state_path | dirname }}/splunk-first-start.py"
+          - stage
+          - --path
+          - "{{ detection_splunk_initial_auth_policy_path }}"
+          - --lock
+          - "{{ detection_splunk_bootstrap_state_path | dirname }}/splunk-first-start.lock"
+          - --token
+          - "{{ _detection_splunk_first_start_lock.stdout }}"
+          - --mode
+          - "0644"
+          - --owner
+          - "{{ detection_splunk_root_owner }}"
+          - --group
+          - "{{ detection_splunk_root_group }}"
+        stdin: "[splunk_auth]\nminPasswordLength = 6\n"
+      register: _detection_splunk_staged_auth_policy
+      changed_when: true
+
     - name: Stage protected one-use Splunk admin seed
-      ansible.builtin.copy:
-        dest: "{{ detection_splunk_seed_path }}"
-        owner: "{{ detection_splunk_file_owner }}"
-        group: "{{ detection_splunk_file_group }}"
-        mode: "0600"
-        content: |
+      ansible.builtin.command:
+        argv:
+          - "{{ detection_splunk_python }}"
+          - "{{ detection_splunk_bootstrap_state_path | dirname }}/splunk-first-start.py"
+          - stage
+          - --path
+          - "{{ detection_splunk_seed_path }}"
+          - --lock
+          - "{{ detection_splunk_bootstrap_state_path | dirname }}/splunk-first-start.lock"
+          - --token
+          - "{{ _detection_splunk_first_start_lock.stdout }}"
+          - --mode
+          - "0600"
+          - --owner
+          - "{{ detection_splunk_file_owner }}"
+          - --group
+          - "{{ detection_splunk_file_group }}"
+        stdin: |
           [user_info]
-          USERNAME = admin
+          USERNAME = {{ detection_splunk_admin_username }}
           PASSWORD = {{ detection_splunk_admin_password }}
+      register: _detection_splunk_staged_seed
+      changed_when: true
       no_log: true
 
     - name: Start the user-approved initial trial without secret arguments
@@ -372,10 +483,69 @@
       changed_when: true
   always:
     - name: Remove one-use Splunk admin seed
-      ansible.builtin.file:
-        path: "{{ detection_splunk_seed_path }}"
-        state: absent
+      ansible.builtin.command:
+        argv:
+          - "{{ detection_splunk_python }}"
+          - "{{ detection_splunk_bootstrap_state_path | dirname }}/splunk-first-start.py"
+          - cleanup
+          - --lock
+          - "{{ detection_splunk_bootstrap_state_path | dirname }}/splunk-first-start.lock"
+          - --token
+          - "{{ _detection_splunk_first_start_lock.stdout }}"
+          - --record
+          - "{{ _detection_splunk_staged_seed.stdout }}"
+      when: _detection_splunk_staged_seed is defined and _detection_splunk_staged_seed.stdout is defined
+      register: _detection_splunk_seed_cleanup
+      changed_when: _detection_splunk_seed_cleanup.rc == 0
+      failed_when: false
       no_log: true
+    - name: Remove temporary first-start password policy override
+      ansible.builtin.command:
+        argv:
+          - "{{ detection_splunk_python }}"
+          - "{{ detection_splunk_bootstrap_state_path | dirname }}/splunk-first-start.py"
+          - cleanup
+          - --lock
+          - "{{ detection_splunk_bootstrap_state_path | dirname }}/splunk-first-start.lock"
+          - --token
+          - "{{ _detection_splunk_first_start_lock.stdout }}"
+          - --record
+          - "{{ _detection_splunk_staged_auth_policy.stdout }}"
+      when: _detection_splunk_staged_auth_policy is defined and _detection_splunk_staged_auth_policy.stdout is defined
+      register: _detection_splunk_auth_cleanup
+      changed_when: _detection_splunk_auth_cleanup.rc == 0
+      failed_when: false
+
+    - name: Report first-start ownership conflict during cleanup
+      ansible.builtin.debug:
+        msg: >-
+          A staged first-start file was replaced or changed and has been preserved.
+          Inspect the managed files and recover the unmarked Splunk install explicitly.
+      when: >-
+        (_detection_splunk_seed_cleanup.rc | default(0)) != 0 or
+        (_detection_splunk_auth_cleanup.rc | default(0)) != 0
+
+    - name: Release exclusive first-start bootstrap lock
+      ansible.builtin.command:
+        argv:
+          - "{{ detection_splunk_python }}"
+          - "{{ detection_splunk_bootstrap_state_path | dirname }}/splunk-first-start.py"
+          - release
+          - --lock
+          - "{{ detection_splunk_bootstrap_state_path | dirname }}/splunk-first-start.lock"
+          - --token
+          - "{{ _detection_splunk_first_start_lock.stdout }}"
+      changed_when: true
+
+- name: Require first-start cleanup to retain verified ownership
+  ansible.builtin.assert:
+    that:
+      - (_detection_splunk_seed_cleanup.rc | default(0)) == 0
+      - (_detection_splunk_auth_cleanup.rc | default(0)) == 0
+    fail_msg: >-
+      A staged first-start path was replaced or changed and was preserved. Inspect
+      the first-start ownership failure above and recover the unmarked install explicitly.
+  when: not _detection_splunk_bootstrap.stat.exists
 
 - name: Generate the workload-only HEC token once without output
   ansible.builtin.command:

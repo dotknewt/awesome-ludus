@@ -26,16 +26,20 @@
       - detection_runner_api_contract.bootstrap_auth.expiration_days == 1
       - detection_runner_api_contract.bootstrap_auth.scopes is sequence
       - detection_runner_api_contract.bootstrap_auth.scopes is not string
-      - detection_runner_api_contract.bootstrap_auth.scopes | length == 2
-      - detection_runner_api_contract.bootstrap_auth.scopes | unique | length == 2
+      - detection_runner_api_contract.bootstrap_auth.scopes | length == 3
+      - detection_runner_api_contract.bootstrap_auth.scopes | unique | length == 3
+      - detection_runner_api_contract.bootstrap_auth.scopes == ['create_runner', 'manage_runner', 'read_api']
       - detection_runner_api_contract.bootstrap_auth.mode == '0600'
       - detection_runner_api_contract.bootstrap_auth.protected_path == '/etc/detection-engineering/secrets/runner-api-bootstrap.token'
       - detection_runner_api_contract.bootstrap_auth.revoke_method == 'DELETE'
       - detection_runner_api_contract.bootstrap_auth.revoke_endpoint is match('^/[^?\\s]+$')
-      - detection_runner_api_contract.manager.keys() | list | sort == ['create_endpoint', 'create_method', 'create_scope', 'detail_endpoint', 'detail_method', 'local_verify_command', 'lookup_endpoint', 'lookup_method', 'manage_scope', 'pause_at_create', 'request_fields', 'response_token_field', 'runner_type', 'update_endpoint', 'update_method'] | sort
+      - detection_runner_api_contract.manager.keys() | list | sort == ['create_endpoint', 'create_method', 'create_scope', 'detail_endpoint', 'detail_method', 'local_verify_command', 'lookup_endpoint', 'lookup_method', 'manage_scope', 'pause_at_create', 'read_scope', 'request_fields', 'response_token_field', 'runner_type', 'update_endpoint', 'update_method'] | sort
       - detection_runner_api_contract.manager.pause_at_create | bool
       - detection_runner_api_contract.manager.create_scope != detection_runner_api_contract.manager.manage_scope
-      - detection_runner_api_contract.bootstrap_auth.scopes | sort == [detection_runner_api_contract.manager.create_scope, detection_runner_api_contract.manager.manage_scope] | sort
+      - detection_runner_api_contract.manager.create_scope == 'create_runner'
+      - detection_runner_api_contract.manager.manage_scope == 'manage_runner'
+      - detection_runner_api_contract.manager.read_scope == 'read_api'
+      - detection_runner_api_contract.bootstrap_auth.scopes | sort == [detection_runner_api_contract.manager.create_scope, detection_runner_api_contract.manager.manage_scope, detection_runner_api_contract.manager.read_scope] | sort
       - detection_runner_api_contract.manager.runner_type is string
       - detection_runner_api_contract.manager.runner_type | length > 0
       - detection_runner_api_contract.manager.request_fields | sort == ['description', 'paused', 'runner_type'] | sort
@@ -55,7 +59,8 @@
       - detection_runner_jobs_contract.method == 'GET'
       - detection_runner_jobs_contract.endpoint is match('^/[^?\\s]+$')
       - (':id' in detection_runner_jobs_contract.endpoint) or ('{id}' in detection_runner_jobs_contract.endpoint)
-      - detection_gitlab_readiness_contract.keys() | list | sort == ['attempts', 'delay_seconds', 'endpoint', 'method', 'success_statuses']
+      - detection_gitlab_readiness_contract.keys() | list | sort == ['attempts', 'delay_seconds', 'endpoint', 'method', 'success_statuses', 'transport_base_url']
+      - detection_gitlab_readiness_contract.transport_base_url == 'http://localhost'
       - detection_gitlab_readiness_contract.endpoint is match('^/[^?\\s]+$')
       - detection_gitlab_readiness_contract.method == 'GET'
       - detection_gitlab_readiness_contract.success_statuses is sequence

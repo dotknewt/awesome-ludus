@@ -23,12 +23,43 @@ def main():
 
     with tarfile.open(archive, "r:gz") as bundle:
         members = bundle.getmembers()
-        if len(members) != 1 or members[0].name != "laurel" or not members[0].isreg():
-            raise ValueError("archive must contain exactly one regular root member named laurel")
-        source = bundle.extractfile(members[0])
+        selected = None
+        seen = set()
+        member_types = {}
+        for member in members:
+            name = member.name
+            if "\\" in name or name.startswith("/") or "\x00" in name:
+                raise ValueError("archive contains an unsafe member path")
+            parts = name.split("/")
+            if member.isdir() and parts[-1] == "":
+                parts.pop()
+            if not parts or any(part in ("", ".", "..") for part in parts):
+                raise ValueError("archive contains an unsafe member path")
+            canonical = "/".join(parts)
+            if canonical in seen:
+                raise ValueError("archive contains duplicate member paths")
+            seen.add(canonical)
+            if not (member.isreg() or member.isdir()):
+                raise ValueError("archive contains an unsupported member type")
+            member_types[canonical] = member.isdir()
+            if canonical == "laurel":
+                if not member.isreg():
+                    raise ValueError("archive must contain one regular root member named laurel")
+                selected = member
+        for canonical in member_types:
+            parts = canonical.split("/")
+            for depth in range(1, len(parts)):
+                ancestor = "/".join(parts[:depth])
+                if ancestor in member_types and not member_types[ancestor]:
+                    raise ValueError("regular member is an ancestor of another archive path")
+        if selected is None:
+            raise ValueError("archive must contain one regular root member named laurel")
+        source = bundle.extractfile(selected)
         if source is None:
             raise ValueError("Laurel archive member is unreadable")
         payload = source.read()
+        if len(payload) != selected.size:
+            raise ValueError("Laurel archive member is truncated")
 
     if args.check_only:
         print("OK safe archive")
@@ -62,5 +93,5 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (OSError, tarfile.TarError, ValueError) as error:
+    except (EOFError, OSError, tarfile.TarError, ValueError) as error:
         raise SystemExit(f"Laurel artifact rejected: {error}")

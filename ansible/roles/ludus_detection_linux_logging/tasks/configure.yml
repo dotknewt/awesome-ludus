@@ -1,27 +1,4 @@
 ---
-- name: Require checksum-pinned Laurel RuntimeArtifact before mutation
-  ansible.builtin.assert:
-    that:
-      - detection_laurel_artifact is mapping
-    fail_msg: A checksum-pinned Laurel RuntimeArtifact is required; installation facts remain BLOCKED
-
-- name: Validate native Laurel role inputs
-  ansible.builtin.assert:
-    that:
-      - detection_linux_host_id is string
-      - detection_linux_host_id | length > 0
-      - detection_laurel_artifact.keys() | sort == ['download_auth_required', 'sha256', 'url', 'version']
-      - detection_laurel_artifact.version is string
-      - detection_laurel_artifact.version | length > 0
-      - detection_laurel_artifact.url is string
-      - (detection_laurel_artifact.url is match('^https://')) or ((detection_logging_root | length > 0) and (detection_laurel_artifact.url is match('^file://')))
-      - detection_laurel_artifact.sha256 is match('^[0-9a-f]{64}$')
-      - detection_laurel_artifact.download_auth_required is sameas false
-      - detection_laurel_read_user in ['splunkfwd', 'splunk']
-      - detection_laurel_rotate_size == 5000000
-      - detection_laurel_rotate_generations == 10
-    fail_msg: Invalid native Laurel artifact, reader, or rotation contract
-
 - name: Verify the distro auditd package is installed
   ansible.builtin.command:
     argv:
@@ -97,6 +74,53 @@
     fail_msg: Expected auth.log/syslog source is absent or not a regular file
   loop: "{{ detection_common_sources.results }}"
 
+- name: Inspect the private state parent
+  ansible.builtin.stat:
+    path: "{{ detection_logging_root }}/var/lib"
+    follow: false
+  register: detection_stock_private_grandparent
+
+- name: Require a trusted private state parent
+  ansible.builtin.assert:
+    that:
+      - detection_stock_private_grandparent.stat.exists
+      - detection_stock_private_grandparent.stat.isdir
+      - not detection_stock_private_grandparent.stat.islnk
+      - not detection_stock_private_grandparent.stat.wgrp
+      - not detection_stock_private_grandparent.stat.woth
+      - (detection_logging_root | length > 0) or detection_stock_private_grandparent.stat.uid == 0
+    fail_msg: Refusing unsafe /var/lib parent before private stock-log state preparation
+
+- name: Inspect the role-owned shared private state directory
+  ansible.builtin.stat:
+    path: "{{ detection_logging_root }}/var/lib/detection-engineering"
+    follow: false
+  register: detection_stock_private_parent_before
+
+- name: Refuse an untrusted existing role-owned shared private state object
+  ansible.builtin.assert:
+    that:
+      - >-
+        not detection_stock_private_parent_before.stat.exists
+        or (
+          detection_stock_private_parent_before.stat.isdir
+          and not detection_stock_private_parent_before.stat.islnk
+          and not detection_stock_private_parent_before.stat.wgrp
+          and not detection_stock_private_parent_before.stat.woth
+          and ((detection_logging_root | length > 0) or detection_stock_private_parent_before.stat.uid == 0)
+        )
+    fail_msg: Refusing linked, non-directory, writable, or non-root role-owned shared private state
+
+- name: Prepare the role-owned shared private state directory
+  ansible.builtin.file:
+    path: "{{ detection_logging_root }}/var/lib/detection-engineering"
+    state: directory
+    mode: "0700"
+  register: detection_stock_private_parent_preparation
+
+- name: Apply fixed stock-log reader access policy
+  ansible.builtin.include_tasks: stock_log_access.yml
+
 - name: Exercise common source reads as the actual assigned reader
   ansible.builtin.command:
     argv:
@@ -117,7 +141,7 @@
 - name: Refuse unreadable auth or system telemetry
   ansible.builtin.assert:
     that: item.rc == 0
-    fail_msg: Laurel reader cannot read required auth/system source; this role does not alter stock ownership or ACLs
+    fail_msg: Laurel reader cannot read required auth/system source after fixed stock-log access application
   loop: "{{ detection_common_source_reads.results }}"
 
 - name: Create Laurel artifact cache directory
@@ -426,7 +450,7 @@
   ansible.builtin.file:
     path: "{{ detection_logging_root }}/var/lib/detection-engineering"
     state: directory
-    mode: "0750"
+    mode: "0700"
 
 - name: Record successful native auditd and Laurel application
   ansible.builtin.copy:

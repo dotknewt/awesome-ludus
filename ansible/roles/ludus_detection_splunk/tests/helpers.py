@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from support import run_production_include
+from local_logging_support import configure_local_logging
 
 
 ROLE = "ludus_detection_splunk"
@@ -30,6 +31,9 @@ def make_fixture(tmp_path: Path) -> dict[str, Any]:
     package_state = root / "package-state"
     service_state = root / "service-state"
     service_enabled = root / "service-enabled"
+    config_root = root / "opt/splunk/etc"
+    expected_admin_username = root / "expected-admin-username"
+    expected_admin_username.write_text("admin\n", encoding="utf-8")
 
     logger = f"printf '%s\\n' \"$*\" >> {calls}"
     _executable(
@@ -67,13 +71,12 @@ def make_fixture(tmp_path: Path) -> dict[str, Any]:
         fake_bin / "splunk",
         f"{logger}\n"
         "case \"${1:-}\" in\n"
-        f"  start) printf running > {service_state} ;;\n"
+            f"  start) [ -f {config_root}/system/local/authentication.conf ] || exit 31; grep -q '^minPasswordLength = 6$' {config_root}/system/local/authentication.conf || exit 32; [ -f {config_root}/system/local/user-seed.conf ] || exit 33; grep -Fxq \"USERNAME = $(cat {expected_admin_username})\" {config_root}/system/local/user-seed.conf || exit 34; [ ! -f {root}/fail-splunk-start ] || exit 35; if [ -f {root}/replace-auth-before-cleanup ]; then rm {config_root}/system/local/authentication.conf; printf '[splunk_auth]\\ncustomSetting = competing-writer\\n' > {config_root}/system/local/authentication.conf; fi; if [ -f {root}/consume-seed-during-start ]; then rm {config_root}/system/local/user-seed.conf; fi; printf running > {service_state} ;;\n"
         f"  enable) printf enabled > {service_enabled} ;;\n"
         f"  status) [ -f {service_state} ] && [ \"$(cat {service_state})\" = running ] && printf '%s\\n' 'splunkd is running' ;;\n"
         "esac",
     )
 
-    config_root = root / "opt/splunk/etc"
     variables = {
         "range_id": "synthetic-range",
         "detection_splunk_artifact": {
@@ -96,6 +99,7 @@ def make_fixture(tmp_path: Path) -> dict[str, Any]:
         "detection_splunk_hec_supported": True,
         "detection_splunk_search_api_supported": True,
         "detection_splunk_bind_ip": "10.77.10.14",
+        "detection_splunk_admin_username": "admin",
         "detection_splunk_admin_password": "ADMIN-CANARY-never-in-process-output",
         "detection_splunk_restore_authorized": False,
         "detection_splunk_maintenance_state_path": str(root / "state/maintenance.json"),
@@ -105,6 +109,8 @@ def make_fixture(tmp_path: Path) -> dict[str, Any]:
         "detection_splunk_hec_token_path": str(root / "etc/secrets/hec-workload.token"),
         "detection_splunk_bootstrap_state_path": str(root / "state/bootstrap-complete"),
         "detection_splunk_seed_path": str(config_root / "system/local/user-seed.conf"),
+        "detection_splunk_initial_auth_policy_path": str(config_root / "system/local/authentication.conf"),
+        "detection_splunk_password_file_path": str(config_root / "passwd"),
         "detection_splunk_indexes_path": str(config_root / "system/local/indexes.conf"),
         "detection_splunk_inputs_path": str(config_root / "system/local/inputs.conf"),
         "detection_splunk_web_path": str(config_root / "system/local/web.conf"),
@@ -120,7 +126,7 @@ def make_fixture(tmp_path: Path) -> dict[str, Any]:
         "detection_splunk_root_owner": getpass.getuser(),
         "detection_splunk_root_group": getpass.getuser(),
     }
-    return {
+    fixture = {
         "root": root,
         "fake_bin": fake_bin,
         "calls": calls,
@@ -128,13 +134,39 @@ def make_fixture(tmp_path: Path) -> dict[str, Any]:
         "service_state": service_state,
         "service_enabled": service_enabled,
         "variables": variables,
+        "expected_admin_username": expected_admin_username,
     }
+    configure_local_logging(fixture)
+    return fixture
 
 
 def run_role(fixture: dict[str, Any], **updates: Any):
     variables = dict(fixture["variables"])
     variables.update(updates)
-    return run_production_include(ROLE, "main", variables, fixture["fake_bin"])
+    if "detection_splunk_admin_username" in updates:
+        fixture["expected_admin_username"].write_text(
+            f"{updates['detection_splunk_admin_username']}\n", encoding="utf-8"
+        )
+    previous_pythonpath = os.environ.get("PYTHONPATH")
+    adapter = str(fixture["python_adapter"])
+    os.environ["PYTHONPATH"] = adapter + (os.pathsep + previous_pythonpath if previous_pythonpath else "")
+    cleanup_failure = (fixture["local_logging_state"] / "fail-staging-cleanup").is_file()
+    previous_cleanup = os.environ.get("MODELED_STAGING_CLEANUP_FAILURE")
+    if cleanup_failure:
+        os.environ["MODELED_STAGING_CLEANUP_FAILURE"] = "1"
+    else:
+        os.environ.pop("MODELED_STAGING_CLEANUP_FAILURE", None)
+    try:
+        return run_production_include(ROLE, "main", variables, fixture["fake_bin"])
+    finally:
+        if previous_pythonpath is None:
+            os.environ.pop("PYTHONPATH", None)
+        else:
+            os.environ["PYTHONPATH"] = previous_pythonpath
+        if previous_cleanup is None:
+            os.environ.pop("MODELED_STAGING_CLEANUP_FAILURE", None)
+        else:
+            os.environ["MODELED_STAGING_CLEANUP_FAILURE"] = previous_cleanup
 
 
 def command_calls(fixture: dict[str, Any]) -> list[str]:

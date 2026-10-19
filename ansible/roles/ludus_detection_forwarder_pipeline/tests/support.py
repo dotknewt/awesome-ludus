@@ -6,6 +6,9 @@ import copy
 import hashlib
 import importlib.util
 import io
+import json
+import os
+import shutil
 import sys
 import tarfile
 from pathlib import Path
@@ -18,11 +21,14 @@ def _load(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
 
 _shared = _load("pipeline_blueprint_support", ROOT / "blueprints/detection-engineering/tests/support.py")
+_linux_role = ROOT / "ansible/roles/ludus_detection_linux_logging"
+_stock = _load("pipeline_stock_access_model", _linux_role / "tests/stock_access_model.py")
 _this_support = sys.modules[__name__]
 sys.modules["support"] = _shared
 try:
@@ -99,6 +105,7 @@ class PipelineFixture:
         self.variables = copy.deepcopy(base["variables"])
         self.state = self.root / "pipeline-state"
         self.state.mkdir()
+        (self.root / "var/lib").mkdir(parents=True, exist_ok=True)
         for name, value in {"audit-enabled": "no\n", "audit-active": "no\n", "rules": "", "ownership": "", "acl": ""}.items():
             (self.state / name).write_text(value, encoding="utf-8")
         (self.state / "audit-package").write_text("installed\n", encoding="utf-8")
@@ -107,6 +114,27 @@ class PipelineFixture:
         self.unrelated.write_text("preserve\n", encoding="utf-8")
         self.unrelated_service = self.lifecycle / "unrelated-service"
         self.unrelated_service.write_text("active\n", encoding="utf-8")
+
+        self.stock_state = self.state / "stock-model.json"
+        self.stock_profile = _linux_role / "files/stock-log-profiles/bookworm"
+        self.stock_helper = _linux_role / "files/configure_stock_log_access.py"
+        self.actual("/etc/rsyslog.d").mkdir(parents=True, exist_ok=True)
+        manifest = json.loads((self.stock_profile / "manifest.json").read_text(encoding="utf-8"))
+        stock = _stock.ModelHost(self.root, "splunkfwd")
+        stock.users.pop("splunkfwd")
+        stock.groups.pop("splunkfwd")
+        for index, entry in enumerate(manifest["required"], start=1):
+            destination = self.actual(entry["target"])
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(self.stock_profile / entry["bundle"], destination)
+            destination.chmod(0o755 if entry["target"] == "/usr/lib/rsyslog/rsyslog-rotate" else 0o644)
+            stock.add_file(entry["target"], gid=0, ino=200 + index)
+        for index, logical in enumerate(("/var/log/auth.log", "/var/log/syslog"), start=1):
+            self.actual(logical).chmod(0o640)
+            stock.add_file(logical, gid=4, ino=100 + index, mode=0o640)
+            self._remove_readable(self.actual(logical))
+        stock.capture_rotation_profile(self.stock_profile)
+        stock.save(self.stock_state)
 
         laurel = self.actual("/var/log/laurel/audit.log")
         if laurel.exists():
@@ -129,6 +157,8 @@ class PipelineFixture:
             "detection_logging_chown_command": str(self.bin / "chown"),
             "detection_logging_runuser_command": str(self.bin / "runuser"),
             "detection_logging_service_command": str(self.bin / "systemctl"),
+            "detection_logging_python_command": str(self.bin / "stock-python"),
+            "detection_logging_rsyslogd_command": str(self.bin / "rsyslogd"),
             "detection_auditd_augenrules_command": str(self.bin / "augenrules"),
             "detection_auditd_auditctl_command": str(self.bin / "auditctl"),
             "detection_laurel_output_wait_timeout": 1,
@@ -148,6 +178,15 @@ class PipelineFixture:
 
     def deny_read(self, path: Path) -> None:
         self._remove_readable(path)
+        try:
+            logical = "/" + str(path.relative_to(self.root))
+        except ValueError:
+            logical = ""
+        if logical in {"/var/log/auth.log", "/var/log/syslog"}:
+            host = self.stock_host()
+            facts = host.files[logical]
+            host.files[logical] = _stock.FileFacts(**{**facts.__dict__, "mode": 0o600})
+            self.save_stock(host)
         rows = [line for line in (self.state / "acl").read_text(encoding="utf-8").splitlines() if not line.startswith(f"{path}:")]
         (self.state / "acl").write_text("\n".join(rows) + ("\n" if rows else ""), encoding="utf-8")
 
@@ -188,7 +227,7 @@ case "$2" in
   _laurel) [ -f {self.state}/laurel-account ] || exit 2 ;;
   *) exit 2 ;;
 esac
-printf '%s:x:999:999::/nonexistent:/usr/sbin/nologin\\n' "$2"''')
+printf '%s:x:{os.getuid()}:{os.getgid()}::/nonexistent:/usr/sbin/nologin\\n' "$2"''')
         _executable(self.bin / "useradd", f'''{log}
 [ "$1" = --system ] && [ "$2" = --home-dir ] && [ "$4" = --create-home ] && [ "$5" = _laurel ] || exit 9
 [ -f {self.lifecycle}/package-installed ] || exit 8
@@ -202,25 +241,88 @@ grep -Fvx "$3:_laurel" {self.state}/ownership > {self.state}/ownership.tmp || tr
 mv {self.state}/ownership.tmp {self.state}/ownership
 printf '%s:_laurel\\n' "$3" >> {self.state}/ownership
 printf "changed ownership of '%s'\\n" "$3"''')
-        _executable(self.bin / "runuser", f'''{log}
-case "$1" in
-  -u|--user) ;;
-  *) exit 89 ;;
-esac
-[ "$2" = splunkfwd ] && [ "$3" = -- ] || exit 80
-[ -f {self.lifecycle}/package-account ] || exit 81
-[ ! -f {self.lifecycle}/missing-account ] && [ ! -f {self.lifecycle}/wrong-account-uid ] && [ ! -f {self.lifecycle}/wrong-account-group ] || exit 82
-if [ "$4" = test ]; then
-  [ "$#" -eq 6 ] && [ "$5" = -r ] || exit 83
-  path=$6
-  [ -f "$path" ] || exit 84
-  inode=$(stat -c %i "$path")
-  grep -Fqx "$path|$inode" {self.readable} || grep -Fqx "$path:splunkfwd" {self.state}/acl || exit 85
-else
-  [ "$1" = --user ] || exit 86
-  shift 3
-  MODELED_FORWARDER_IDENTITY=splunkfwd exec "$@"
-fi''')
+        runuser = f'''#!/usr/bin/env python3
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+sys.path.insert(0, {str(_linux_role / "tests")!r})
+from stock_access_model import ModelHost
+
+args = sys.argv[1:]
+Path({str(self.calls)!r}).open("a").write(" ".join(args) + "\\n")
+if len(args) >= 3 and args[0] in ("-u", "--user") and args[2] == "--":
+    form, user, command = args[0], args[1], args[3:]
+elif len(args) >= 2 and args[1] == "--":
+    form, user, command = "bare", args[0], args[2:]
+else:
+    raise SystemExit(89)
+lifecycle = Path({str(self.lifecycle)!r})
+if (not (lifecycle / "package-account").is_file() or user != "splunkfwd" or
+        any((lifecycle / flag).is_file() for flag in ("missing-account", "wrong-account-uid", "wrong-account-group"))):
+    raise SystemExit(82)
+if command and Path(command[0]).name == "test":
+    if len(command) != 3 or command[1] != "-r":
+        raise SystemExit(83)
+    path = Path(command[2])
+    try:
+        logical = "/" + str(path.relative_to(Path({str(self.root)!r})))
+    except ValueError:
+        raise SystemExit(84)
+    if logical in ("/var/log/auth.log", "/var/log/syslog"):
+        host = ModelHost.load(Path({str(self.root)!r}), Path({str(self.stock_state)!r}))
+        identity = host.users.get(user)
+        group = host.groups.get(user)
+        allowed = bool(identity and group and logical in host.files and
+                       host.reader_can_read(logical, path, identity.uid, group.gid, "runuser", user))
+    else:
+        inode = path.stat().st_ino if path.is_file() else None
+        readable = Path({str(self.readable)!r}).read_text().splitlines()
+        acl = Path({str(self.state / "acl")!r}).read_text().splitlines()
+        allowed = f"{{path}}|{{inode}}" in readable or f"{{path}}:{{user}}" in acl
+    raise SystemExit(0 if allowed else 85)
+if form != "--user":
+    raise SystemExit(86)
+env = os.environ.copy()
+env["MODELED_FORWARDER_IDENTITY"] = user
+raise SystemExit(subprocess.run(command, env=env, check=False).returncode)
+'''
+        (self.bin / "runuser").write_text(runuser, encoding="utf-8")
+        (self.bin / "runuser").chmod(0o755)
+        stock_python = f'''#!/usr/bin/env python3
+from pathlib import Path
+import sys
+
+sys.path.insert(0, {str(_linux_role / "tests")!r})
+from stock_access_model import Identity, ModelHost, run_staged_entrypoint
+
+state_path = Path({str(self.stock_state)!r})
+root = Path({str(self.root)!r})
+lifecycle = Path({str(self.lifecycle)!r})
+calls = Path({str(self.calls)!r})
+host = ModelHost.load(root, state_path)
+if (lifecycle / "package-account").is_file():
+    identity = Identity(host.reader, {os.getuid()}, {os.getgid()})
+    host.users[host.reader] = identity
+    host.groups[host.reader] = identity
+else:
+    host.users.pop(host.reader, None)
+    host.groups.pop(host.reader, None)
+host.save(state_path)
+before = len(host.operations)
+calls.open("a").write("stock-helper:start\\n")
+rc = run_staged_entrypoint(sys.argv[1:], state_path, Path({str(self.stock_helper)!r}))
+after = ModelHost.load(root, state_path)
+with calls.open("a") as stream:
+    for operation in after.operations[before:]:
+        stream.write("stock-model:" + operation + "\\n")
+    stream.write(f"stock-helper:exit:{{rc}}\\n")
+raise SystemExit(rc)
+'''
+        (self.bin / "stock-python").write_text(stock_python, encoding="utf-8")
+        (self.bin / "stock-python").chmod(0o755)
+        _executable(self.bin / "rsyslogd", "exit 99")
         _executable(self.bin / "augenrules", f'''{log}
 [ "$1" = --load ] || exit 9
 [ -f {self.state}/fail-rules ] && exit 15
@@ -231,6 +333,7 @@ printf '%s\\n' '-a always,exit -F arch=b64 -S execve -F key=detection_process' >
 cat {self.state}/rules''')
         unit = self.actual("/etc/systemd/system/SplunkForwarder.service")
         systemctl = f'''#!/usr/bin/env python3
+import json
 import os
 import pathlib
 import shlex
@@ -247,7 +350,8 @@ args = sys.argv[1:]
 calls.open("a").write(" ".join(args) + "\\n")
 if len(args) < 2:
     raise SystemExit(52)
-action, service = args[:2]
+action = args[0]
+service = args[-1] if action == "enable" and "--now" in args else args[1]
 if service == "auditd":
     if action == "show":
         print("loaded" if (state / "audit-unit").is_file() else "not-found", end="")
@@ -287,6 +391,15 @@ if service == "auditd":
         (state / "audit-active").write_text("yes\\n")
     else:
         raise SystemExit(52)
+elif service == "rsyslog":
+    model = pathlib.Path({str(self.stock_state)!r})
+    payload = json.loads(model.read_text())
+    if action == "is-enabled": raise SystemExit(0)
+    if action == "is-active": raise SystemExit(0 if payload["producer"]["active"] else 1)
+    if action == "enable" and "--now" in args:
+        payload["producer"]["active"] = True
+        model.write_text(json.dumps(payload))
+    else: raise SystemExit(52)
 elif service == "SplunkForwarder.service":
     if action == "show":
         if not unit.is_file(): raise SystemExit(50)
@@ -321,6 +434,45 @@ else:
     def calls_since(self, index: int = 0) -> list[str]:
         return self.calls.read_text(encoding="utf-8").splitlines()[index:]
 
+    def stock_host(self):
+        return _stock.ModelHost.load(self.root, self.stock_state)
+
+    def save_stock(self, host) -> None:
+        host.save(self.stock_state)
+
+    def inject_stock_failure(self, mutation: str) -> None:
+        host = self.stock_host()
+        if mutation == "missing-unit":
+            host.producer = _stock.ProducerObservation(False, False)
+        elif mutation == "wrong-context":
+            host.mount_matches = False
+        elif mutation.startswith("group-auth-"):
+            host.fail_once("group_auth", mutation.rsplit("-", 1)[1])
+        elif mutation.startswith("publish-"):
+            host.fail_once("publish_config", mutation.rsplit("-", 1)[1])
+        elif mutation.startswith("restart-"):
+            host.fail_once("restart", mutation.rsplit("-", 1)[1])
+        elif mutation.startswith("marker-"):
+            host.fail_once("write_applied", mutation.rsplit("-", 1)[1])
+        elif mutation == "helper-cleanup":
+            host.primitive_faults["candidate_unlink"] = 1
+        else:
+            raise ValueError(f"unknown stock failure {mutation}")
+        self.save_stock(host)
+
+    def prepare_active_stock_reapplication(self, mutation: str) -> None:
+        marker = self.actual("/var/lib/detection-engineering/stock-log-access/applied.json")
+        marker.unlink()
+        host = self.stock_host()
+        if mutation == "group-auth-after":
+            for logical in ("/var/log/auth.log", "/var/log/syslog"):
+                facts = host.files[logical]
+                host.files[logical] = _stock.FileFacts(**{**facts.__dict__, "gid": host.groups["adm"].gid})
+        elif mutation == "publish-after":
+            shutil.copyfile(self.stock_profile / "rsyslog.conf", self.actual("/etc/rsyslog.conf"))
+        self.save_stock(host)
+        self.inject_stock_failure(mutation)
+
     def snapshot(self) -> dict[str, bytes | None]:
         paths = {
             "package": self.package_state,
@@ -331,6 +483,8 @@ else:
             "laurel_config": self.actual("/etc/laurel/config.toml"),
             "laurel_output": self.actual("/var/log/laurel/audit.log"),
             "laurel_marker": self.actual("/var/lib/detection-engineering/laurel-apply.sha256"),
+            "stock_marker": self.actual("/var/lib/detection-engineering/stock-log-access/applied.json"),
+            "stock_config": self.actual("/etc/rsyslog.conf"),
             "audit_unit": self.state / "audit-unit",
             "audit_enabled": self.state / "audit-enabled",
             "audit_active": self.state / "audit-active",

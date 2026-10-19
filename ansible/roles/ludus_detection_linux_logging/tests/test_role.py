@@ -2,13 +2,17 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import subprocess
+import sys
 import tarfile
 from pathlib import Path
 
 import pytest
+import yaml
 
-from support import run_production_include
+from support import REPOSITORY_ROOT, run_production_include
+from stock_access_model import FileFacts, ModelHost, ProducerObservation
 
 
 ROLE = Path(__file__).resolve().parents[1]
@@ -24,6 +28,24 @@ def _artifact(tmp_path, *, extra_member=False, member_mtime=0):
         member.mtime = member_mtime
         member.size = len(binary)
         bundle.addfile(member, io.BytesIO(binary))
+        if not extra_member:
+            companions = [
+                ("laurel2audit", False), ("INSTALL.md", False), ("README.md", False),
+                ("performance.md", False), ("man", True), ("man/laurel.8", False),
+                ("man/.gitignore", False), ("man/laurel-about.7", False),
+                ("man/laurel2audit.8", False), ("man/laurel.8.md", False),
+                ("man/laurel2audit.8.md", False), ("man/Makefile", False),
+                ("man/laurel-about.7.md", False),
+            ]
+            for name, is_directory in companions:
+                companion = tarfile.TarInfo(name)
+                if is_directory:
+                    companion.type = tarfile.DIRTYPE
+                    bundle.addfile(companion)
+                else:
+                    content = b"harmless companion"
+                    companion.size = len(content)
+                    bundle.addfile(companion, io.BytesIO(content))
         if extra_member:
             extra = b"not allowed"
             member = tarfile.TarInfo("../escape")
@@ -48,14 +70,20 @@ def _fixture(
     no_output=False,
     no_reader_access=False,
     chown_noop=False,
+    stock_failure=None,
+    stock_restart_result=True,
+    record_stock_stage=False,
 ):
     root = tmp_path / "root"
-    for relative in ("etc/audit/plugins.d", "etc/audit/rules.d", "var/log"):
+    for relative in (
+        "etc/audit/plugins.d", "etc/audit/rules.d", "etc/rsyslog.d",
+        "etc/logrotate.d", "usr/lib/rsyslog", "var/lib", "var/log",
+    ):
         (root / relative).mkdir(parents=True, exist_ok=True)
     for name in ("auth.log", "syslog"):
         path = root / "var/log" / name
         path.write_text(f"retained {name}\n")
-        path.chmod(0o644 if readable else 0o600)
+        path.chmod(0o640 if readable else 0o600)
 
     state = tmp_path / "state"
     state.mkdir()
@@ -67,6 +95,27 @@ def _fixture(
     (state / "rules").write_text("")
     (state / "ownership").write_text("")
     (state / "acl").write_text("")
+
+    profile = ROLE / "files/stock-log-profiles/bookworm"
+    manifest = json.loads((profile / "manifest.json").read_text())
+    modeled = ModelHost(root, reader)
+    for index, entry in enumerate(manifest["required"], start=1):
+        destination = root / entry["target"].lstrip("/")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(profile / entry["bundle"], destination)
+        destination.chmod(0o755 if entry["target"] == "/usr/lib/rsyslog/rsyslog-rotate" else 0o644)
+        modeled.add_file(entry["target"], gid=0, ino=200 + index)
+    for index, name in enumerate(("auth.log", "syslog"), start=1):
+        modeled.add_file(
+            f"/var/log/{name}", gid=4, ino=100 + index,
+            mode=0o640 if readable else 0o600,
+        )
+    modeled.capture_rotation_profile(profile)
+    if stock_failure is not None:
+        operation, when = stock_failure
+        modeled.fail_once(operation, when)
+    modeled.restart_result = stock_restart_result
+    modeled.save(state / "stock-model.json")
     if auditd_installed:
         (state / "package-status").write_text(auditd_status)
     if auditd_unit:
@@ -142,21 +191,77 @@ echo "changed ownership of '$3'"
 '''
     )
     (fake / "runuser").write_text(
-        rf'''#!/bin/sh
-[ "$1" = -u ] && grep -qx "$2" {accounts} || exit 8
-[ "$3" = -- ] && [ "$4" = test ] && [ "$5" = -r ] || exit 9
-path=$6
-mode=$(stat -c %a "$path") || exit 7
-case "${{mode#??}}" in
-  4|5|6|7) cat "$path" >/dev/null;;
-  *) grep -Fxq "$path:$2" {state}/acl && cat "$path" >/dev/null || exit 6;;
-esac
-echo "read:$2:$path" >> {calls}
+        f'''#!/usr/bin/python3
+import json
+from pathlib import Path
+import sys
+
+args = sys.argv[1:]
+if len(args) == 6 and args[0] == "-u" and args[2] == "--":
+    user, command, flag, raw_path = args[1], args[3], args[4], args[5]
+elif len(args) == 5 and args[1] == "--":
+    user, command, flag, raw_path = args[0], args[2], args[3], args[4]
+else:
+    raise SystemExit(9)
+if Path(command).name != "test" or flag != "-r":
+    raise SystemExit(9)
+if user not in Path({str(accounts)!r}).read_text().splitlines():
+    raise SystemExit(8)
+path = Path(raw_path)
+payload = json.loads(Path({str(state / "stock-model.json")!r}).read_text())
+root = Path({str(root)!r})
+try:
+    logical = "/" + str(path.relative_to(root))
+except ValueError:
+    raise SystemExit(7)
+facts = payload["files"].get(logical)
+allowed = False
+if facts is not None and user == payload["reader"]:
+    uid = 2201 if user == "splunkfwd" else 2202
+    gid = uid
+    inode_matches = path.is_file() and path.stat().st_ino == payload["physical_inodes"].get(logical)
+    allowed = inode_matches and ((uid == facts["uid"] and facts["mode"] & 0o400) or
+                                 (gid == facts["gid"] and facts["mode"] & 0o040) or
+                                 facts["mode"] & 0o004)
+if not allowed:
+    allowed = f"{{path}}:{{user}}" in Path({str(state / "acl")!r}).read_text().splitlines()
+if not allowed:
+    raise SystemExit(6)
+Path({str(calls)!r}).open("a").write(f"read:{{user}}:{{path}}\\n")
 '''
     )
+    (fake / "stock-python").write_text(
+        f'''#!/usr/bin/python3
+from pathlib import Path
+import sys
+sys.path.insert(0, {str(ROLE / "tests")!r})
+from stock_access_model import run_staged_entrypoint
+rc = run_staged_entrypoint(
+    sys.argv[1:], Path({str(state / "stock-model.json")!r}),
+    Path({str(ROLE / "files/configure_stock_log_access.py")!r}),
+)
+if {record_stock_stage!r}:
+    Path({str(state / "stock-stage-path")!r}).write_text(str(Path(sys.argv[1]).parent))
+raise SystemExit(rc)
+'''
+    )
+    (fake / "rsyslogd").write_text("#!/bin/sh\nexit 99\n")
     (fake / "systemctl").write_text(
         rf'''#!/bin/sh
 echo "systemctl:$*" >> {calls}
+if [ "$2" = rsyslog ] || [ "${{3:-}}" = rsyslog ]; then
+  case "$1" in
+    is-enabled) exit 0 ;;
+    is-active)
+      /usr/bin/python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); raise SystemExit(0 if p["producer"]["active"] else 1)' {state}/stock-model.json
+      exit $?
+      ;;
+    enable)
+      /usr/bin/python3 -c 'import json,sys; f=sys.argv[1]; p=json.load(open(f)); p["producer"]["active"]=True; open(f,"w").write(json.dumps(p))' {state}/stock-model.json
+      exit 0
+      ;;
+  esac
+fi
 case "$1" in
   show)
     [ -f {state}/unit ] && echo loaded || echo not-found
@@ -247,16 +352,27 @@ def _variables(root, fake, archive, digest, *, reader="splunkfwd"):
         "detection_logging_chown_command": str(fake / "chown"),
         "detection_logging_runuser_command": str(fake / "runuser"),
         "detection_logging_service_command": str(fake / "systemctl"),
+        "detection_logging_python_command": str(fake / "stock-python"),
+        "detection_logging_rsyslogd_command": str(fake / "rsyslogd"),
         "detection_auditd_augenrules_command": str(fake / "augenrules"),
         "detection_auditd_auditctl_command": str(fake / "auditctl"),
         "detection_laurel_output_wait_timeout": 1,
     }
 
 
-def _run_main(variables, fake):
-    return run_production_include(
-        "ludus_detection_linux_logging", "main", variables, fake,
-    )
+def _run_main(variables, fake, *, action_plugins=None):
+    previous = os.environ.get("ANSIBLE_ACTION_PLUGINS")
+    try:
+        if action_plugins is not None:
+            os.environ["ANSIBLE_ACTION_PLUGINS"] = str(action_plugins)
+        return run_production_include(
+            "ludus_detection_linux_logging", "main", variables, fake,
+        )
+    finally:
+        if previous is None:
+            os.environ.pop("ANSIBLE_ACTION_PLUGINS", None)
+        else:
+            os.environ["ANSIBLE_ACTION_PLUGINS"] = previous
 
 
 def _valid(tmp_path, **fixture_options):
@@ -264,6 +380,147 @@ def _valid(tmp_path, **fixture_options):
     root, fake, state, calls = _fixture(tmp_path, **fixture_options)
     reader = fixture_options.get("reader", "splunkfwd")
     return root, fake, state, calls, _variables(root, fake, archive, digest, reader=reader)
+
+
+def _stock_host(root, state):
+    return ModelHost.load(root, state / "stock-model.json")
+
+
+def _stock_payload(state):
+    payload = json.loads((state / "stock-model.json").read_text())
+    reader = payload["reader"]
+    gid = 2201 if reader == "splunkfwd" else 2202
+    payload.setdefault("users", {reader: {"name": reader, "uid": gid, "gid": gid}})
+    payload.setdefault("groups", {
+        reader: {"name": reader, "uid": gid, "gid": gid},
+        "root": {"name": "root", "uid": 0, "gid": 0},
+        "adm": {"name": "adm", "uid": 4, "gid": 4},
+    })
+    payload.setdefault("packages", ["logrotate", "rsyslog"])
+    payload.setdefault("configured_argv", ["/usr/sbin/rsyslogd", "-n", "-iNONE"])
+    payload.setdefault("running_argv", ["/usr/sbin/rsyslogd", "-n", "-iNONE"])
+    payload.setdefault("running_executable", "/usr/sbin/rsyslogd")
+    payload.setdefault("drop_ins", [])
+    payload.setdefault("root_directory", "")
+    payload.setdefault("root_image", "")
+    payload.setdefault("mount_matches", True)
+    payload.setdefault("command_records", 1)
+    payload.setdefault("command_record_recognized", True)
+    payload.setdefault("observation_error", False)
+    payload.setdefault("observation_transition", False)
+    payload.setdefault("observation_sequence", [])
+    payload.setdefault("state_uid_overrides", {})
+    payload.setdefault("group_close_error_for", None)
+    payload.setdefault("primitive_faults", {})
+    payload.setdefault("rotation_profile_hashes", {})
+    return payload
+
+
+def _write_stock_payload(state, payload):
+    (state / "stock-model.json").write_text(json.dumps(payload, sort_keys=True))
+
+
+def _stage_cleanup_fault_plugin(tmp_path, state):
+    plugins = tmp_path / "action-plugins"
+    plugins.mkdir()
+    (plugins / "file.py").write_text(
+        f'''from pathlib import Path
+from ansible.plugins.action import ActionBase
+
+class ActionModule(ActionBase):
+    def run(self, tmp=None, task_vars=None):
+        marker = Path({str(state / "stock-stage-path")!r})
+        target = str(self._task.args.get("path", ""))
+        if (self._task.args.get("state") == "absent" and marker.is_file()
+                and target == marker.read_text()):
+            return {{"failed": True, "changed": False,
+                    "msg": "injected invocation-owned staging cleanup failure: " + target}}
+        return self._execute_module(
+            module_name="ansible.builtin.file", module_args=self._task.args,
+            task_vars=task_vars, tmp=tmp,
+        )
+'''
+    )
+    return plugins
+
+
+def _run_main_with_fqcn_cleanup_fault(tmp_path, variables, fake, state):
+    """Run actual main while wrapping only the resolved builtin file action."""
+    work = tmp_path / "fqcn-cleanup-harness"
+    work.mkdir()
+    inventory = work / "inventory.yml"
+    playbook = work / "playbook.yml"
+    launcher = work / "launch.py"
+    local_tmp = work / "ansible-local"
+    remote_tmp = work / "ansible-remote"
+    home = work / "home"
+    for directory in (local_tmp, remote_tmp, home):
+        directory.mkdir(mode=0o700)
+    inventory.write_text(yaml.safe_dump({
+        "all": {"hosts": {"testhost": {
+            "ansible_connection": "local",
+            "ansible_python_interpreter": sys.executable,
+        }}},
+    }, sort_keys=False))
+    playbook.write_text(yaml.safe_dump([{
+        "name": "Exercise production main with scoped FQCN cleanup fault",
+        "hosts": "all",
+        "gather_facts": False,
+        "become": False,
+        "vars": dict(variables),
+        "tasks": [{
+            "name": "Run ludus_detection_linux_logging main",
+            "ansible.builtin.include_role": {
+                "name": "ludus_detection_linux_logging", "tasks_from": "main",
+            },
+        }],
+    }], sort_keys=False))
+    launcher.write_text(f'''import sys
+from pathlib import Path
+from ansible.cli.playbook import main
+from ansible.executor.task_executor import TaskExecutor
+
+marker = Path({str(state / "stock-stage-path")!r})
+original_action_selection = TaskExecutor._get_action_handler_with_module_context
+
+def scoped_action_selection(self, templar):
+    handler, module = original_action_selection(self, templar)
+    if self._task.action == "ansible.builtin.file":
+        builtin_run = handler.run
+        def scoped_run(tmp=None, task_vars=None):
+            target = str(self._task.args.get("path", ""))
+            if (self._task.args.get("state") == "absent" and marker.is_file()
+                    and target == marker.read_text()):
+                return {{"failed": True, "changed": False,
+                        "msg": "injected invocation-owned staging cleanup failure: " + target}}
+            return builtin_run(tmp=tmp, task_vars=task_vars)
+        handler.run = scoped_run
+    return handler, module
+
+TaskExecutor._get_action_handler_with_module_context = scoped_action_selection
+raise SystemExit(main())
+''')
+    environment = os.environ.copy()
+    environment.update({
+        "ANSIBLE_HOME": str(work / "ansible-home"),
+        "ANSIBLE_LOCAL_TEMP": str(local_tmp),
+        "ANSIBLE_REMOTE_TEMP": str(remote_tmp),
+        "ANSIBLE_ROLES_PATH": str(REPOSITORY_ROOT / "ansible/roles"),
+        "HOME": str(home),
+        "PATH": f"{Path(fake).resolve()}{os.pathsep}{environment.get('PATH', '')}",
+    })
+    return subprocess.run(
+        [sys.executable, str(launcher), "-i", str(inventory), str(playbook)],
+        cwd=REPOSITORY_ROOT, env=environment, text=True, capture_output=True,
+    )
+
+
+def _remove_owned_stage(state):
+    marker = state / "stock-stage-path"
+    if marker.is_file():
+        stage = Path(marker.read_text())
+        if stage.is_dir() and stage.name.startswith("detection-stock-log-access-"):
+            shutil.rmtree(stage)
 
 
 def test_missing_artifact_refuses_before_mutation(tmp_path):
@@ -315,6 +572,129 @@ def test_laurel_read_user_exists_before_configuration(tmp_path):
     assert "useradd:" not in calls.read_text()
 
 
+def test_existing_role_private_parent_is_hardened_without_replacement(tmp_path):
+    root, fake, state, _calls, variables = _valid(tmp_path)
+    baseline = _run_main(variables, fake)
+    assert baseline.returncode == 0, baseline.stdout + baseline.stderr
+    parent = root / "var/lib/detection-engineering"
+    parent.chmod(0o750)
+    marker = parent / "laurel-apply.sha256"
+    unrelated = parent / "unrelated-state"
+    unrelated.write_text("retained unrelated\n")
+    marker_bytes = marker.read_bytes()
+    inode = parent.stat().st_ino
+
+    first = _run_main(variables, fake)
+    assert first.returncode == 0, first.stdout + first.stderr
+    assert parent.stat().st_ino == inode
+    assert parent.stat().st_mode & 0o777 == 0o700
+    assert unrelated.read_text() == "retained unrelated\n"
+    assert marker.read_bytes() == marker_bytes
+
+    second = _run_main(variables, fake)
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert parent.stat().st_ino == inode
+    assert unrelated.read_text() == "retained unrelated\n"
+    assert "changed=0" in second.stdout
+
+
+def test_prerequisite_failure_does_not_prepare_private_parent(tmp_path):
+    root, fake, _state, _calls, variables = _valid(tmp_path, auditd_installed=False)
+    parent = root / "var/lib/detection-engineering"
+    parent.mkdir()
+    parent.chmod(0o750)
+    inode = parent.stat().st_ino
+    result = _run_main(variables, fake)
+    assert result.returncode != 0
+    assert parent.stat().st_ino == inode
+    assert parent.stat().st_mode & 0o777 == 0o750
+
+
+def test_private_parent_preparation_is_retained_when_helper_refuses(tmp_path):
+    root, fake, state, _calls, variables = _valid(
+        tmp_path, stock_failure=("snapshot_recheck", "before"),
+    )
+    parent = root / "var/lib/detection-engineering"
+    parent.mkdir()
+    parent.chmod(0o750)
+    unrelated = parent / "unrelated-state"
+    unrelated.write_text("retained unrelated\n")
+    marker = parent / "laurel-apply.sha256"
+    marker.write_text("retained old marker\n")
+    inode = parent.stat().st_ino
+    result = _run_main(variables, fake)
+    assert result.returncode != 0
+    assert parent.stat().st_ino == inode
+    assert parent.stat().st_mode & 0o777 == 0o700
+    assert unrelated.read_text() == "retained unrelated\n"
+    assert marker.read_text() == "retained old marker\n"
+    assert "Stock-log access helper failed" in result.stdout + result.stderr
+
+
+def test_model_policy_state_round_trips_without_valid_default_reconstruction(tmp_path):
+    root, _fake, state, _calls, _variables = _valid(tmp_path)
+    host = _stock_host(root, state)
+    host.users = {}
+    host.groups.pop("splunkfwd")
+    host.packages = {"logrotate"}
+    host.configured_argv = ["/usr/sbin/rsyslogd", "-f", "/tmp/other.conf"]
+    host.running_argv = ["/tmp/wrapper"]
+    host.running_executable = "/tmp/wrapper"
+    host.drop_ins = ["/etc/systemd/system/rsyslog.service.d/override.conf"]
+    host.root_directory = "/srv/chroot"
+    host.root_image = "/srv/image.raw"
+    host.mount_matches = False
+    host.command_records = 2
+    host.command_record_recognized = False
+    host.observation_error = True
+    host.observation_transition = True
+    host.observation_sequence = [ProducerObservation(None, False, 999, "999:1")]
+    host.state_uid_overrides = {"/var/lib/detection-engineering": 77}
+    host.group_close_error_for = "/var/log/auth.log"
+    host.primitive_faults = {"candidate_unlink": 1}
+    host.validator_available = False
+    host.validator_accepts = False
+    host.restart_result = False
+    host.restart_observation = None
+    host.consumer_running = False
+    host.loaded_action_groups = {"/var/log/auth.log": 2201}
+    host.save(state / "roundtrip.json")
+    restored = ModelHost.load(root, state / "roundtrip.json")
+    assert restored.policy_state() == host.policy_state()
+
+    host.callbacks[("snapshot_recheck", "before")] = lambda: None
+    with pytest.raises(ValueError, match="callbacks are test-process-only"):
+        host.save(state / "callbacks.json")
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["missing_user", "missing_group", "missing_package", "invalid_unit", "wrong_context", "transition"],
+)
+def test_persisted_invalid_policy_state_refuses_staged_helper_and_laurel(tmp_path, mutation):
+    root, fake, state, _calls, variables = _valid(tmp_path)
+    payload = _stock_payload(state)
+    if mutation == "missing_user":
+        payload["users"] = {}
+    elif mutation == "missing_group":
+        payload["groups"].pop("splunkfwd")
+    elif mutation == "missing_package":
+        payload["packages"] = ["logrotate"]
+    elif mutation == "invalid_unit":
+        payload["configured_argv"] = ["/usr/sbin/rsyslogd", "-f", "/tmp/other.conf"]
+    elif mutation == "wrong_context":
+        payload["mount_matches"] = False
+    else:
+        payload["observation_transition"] = True
+    _write_stock_payload(state, payload)
+    result = _run_main(variables, fake)
+    assert result.returncode != 0
+    assert "Stock-log access helper failed" in result.stdout + result.stderr
+    assert set((state / "accounts").read_text().splitlines()) == {"splunkfwd", "splunk"}
+    assert not (root / "usr/local/sbin/laurel").exists()
+    assert not (root / "var/lib/detection-engineering/laurel-apply.sha256").exists()
+
+
 @pytest.mark.parametrize("reader", ["splunkfwd", "splunk"])
 def test_fresh_install_applies_rules_starts_service_and_materializes_native_output(tmp_path, reader):
     root, fake, state, calls, variables = _valid(tmp_path, reader=reader)
@@ -329,6 +709,20 @@ def test_fresh_install_applies_rules_starts_service_and_materializes_native_outp
     assert f"{output}:{reader}" in (state / "acl").read_text()
     assert f"read:{reader}:{output}" in calls.read_text()
     assert (root / "var/lib/detection-engineering/laurel-apply.sha256").is_file()
+    stock = _stock_host(root, state)
+    selected_gid = 2201 if reader == "splunkfwd" else 2202
+    assert {stock.files[path].gid for path in ("/var/log/auth.log", "/var/log/syslog")} == {selected_gid}
+    assert stock.consumer_running
+    assert stock.loaded_action_groups == {
+        "/var/log/auth.log": selected_gid,
+        "/var/log/syslog": selected_gid,
+    }
+    assert (root / "etc/logrotate.conf").read_bytes() == (
+        ROLE / "files/stock-log-profiles/bookworm/logrotate.conf"
+    ).read_bytes()
+    assert (root / "etc/logrotate.d/rsyslog").read_bytes() == (
+        ROLE / "files/stock-log-profiles/bookworm/rsyslog.logrotate"
+    ).read_bytes()
 
     unauthorized = subprocess.run(
         [
@@ -340,6 +734,12 @@ def test_fresh_install_applies_rules_starts_service_and_materializes_native_outp
     )
     assert unauthorized.returncode != 0
 
+    alternate_form = subprocess.run(
+        [str(fake / "runuser"), reader, "--", "/usr/bin/test", "-r", str(root / "var/log/auth.log")],
+        text=True, capture_output=True,
+    )
+    assert alternate_form.returncode == 0
+
 
 def test_second_run_converges_without_restart_churn(tmp_path):
     root, fake, _state, calls, variables = _valid(tmp_path)
@@ -349,7 +749,278 @@ def test_second_run_converges_without_restart_churn(tmp_path):
     second = _run_main(variables, fake)
     assert second.returncode == 0, second.stdout + second.stderr
     assert calls.read_text().count("systemctl:restart auditd") == restarts_before == 1
+    stock = _stock_host(root, _state)
+    assert stock.operations.count("restart") == 1
+    assert stock.operations.count("publish:/etc/rsyslog.conf") == 1
     assert "changed=0" in second.stdout
+
+
+def test_recreation_rotation_and_hup_follow_applied_rendered_state(tmp_path):
+    root, fake, state, _calls, variables = _valid(tmp_path)
+    result = _run_main(variables, fake)
+    assert result.returncode == 0, result.stdout + result.stderr
+    applied = _stock_host(root, state)
+    expected_gid = applied.groups["splunkfwd"].gid
+    assert applied.loaded_action_groups == {
+        "/var/log/auth.log": expected_gid,
+        "/var/log/syslog": expected_gid,
+    }
+
+    config = root / "etc/rsyslog.conf"
+    config.write_bytes(config.read_bytes().replace(b"$FileGroup splunkfwd\n", b"$FileGroup adm\n"))
+    auth = root / "var/log/auth.log"
+    old_content = auth.read_bytes()
+    auth.unlink()
+    applied.files.pop("/var/log/auth.log")
+    applied.physical_inodes.pop("/var/log/auth.log")
+    applied.hup_reopen()
+    assert applied.loaded_action_groups["/var/log/auth.log"] == expected_gid
+    assert auth.is_file()
+    assert applied.files["/var/log/auth.log"].uid == 0
+    assert applied.files["/var/log/auth.log"].gid == expected_gid
+    assert applied.files["/var/log/auth.log"].mode == 0o640
+    assert applied.physical_inodes["/var/log/auth.log"] == auth.stat().st_ino
+    assert applied.reader_can_read("/var/log/auth.log", auth, expected_gid, expected_gid, "runuser", "splunkfwd")
+
+    loaded_before_restart = dict(applied.loaded_action_groups)
+    applied.hup_reopen()
+    assert applied.loaded_action_groups == loaded_before_restart
+    assert applied.restart_producer(str(fake / "systemctl"))
+    assert applied.loaded_action_groups == {"/var/log/auth.log": 4, "/var/log/syslog": 4}
+
+    before = applied.files["/var/log/auth.log"]
+    auth.write_bytes(old_content)
+    unrelated_archive = root / "var/log/auth.log.9"
+    unrelated_archive.write_bytes(b"unrelated archive\n")
+    old_inode = auth.stat().st_ino
+    applied.rotate("/var/log/auth.log")
+    assert applied.files["/var/log/auth.log.1"] == before
+    assert applied.files["/var/log/auth.log"].uid == before.uid == 0
+    assert applied.files["/var/log/auth.log"].gid == before.gid == expected_gid
+    assert applied.files["/var/log/auth.log"].mode == before.mode == 0o640
+    assert (root / "var/log/auth.log.1").read_bytes() == old_content
+    assert auth.is_file() and auth.read_bytes() == b""
+    assert (root / "var/log/auth.log.1").stat().st_ino == old_inode
+    assert applied.physical_inodes["/var/log/auth.log"] == auth.stat().st_ino
+    assert unrelated_archive.read_bytes() == b"unrelated archive\n"
+
+
+@pytest.mark.parametrize("condition", ["physical_exists", "wrong_context", "missing_producer"])
+def test_recreation_rejects_impossible_transitions(tmp_path, condition):
+    root, fake, state, _calls, variables = _valid(tmp_path)
+    result = _run_main(variables, fake)
+    assert result.returncode == 0, result.stdout + result.stderr
+    host = _stock_host(root, state)
+    logical = "/var/log/auth.log"
+    physical = root / logical.lstrip("/")
+    host.files.pop(logical)
+    host.physical_inodes.pop(logical)
+    if condition != "physical_exists":
+        physical.unlink()
+    if condition == "wrong_context":
+        host.mount_matches = False
+    elif condition == "missing_producer":
+        host.producer = ProducerObservation(False, False)
+    with pytest.raises(OSError, match="recreation"):
+        host.recreate(logical)
+
+
+def test_rotation_rejects_missing_source_and_changed_profile(tmp_path):
+    root, fake, state, _calls, variables = _valid(tmp_path)
+    result = _run_main(variables, fake)
+    assert result.returncode == 0, result.stdout + result.stderr
+    host = _stock_host(root, state)
+    (root / "etc/logrotate.conf").write_text("create 0666 root root\n")
+    with pytest.raises(OSError, match="rotation"):
+        host.rotate("/var/log/auth.log")
+    (root / "var/log/syslog").unlink()
+    host.files.pop("/var/log/syslog")
+    host.physical_inodes.pop("/var/log/syslog")
+    with pytest.raises(OSError, match="rotation"):
+        host.rotate("/var/log/syslog")
+
+
+def test_successful_helper_staging_cleanup_failure_blocks_downstream(tmp_path):
+    root, fake, state, calls, variables = _valid(tmp_path, record_stock_stage=True)
+    unrelated = root / "var/log/unrelated.log"
+    unrelated.write_text("retained unrelated\n")
+    try:
+        result = _run_main_with_fqcn_cleanup_fault(tmp_path, variables, fake, state)
+        stage = Path((state / "stock-stage-path").read_text())
+        assert result.returncode != 0
+        assert "staging cleanup failed" in result.stdout + result.stderr
+        assert (root / "var/lib/detection-engineering/stock-log-access/applied.json").is_file()
+        assert set((state / "accounts").read_text().splitlines()) == {"splunkfwd", "splunk"}
+        assert _stock_host(root, state).consumer_running
+        assert unrelated.read_text() == "retained unrelated\n"
+        assert f"read:splunkfwd:{root}/var/log/auth.log" not in calls.read_text()
+        assert stage.is_dir()
+        assert sorted(path.name for path in stage.iterdir()) == [
+            "__pycache__", "bookworm", "configure_stock_log_access.py",
+        ]
+    finally:
+        _remove_owned_stage(state)
+
+
+def test_primary_helper_and_staging_cleanup_failures_retain_both_diagnostics(tmp_path):
+    root, fake, state, calls, variables = _valid(
+        tmp_path, stock_failure=("snapshot_recheck", "before"), record_stock_stage=True,
+    )
+    unrelated = root / "var/log/unrelated.log"
+    unrelated.write_text("retained unrelated\n")
+    try:
+        result = _run_main_with_fqcn_cleanup_fault(tmp_path, variables, fake, state)
+        assert result.returncode != 0
+        output = result.stdout + result.stderr
+        assert "snapshot_recheck" in output
+        assert "stage\": \"preflight" in output
+        assert "injected invocation-owned staging cleanup failure" in output
+        assert set((state / "accounts").read_text().splitlines()) == {"splunkfwd", "splunk"}
+        assert _stock_host(root, state).consumer_running
+        assert unrelated.read_text() == "retained unrelated\n"
+        assert f"read:splunkfwd:{root}/var/log/auth.log" not in calls.read_text()
+        stage = Path((state / "stock-stage-path").read_text())
+        assert stage.is_dir()
+        assert sorted(path.name for path in stage.iterdir()) == [
+            "__pycache__", "bookworm", "configure_stock_log_access.py",
+        ]
+    finally:
+        _remove_owned_stage(state)
+
+
+def test_helper_owned_cleanup_failure_json_blocks_main_with_valid_marker(tmp_path):
+    root, fake, state, calls, variables = _valid(tmp_path)
+    unrelated = root / "var/log/unrelated.log"
+    unrelated.write_text("retained unrelated\n")
+    payload = _stock_payload(state)
+    payload["primitive_faults"] = {"candidate_unlink": 1}
+    _write_stock_payload(state, payload)
+    result = _run_main(variables, fake)
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert '"stage": "cleanup"' in output
+    assert '"cleanup_errors"' in output
+    assert (root / "var/lib/detection-engineering/stock-log-access/applied.json").is_file()
+    candidates = list((root / "var/lib/detection-engineering/stock-log-access").glob("candidate-*"))
+    assert len(candidates) == 1
+    assert sorted(path.name for path in candidates[0].parent.iterdir()) == [
+        "applied.json", candidates[0].name, "lock",
+    ]
+    assert set((state / "accounts").read_text().splitlines()) == {"splunkfwd", "splunk"}
+    assert _stock_host(root, state).consumer_running
+    assert unrelated.read_text() == "retained unrelated\n"
+    assert f"read:splunkfwd:{root}/var/log/auth.log" not in calls.read_text()
+    assert not (root / "usr/local/sbin/laurel").exists()
+
+
+def test_production_cleanup_fqcn_ignores_short_name_collision_plugin(tmp_path):
+    root, fake, state, _calls, variables = _valid(tmp_path, record_stock_stage=True)
+    plugins = _stage_cleanup_fault_plugin(tmp_path, state)
+    result = _run_main(variables, fake, action_plugins=plugins)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "injected invocation-owned staging cleanup failure" not in result.stdout + result.stderr
+    assert not Path((state / "stock-stage-path").read_text()).exists()
+    assert (root / "var/lib/detection-engineering/laurel-apply.sha256").is_file()
+    tasks = (ROLE / "tasks/stock_log_access.yml").read_text()
+    assert "      ansible.builtin.file:\n" in tasks
+    assert "intentional short action name" not in tasks
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["wrong_group", "missing_restore", "duplicate_action", "conflicting_create"],
+)
+def test_model_rejects_invalid_rendered_producer_mutations(tmp_path, mutation):
+    root, fake, state, _calls, variables = _valid(tmp_path)
+    result = _run_main(variables, fake)
+    assert result.returncode == 0, result.stdout + result.stderr
+    candidate = (root / "etc/rsyslog.conf").read_bytes()
+    if mutation == "wrong_group":
+        candidate = candidate.replace(b"$FileGroup splunkfwd\n", b"$FileGroup adm\n", 1)
+    elif mutation == "missing_restore":
+        candidate = candidate.replace(b"$FileGroup adm\n", b"", 1)
+    elif mutation == "duplicate_action":
+        candidate += b"auth,authpriv.*\t\t\t/var/log/auth.log\n"
+    else:
+        candidate = candidate.replace(b"$FileCreateMode 0640\n", b"$FileCreateMode 0660\n")
+    invalid = tmp_path / f"{mutation}.conf"
+    invalid.write_bytes(candidate)
+    assert not _stock_host(root, state).validate_candidate(
+        invalid, str(fake / "rsyslogd"), str(fake / "runuser"), "splunkfwd",
+    )
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        ("snapshot_recheck", "before"),
+        ("group_auth", "after"),
+        ("group_syslog", "after"),
+        ("publish_replace", "after"),
+        ("restart", "before"),
+        ("marker_replace", "after"),
+    ],
+)
+def test_stock_access_failure_stops_before_laurel_mutation(tmp_path, failure):
+    root, fake, state, _calls, variables = _valid(tmp_path, stock_failure=failure)
+    unrelated = root / "var/log/unrelated.log"
+    unrelated.write_bytes(b"unrelated retained\n")
+    result = _run_main(variables, fake)
+    assert result.returncode != 0
+    assert "Stock-log access helper failed" in result.stdout + result.stderr
+    assert set((state / "accounts").read_text().splitlines()) == {"splunkfwd", "splunk"}
+    assert not (root / "usr/local/sbin/laurel").exists()
+    assert not (root / "var/lib/detection-engineering/laurel-apply.sha256").exists()
+    assert not (root / "var/lib/detection-engineering/stock-log-access/applied.json").exists()
+    assert unrelated.read_bytes() == b"unrelated retained\n"
+    stock = _stock_host(root, state)
+    assert stock.consumer_running
+    selected = stock.groups["splunkfwd"].gid
+    expected_groups = {
+        ("snapshot_recheck", "before"): (4, 4),
+        ("group_auth", "after"): (selected, 4),
+        ("group_syslog", "after"): (selected, selected),
+        ("publish_replace", "after"): (selected, selected),
+        ("restart", "before"): (selected, selected),
+        ("marker_replace", "after"): (selected, selected),
+    }
+    assert (stock.files["/var/log/auth.log"].gid, stock.files["/var/log/syslog"].gid) == expected_groups[failure]
+    published = failure in {
+        ("publish_replace", "after"), ("restart", "before"), ("marker_replace", "after"),
+    }
+    assert (root / "etc/rsyslog.conf").read_bytes().count(b"$FileGroup splunkfwd\n") == (2 if published else 0)
+    assert stock.producer.pid == (411 if failure == ("marker_replace", "after") else 410)
+
+
+def test_stock_restart_failure_preserves_partial_state_and_blocks_laurel(tmp_path):
+    root, fake, state, _calls, variables = _valid(tmp_path, stock_restart_result=False)
+    result = _run_main(variables, fake)
+    assert result.returncode != 0
+    stock = _stock_host(root, state)
+    assert stock.consumer_running
+    assert stock.producer.active is True
+    assert not (root / "var/lib/detection-engineering/laurel-apply.sha256").exists()
+    assert "_laurel" not in (state / "accounts").read_text().splitlines()
+
+
+def test_missing_canonical_source_refuses_without_synthetic_log(tmp_path):
+    root, fake, state, _calls, variables = _valid(tmp_path)
+    missing = root / "var/log/syslog"
+    missing.unlink()
+    result = _run_main(variables, fake)
+    assert result.returncode != 0
+    assert not missing.exists()
+    assert "_laurel" not in (state / "accounts").read_text().splitlines()
+
+
+def test_canonical_path_redirection_refuses_before_command_primitives(tmp_path):
+    root, fake, _state, calls, variables = _valid(tmp_path)
+    variables["detection_linux_auth_log_path"] = "/tmp/redirected-auth.log"
+    result = _run_main(variables, fake)
+    assert result.returncode != 0
+    assert "canonical source" in result.stdout + result.stderr
+    assert not calls.exists()
+    assert not (root / "var/lib/detection-engineering").exists()
 
 
 def test_checksum_change_reapplies_even_when_binary_content_is_unchanged(tmp_path):
@@ -382,17 +1053,22 @@ def test_modeled_post_write_interruption_reapplies_new_config_from_old_marker(tm
     marker = root / "var/lib/detection-engineering/laurel-apply.sha256"
     old_marker = marker.read_text()
 
-    config = root / "etc/laurel/config.toml"
-    config.write_text(config.read_text().replace(
-        'read-users = [ "splunkfwd" ]', 'read-users = [ "splunk" ]',
-    ))
-    variables["detection_laurel_read_user"] = "splunk"
+    replacement, replacement_digest = _artifact(
+        tmp_path / "interrupted-replacement", member_mtime=2,
+    )
+    assert replacement_digest != variables["detection_laurel_artifact"]["sha256"]
+    variables["detection_laurel_artifact"] = {
+        "version": "synthetic-interrupted-replacement",
+        "url": replacement.as_uri(),
+        "sha256": replacement_digest,
+        "download_auth_required": False,
+    }
 
     rerun = _run_main(variables, fake)
     assert rerun.returncode == 0, rerun.stdout + rerun.stderr
     assert calls.read_text().count("systemctl:restart auditd") == 2
     assert marker.read_text() != old_marker
-    assert f"read:splunk:{root}/var/log/laurel/audit.log" in calls.read_text()
+    assert f"read:splunkfwd:{root}/var/log/laurel/audit.log" in calls.read_text()
 
 
 @pytest.mark.parametrize("stale_marker", ["native-auditd-laurel-v1\n", "malformed\n"])
@@ -471,12 +1147,12 @@ def test_checksum_archive_and_common_source_failures_remain_fail_closed(tmp_path
     root2, fake2, state2, _calls2 = _fixture(tmp_path / "archive")
     rejected = _run_main(_variables(root2, fake2, unsafe, unsafe_digest), fake2)
     assert rejected.returncode != 0
-    assert "exactly one regular root member named laurel" in rejected.stdout + rejected.stderr
+    assert "unsafe member path" in rejected.stdout + rejected.stderr
     assert "_laurel" not in (state2 / "accounts").read_text()
 
     root3, fake3, state3, calls3, variables3 = _valid(tmp_path / "source", readable=False)
     source_failure = _run_main(variables3, fake3)
     assert source_failure.returncode != 0
-    assert "reader cannot read required auth/system source" in source_failure.stdout + source_failure.stderr
+    assert "unsafe canonical source" in source_failure.stdout + source_failure.stderr
     assert "_laurel" not in (state3 / "accounts").read_text()
     assert "useradd:" not in calls3.read_text()

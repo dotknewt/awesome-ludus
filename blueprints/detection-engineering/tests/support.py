@@ -106,45 +106,51 @@ def _gate(value: Any, path: str, stops: list[int], observed_validator) -> None:
 
 
 def _template(value: Any, path: str) -> None:
-    item = _keys(value, {"name", "inherited_disk_gb"}, path)
+    item = _keys(value, {"name", "os_type", "distribution", "major_version", "architecture", "built", "inherited_disk_gb"}, path)
     _string(item["name"], f"{path}.name")
+    if item["os_type"] != "linux" or item["distribution"] != "Debian":
+        _fail(path, "must be the selected Linux Debian template schema")
+    _integer(item["major_version"], f"{path}.major_version", minimum=1)
+    _string(item["architecture"], f"{path}.architecture")
+    _boolean(item["built"], f"{path}.built")
     _integer(item["inherited_disk_gb"], f"{path}.inherited_disk_gb", minimum=1)
 
 
 def _capacity(value: Any, path: str) -> None:
     item = _keys(
         value,
-        {"ram_gb", "physical_cpus", "logical_cpus", "current_allocations", "free_storage_gb"},
+        {"total_ram_gb", "free_ram_gb", "reported_cpu_cores", "current_allocations", "storage_pools", "deployment_sufficient", "decision_basis"},
         path,
     )
-    for key in ("ram_gb", "physical_cpus", "logical_cpus", "free_storage_gb"):
+    for key in ("total_ram_gb", "free_ram_gb", "reported_cpu_cores"):
         _integer(item[key], f"{path}.{key}", minimum=1)
-    if not isinstance(item["current_allocations"], dict):
-        _fail(f"{path}.current_allocations", "must be an object")
+    allocations = _keys(item["current_allocations"], {"ram_gb", "cpus", "storage_gb"}, f"{path}.current_allocations")
+    for key, allocation in allocations.items():
+        _integer(allocation, f"{path}.current_allocations.{key}", minimum=0)
+    if not isinstance(item["storage_pools"], list) or not item["storage_pools"]:
+        _fail(f"{path}.storage_pools", "must be a nonempty list")
+    for index, pool_value in enumerate(item["storage_pools"]):
+        pool = _keys(pool_value, {"name", "type", "size_gb", "used_gb", "free_gb"}, f"{path}.storage_pools[{index}]")
+        _string(pool["name"], f"{path}.storage_pools[{index}].name")
+        _string(pool["type"], f"{path}.storage_pools[{index}].type")
+        for key in ("size_gb", "used_gb", "free_gb"):
+            if isinstance(pool[key], bool) or not isinstance(pool[key], (int, float)) or pool[key] < 0:
+                _fail(f"{path}.storage_pools[{index}].{key}", "must be nonnegative numeric data")
+    if item["deployment_sufficient"] is not True:
+        _fail(f"{path}.deployment_sufficient", "must be an explicit true decision")
+    _string(item["decision_basis"], f"{path}.decision_basis")
 
 
 def _network(value: Any, path: str) -> None:
     item = _keys(
         value,
         {
-            "management_cidrs", "vpn_cidrs", "lab_cidr", "public_probe_source",
-            "guest_interface", "docker_bridge_interfaces", "service_ports",
+            "lab_cidr", "host_bridge", "host_bridge_promiscuous_mode", "range_cidr",
         },
         path,
     )
-    _strings(item["management_cidrs"], f"{path}.management_cidrs")
-    _strings(item["vpn_cidrs"], f"{path}.vpn_cidrs")
-    _strings(item["docker_bridge_interfaces"], f"{path}.docker_bridge_interfaces")
-    for key in ("lab_cidr", "public_probe_source", "guest_interface"):
+    for key in ("range_cidr", "lab_cidr", "host_bridge", "host_bridge_promiscuous_mode"):
         _string(item[key], f"{path}.{key}")
-    if not isinstance(item["service_ports"], dict):
-        _fail(f"{path}.service_ports", "must be an object")
-    for profile, ports in item["service_ports"].items():
-        _string(profile, f"{path}.service_ports key")
-        if not isinstance(ports, list):
-            _fail(f"{path}.service_ports.{profile}", "must be a list")
-        for index, port in enumerate(ports):
-            _integer(port, f"{path}.service_ports.{profile}[{index}]", minimum=1)
 
 
 def _packages(value: Any, path: str) -> None:
@@ -273,29 +279,62 @@ def _runner_api(value: Any, path: str) -> None:
     item = _keys(value, {"bootstrap_auth", "manager"}, path)
     bootstrap = _keys(
         item["bootstrap_auth"],
-        {"credential_type", "minimum_scope", "creation_argv", "stdin_operation", "protected_path", "mode", "revoke_endpoint", "revoke_method"},
+        {"credential_type", "scopes", "expiration_days", "creation_argv", "protected_path", "mode", "revoke_endpoint", "revoke_method"},
         f"{path}.bootstrap_auth",
     )
-    for key in ("credential_type", "minimum_scope", "stdin_operation", "revoke_endpoint", "revoke_method"):
+    for key in ("credential_type", "revoke_endpoint", "revoke_method"):
         _string(bootstrap[key], f"{path}.bootstrap_auth.{key}")
+    if bootstrap["credential_type"] != "personal_access_token":
+        _fail(f"{path}.bootstrap_auth.credential_type", "must be personal_access_token")
+    if bootstrap["scopes"] != ["create_runner", "manage_runner", "read_api"]:
+        _fail(f"{path}.bootstrap_auth.scopes", "must use the selected-version conventional PAT scopes")
+    if bootstrap["expiration_days"] != 1:
+        _fail(f"{path}.bootstrap_auth.expiration_days", "must equal one")
     _strings(bootstrap["creation_argv"], f"{path}.bootstrap_auth.creation_argv")
     if bootstrap["protected_path"] != "/etc/detection-engineering/secrets/runner-api-bootstrap.token" or bootstrap["mode"] != "0600":
         _fail(f"{path}.bootstrap_auth", "has the wrong protected path or mode")
     manager = _keys(
         item["manager"],
         {
-            "runner_type", "create_endpoint", "create_method", "lookup_endpoint",
-            "lookup_method", "update_endpoint", "update_method", "request_fields",
-            "response_token_field", "local_verify_command", "pause_at_create",
+            "runner_type", "create_scope", "manage_scope", "read_scope",
+            "create_endpoint", "create_method", "lookup_endpoint", "lookup_method",
+            "detail_endpoint", "detail_method", "update_endpoint", "update_method",
+            "request_fields", "response_token_field", "local_verify_command", "pause_at_create",
         },
         f"{path}.manager",
     )
-    for key in ("runner_type", "create_endpoint", "create_method", "lookup_endpoint", "lookup_method", "update_endpoint", "update_method", "response_token_field"):
+    for key in ("runner_type", "create_scope", "manage_scope", "read_scope", "create_endpoint", "create_method", "lookup_endpoint", "lookup_method", "detail_endpoint", "detail_method", "update_endpoint", "update_method", "response_token_field"):
         _string(manager[key], f"{path}.manager.{key}")
+    if [manager["create_scope"], manager["manage_scope"], manager["read_scope"]] != bootstrap["scopes"]:
+        _fail(f"{path}.manager", "scope fields must match the conventional PAT scopes")
     _strings(manager["request_fields"], f"{path}.manager.request_fields")
     _strings(manager["local_verify_command"], f"{path}.manager.local_verify_command")
     if manager["pause_at_create"] is not True:
         _fail(f"{path}.manager.pause_at_create", "must be true")
+
+
+def _readiness(value: Any, path: str) -> None:
+    item = _keys(value, {"transport_base_url", "endpoint", "method", "success_statuses", "attempts", "delay_seconds"}, path)
+    if item["transport_base_url"] != "http://localhost" or item["endpoint"] != "/-/readiness" or item["method"] != "GET" or item["success_statuses"] != [200]:
+        _fail(path, "must use the selected-version loopback readiness route")
+    _integer(item["attempts"], f"{path}.attempts", minimum=1)
+    _integer(item["delay_seconds"], f"{path}.delay_seconds")
+
+
+def _runner_jobs(value: Any, path: str) -> None:
+    item = _keys(value, {"endpoint", "method"}, path)
+    if item != {"endpoint": "/api/v4/runners/:id/jobs", "method": "GET"}:
+        _fail(path, "must use the selected-version runner jobs route")
+
+
+def _forwarder_bootstrap(value: Any, path: str) -> None:
+    item = _keys(value, {"version", "build", "seed", "first_start", "boot_start", "unit"}, path)
+    if item["version"] != "10.6.1.1" or item["build"] != "b2ae2962645c":
+        _fail(path, "must match the selected forwarder package")
+    _keys(item["seed"], {"path", "section", "username_key", "username", "password_key", "mode", "owner", "group"}, f"{path}.seed")
+    _keys(item["first_start"], {"identity", "argv"}, f"{path}.first_start")
+    _keys(item["boot_start"], {"identity", "argv"}, f"{path}.boot_start")
+    _keys(item["unit"], {"path", "service_name", "effective_user"}, f"{path}.unit")
 
 
 def _otel(value: Any, path: str) -> None:
@@ -321,12 +360,12 @@ def validate_verified_inputs(inputs: Any) -> None:
         {
             "schema_version", "verified_at", "user_supplied_candidates", "templates",
             "capacity", "network", "apt", "downloads", "artifact_layouts", "git", "charts",
-            "capabilities", "test_tools",
+            "capabilities", "test_tools", "lifecycle",
         },
         "verified_inputs",
     )
-    if root["schema_version"] != 1:
-        _fail("verified_inputs.schema_version", "must equal 1")
+    if root["schema_version"] != 2:
+        _fail("verified_inputs.schema_version", "must equal 2")
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", str(root["verified_at"])):
         _fail("verified_inputs.verified_at", "must be RFC3339 UTC")
 
@@ -429,7 +468,7 @@ def validate_verified_inputs(inputs: Any) -> None:
     charts = _keys(root["charts"], {"otel"}, "verified_inputs.charts")
     _gate(charts["otel"], "verified_inputs.charts.otel", [7, 8, 9, 10], _chart)
 
-    capabilities = _keys(root["capabilities"], {"splunk", "splunk_free", "splunk_uninstall", "runner_api", "otel"}, "verified_inputs.capabilities")
+    capabilities = _keys(root["capabilities"], {"splunk", "splunk_free", "splunk_uninstall", "runner_api", "gitlab_readiness_contract", "runner_jobs_contract", "forwarder_bootstrap_contract", "otel"}, "verified_inputs.capabilities")
     _gate(capabilities["splunk"], "verified_inputs.capabilities.splunk", [3, 4, 7, 8, 9, 10], _splunk_capability)
     future = _keys(capabilities["splunk_free"], {"status", "source", "observed", "limitation"}, "verified_inputs.capabilities.splunk_free")
     if future["status"] not in {"UNVERIFIED", "VERIFIED", "INCOMPATIBLE"}:
@@ -446,8 +485,79 @@ def validate_verified_inputs(inputs: Any) -> None:
         _splunk_free(future["observed"], "verified_inputs.capabilities.splunk_free.observed")
     _gate(capabilities["splunk_uninstall"], "verified_inputs.capabilities.splunk_uninstall", [11], _uninstall)
     _gate(capabilities["runner_api"], "verified_inputs.capabilities.runner_api", [5, 6, 8, 9, 10], _runner_api)
+    _gate(capabilities["gitlab_readiness_contract"], "verified_inputs.capabilities.gitlab_readiness_contract", [5, 6, 8, 9, 10], _readiness)
+    _gate(capabilities["runner_jobs_contract"], "verified_inputs.capabilities.runner_jobs_contract", [6, 8, 9, 10], _runner_jobs)
+    _gate(capabilities["forwarder_bootstrap_contract"], "verified_inputs.capabilities.forwarder_bootstrap_contract", [4, 8, 9, 10], _forwarder_bootstrap)
     _gate(capabilities["otel"], "verified_inputs.capabilities.otel", [7, 8, 9, 10], _otel)
     _gate(root["test_tools"], "verified_inputs.test_tools", [1, 2, 3, 4, 5, 6, 7, 8, 9], _test_tools)
+
+    lifecycle = _keys(
+        root["lifecycle"],
+        {"selected_product_contract", "provisioning_time", "post_provisioning"},
+        "verified_inputs.lifecycle",
+    )
+    selected = _keys(
+        lifecycle["selected_product_contract"],
+        {"status", "source", "gate_paths", "limitation", "required_for_initial_provisioning"},
+        "verified_inputs.lifecycle.selected_product_contract",
+    )
+    if selected["status"] not in {"STATIC_APPROVED", "BLOCKED"}:
+        _fail("verified_inputs.lifecycle.selected_product_contract.status", "must be STATIC_APPROVED or BLOCKED")
+    source = _keys(
+        selected["source"], {"kind", "reference", "observed_at"},
+        "verified_inputs.lifecycle.selected_product_contract.source",
+    )
+    if source != {
+        "kind": "LOCAL_REVIEWED_STATIC_EVIDENCE",
+        "reference": "product-pin-provenance.md",
+        "observed_at": "2026-10-18T18:30:00Z",
+    }:
+        _fail("verified_inputs.lifecycle.selected_product_contract.source", "must cite the frozen reviewed static evidence")
+    expected_static_paths = sorted(
+        f"{section}.{name}"
+        for section, names in {
+            "apt": {"gitlab", "runner", "docker", "containerd", "docker_plugins"},
+            "downloads": {"splunk", "forwarder", "laurel", "minikube", "kubectl", "helm", "otel_host"},
+            "artifact_layouts": {"minikube", "kubectl", "helm", "otel_host"},
+            "git": {"malcolm"},
+            "charts": {"otel"},
+            "capabilities": {"splunk", "runner_api", "gitlab_readiness_contract", "runner_jobs_contract", "forwarder_bootstrap_contract", "otel"},
+        }.items()
+        for name in names
+    )
+    if selected["gate_paths"] != expected_static_paths:
+        _fail("verified_inputs.lifecycle.selected_product_contract.gate_paths", "must exactly name the selected static product facts")
+    if selected["required_for_initial_provisioning"] is not True:
+        _fail("verified_inputs.lifecycle.selected_product_contract.required_for_initial_provisioning", "must be true")
+    _string(selected["limitation"], "verified_inputs.lifecycle.selected_product_contract.limitation")
+    expected_phase_checks = {
+        "provisioning_time": [
+            "existing_debian_account_and_home",
+            "guest_capture_interface_discovery_and_validation",
+            "selected_product_installation_and_bootstrap",
+            "native_producer_and_service_readiness",
+        ],
+        "post_provisioning": [
+            "gitlab_external_readiness",
+            "runner_registered_paused_and_zero_jobs",
+            "splunk_hec_search_and_authentication",
+            "telemetry_delivery_and_packet_visibility",
+            "credential_cleanup_and_final_service_state",
+        ],
+    }
+    for phase, expected_checks in expected_phase_checks.items():
+        record = _keys(
+            lifecycle[phase],
+            {"status", "required_for_initial_provisioning", "checks", "evidence", "limitation"},
+            f"verified_inputs.lifecycle.{phase}",
+        )
+        if record["status"] != "PENDING" or record["evidence"] is not None:
+            _fail(f"verified_inputs.lifecycle.{phase}", "must remain PENDING without runtime evidence")
+        if record["required_for_initial_provisioning"] is not False:
+            _fail(f"verified_inputs.lifecycle.{phase}.required_for_initial_provisioning", "must be false")
+        if record["checks"] != expected_checks:
+            _fail(f"verified_inputs.lifecycle.{phase}.checks", "does not match the lifecycle contract")
+        _string(record["limitation"], f"verified_inputs.lifecycle.{phase}.limitation")
 
 
 def _synthetic_source(sources: Mapping[str, Any], name: str) -> Any:
@@ -483,123 +593,6 @@ def _planned_vm(planned_vms: Any, role: Any, path: str) -> dict[str, Any]:
     if len(matches) != 1:
         _fail(path, f"dependency role {role_name!r} must match exactly one planned VM")
     return matches[0]
-
-
-def _authorized_service_ports(service_ports: Any, profile: str, path: str) -> list[int]:
-    if not isinstance(service_ports, dict):
-        _fail(f"{path}.service_ports", "must be an object")
-    ports = service_ports.get(profile)
-    if not isinstance(ports, list):
-        _fail(f"{path}.service_ports.{profile}", "must be a list")
-    for index, port in enumerate(ports):
-        _integer(port, f"{path}.service_ports.{profile}[{index}]", minimum=1)
-    if len(ports) != len(set(ports)):
-        _fail(f"{path}.service_ports.{profile}", "must not contain duplicates")
-
-    fixed_ports = {
-        "gitlab": {22, 80},
-        "runner": {22},
-        "splunk": {22, 8000, 8089, 9997, 8088},
-        "workload": {22},
-    }
-    if profile in fixed_ports and set(ports) != fixed_ports[profile]:
-        _fail(
-            f"{path}.service_ports.{profile}",
-            f"must exactly authorize {sorted(fixed_ports[profile])}",
-        )
-    if profile == "malcolm" and (22 not in ports or len(ports) < 2):
-        _fail(
-            f"{path}.service_ports.malcolm",
-            "must authorize management port 22 plus at least one verified UI port",
-        )
-    if profile not in {*fixed_ports, "malcolm"}:
-        _fail(f"{path}.profile", "must name a planned firewall profile")
-    return ports
-
-
-def _assemble_firewall_policy(inputs: dict[str, Any], path: str) -> list[dict[str, Any]]:
-    profile = _string(inputs["profile"], f"{path}.profile")
-    policy = inputs["policy"]
-    expected_policy = {
-        "management": {"destinations": "all", "ports": [22]},
-        "vpn": {
-            "gitlab": {"ports": [80]},
-            "splunk": {"ports": [8000, 8089]},
-            "malcolm": {
-                "ports_source": "verified_inputs.network.observed.service_ports.malcolm"
-            },
-        },
-        "peers": [
-            {"sources": ["runner"], "destination": "gitlab", "ports": [80]},
-            {
-                "sources": ["gitlab", "runner", "workload"],
-                "destination": "splunk",
-                "ports": [9997],
-            },
-            {"sources": ["workload"], "destination": "splunk", "ports": [8088]},
-        ],
-    }
-    if policy != expected_policy:
-        _fail(f"{path}.policy", "must equal the narrow Task 8 traffic policy")
-
-    authorized_ports = _authorized_service_ports(
-        inputs["service_ports"], profile, path
-    )
-    management = _strings(inputs["management_cidrs"], f"{path}.management_cidrs")
-    vpn = _strings(inputs["vpn_cidrs"], f"{path}.vpn_cidrs")
-    rules = [{"sources": list(management), "ports": [22]}]
-
-    if profile == "gitlab":
-        rules.append({"sources": list(vpn), "ports": [80]})
-    elif profile == "splunk":
-        rules.append({"sources": list(vpn), "ports": [8000, 8089]})
-    elif profile == "malcolm":
-        ui_ports = [port for port in authorized_ports if port != 22]
-        rules.append({"sources": list(vpn), "ports": ui_ports})
-
-    planned_vms = inputs["planned_vms"]
-    for peer_rule in policy["peers"]:
-        if peer_rule["destination"] != profile:
-            continue
-        peer_addresses = [
-            _lab_ip(
-                inputs["lab_cidr"],
-                _planned_vm(planned_vms, source_role, path).get("ip_last_octet"),
-                f"{path}.peer.{source_role}",
-            )
-            for source_role in peer_rule["sources"]
-        ]
-        rules.append({"sources": peer_addresses, "ports": list(peer_rule["ports"])})
-    return rules
-
-
-def assemble_firewall_rules(
-    policy: Mapping[str, Any],
-    synthetic_sources: Mapping[str, Any],
-    profile: str,
-) -> list[dict[str, Any]]:
-    """Resolve only the explicit Task 8 firewall policy for one VM profile."""
-
-    inputs = {
-        "policy": policy,
-        "profile": profile,
-        "lab_cidr": _synthetic_source(
-            synthetic_sources, "verified_inputs.network.observed.lab_cidr"
-        ),
-        "management_cidrs": _synthetic_source(
-            synthetic_sources, "verified_inputs.network.observed.management_cidrs"
-        ),
-        "vpn_cidrs": _synthetic_source(
-            synthetic_sources, "verified_inputs.network.observed.vpn_cidrs"
-        ),
-        "planned_vms": _synthetic_source(synthetic_sources, "contract.planned_vms"),
-        "service_ports": _synthetic_source(
-            synthetic_sources, "verified_inputs.network.observed.service_ports"
-        ),
-    }
-    rules = _assemble_firewall_policy(inputs, "contract.firewall_policy")
-    _assignable(rules, "list[FirewallRule]", "contract.firewall_policy.output")
-    return rules
 
 
 def _verified_gate_observed(
@@ -848,9 +841,6 @@ def _apply_mapping_operation(operation: str, inputs: dict[str, Any], path: str) 
             _fail(f"{path}.path", "must be absolute")
         return f"{scheme}://{host}:{port}{request_path}"
 
-    if operation == "assemble_firewall_rules":
-        return _assemble_firewall_policy(inputs, path)
-
     if operation == "map_laurel_read_user":
         return map_laurel_read_user(inputs["profile"])
 
@@ -957,16 +947,6 @@ def _assignable(value: Any, type_name: str, path: str) -> None:
             item = _keys(pin, {"name", "version"}, f"{path}[{index}]")
             _string(item["name"], f"{path}[{index}].name")
             _string(item["version"], f"{path}[{index}].version")
-    elif type_name == "list[FirewallRule]":
-        if not isinstance(value, list) or not value:
-            _fail(path, "must be a nonempty firewall-rule list")
-        for index, rule in enumerate(value):
-            item = _keys(rule, {"sources", "ports"}, f"{path}[{index}]")
-            _strings(item["sources"], f"{path}[{index}].sources")
-            if not isinstance(item["ports"], list):
-                _fail(f"{path}[{index}].ports", "must be a list")
-            for port_index, port in enumerate(item["ports"]):
-                _integer(port, f"{path}[{index}].ports[{port_index}]", minimum=1)
     elif type_name == "list[ForwarderInput]":
         if not isinstance(value, list) or not value:
             _fail(path, "must be a nonempty forwarder-input list")
@@ -992,6 +972,21 @@ def _assignable(value: Any, type_name: str, path: str) -> None:
         _splunk_capability(value, f"{path}<SplunkTrialCapability>")
     elif type_name == "RunnerApiContract":
         _runner_api(value, f"{path}<RunnerApiContract>")
+    elif type_name == "GitLabReadinessContract":
+        _readiness(value, f"{path}<GitLabReadinessContract>")
+    elif type_name == "RunnerJobsContract":
+        _runner_jobs(value, f"{path}<RunnerJobsContract>")
+    elif type_name == "ForwarderBootstrapGate":
+        _verified_gate_observed(value, f"{path}<ForwarderBootstrapGate>", [4, 8, 9, 10], _forwarder_bootstrap)
+    elif type_name == "SplunkHecHandoff":
+        item = _keys(value, {"delegate_host", "source_path", "input_path", "service_name"}, path)
+        if item != {
+            "delegate_host": "{{ range_id }}-splunk",
+            "source_path": "/etc/detection-engineering/secrets/hec-workload.token",
+            "input_path": "/opt/splunk/etc/apps/detection_hec/local/inputs.conf",
+            "service_name": "Splunkd.service",
+        }:
+            _fail(path, "must equal the scoped Splunk HEC handoff")
     elif type_name == "HelmChartPin":
         _chart(value, f"{path}<HelmChartPin>")
     elif type_name == "OtelContract":

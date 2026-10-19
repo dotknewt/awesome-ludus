@@ -51,7 +51,7 @@ def test_first_run_stages_metadata_policy_before_exact_minikube_start_and_conver
     assert policy["rules"] == [{"level": "Metadata"}]
     evidence = calls(fixture)
     start = next(line for line in evidence if line.startswith("minikube ") and " start " in line)
-    assert any(line.startswith("docker identity=deworkload") and line.endswith(" info") for line in evidence)
+    assert any(line.startswith("docker identity=debian") and line.endswith(" info") for line in evidence)
     assert "--driver=docker" in start
     assert "--extra-config=apiserver.audit-policy-file=/etc/kubernetes/audit-policy.yaml" in start
     assert "--extra-config=apiserver.audit-log-path=/var/log/kubernetes/audit/audit.log" in start
@@ -194,10 +194,27 @@ def test_all_cluster_commands_use_fresh_workload_identity_and_explicit_context(t
     cluster_calls = [line for line in calls(fixture) if line.startswith(("minikube ", "kubectl ", "helm "))]
     assert cluster_calls
     for line in cluster_calls:
-        assert "identity=deworkload" in line
+        assert "identity=debian" in line
         assert f"HOME={fixture['variables']['detection_workload_home']}" in line
         assert f"KUBECONFIG={fixture['variables']['detection_kubeconfig_path']}" in line
     assert all(f"context={fixture['variables']['detection_cluster_name']}" in line for line in cluster_calls if not line.startswith("minikube "))
+
+
+def test_existing_debian_login_is_required_and_never_created_or_password_mutated(tmp_path: Path) -> None:
+    fixture = make_fixture(tmp_path)
+    result = run_role(fixture)
+    assert result.returncode == 0, result.stdout + result.stderr
+    evidence = calls(fixture)
+    assert not any(line.startswith("useradd ") and line.endswith(" debian") for line in evidence)
+    assert any(line.startswith("useradd ") and "--system" in line and line.endswith(" deotel") for line in evidence)
+    assert not any(line.startswith(("passwd ", "chpasswd ", "usermod -p")) for line in evidence)
+
+    missing = make_fixture(tmp_path / "missing")
+    missing["state"].joinpath("user-debian").unlink()
+    rejected = run_role(missing)
+    assert rejected.returncode != 0
+    missing_evidence = calls(missing)
+    assert not any(line.startswith("useradd ") and line.endswith(" debian") for line in missing_evidence)
 
 
 def test_verified_layouts_install_exact_members_and_versions(tmp_path: Path) -> None:
@@ -590,6 +607,29 @@ def test_identical_package_pins_are_deduplicated_and_conflicts_fail_before_mutat
     rejected = run_role(conflict, detection_docker_packages=conflicting)
     assert rejected.returncode != 0
     assert calls(conflict) == []
+
+
+def test_debian_tilde_package_versions_are_exact_but_selectors_are_rejected(tmp_path: Path) -> None:
+    fixture = make_fixture(tmp_path)
+    packages = copy.deepcopy(fixture["variables"]["detection_docker_packages"])
+    packages[0]["version"] = "5:28.5.2-1~debian.12~bookworm"
+    accepted = run_role(fixture, detection_docker_packages=packages)
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert any(
+        "docker-ce=5:28.5.2-1~debian.12~bookworm" in line for line in calls(fixture)
+    )
+
+    for selector in ("28.*", ">=28.5.2", "^28.5.2", "~=28.5.2"):
+        rejected_fixture = make_fixture(tmp_path / selector.replace("/", "_"))
+        rejected_packages = copy.deepcopy(
+            rejected_fixture["variables"]["detection_docker_packages"]
+        )
+        rejected_packages[0]["version"] = selector
+        rejected = run_role(
+            rejected_fixture, detection_docker_packages=rejected_packages
+        )
+        assert rejected.returncode != 0
+        assert calls(rejected_fixture) == []
 
 
 def test_secret_reconciliation_is_status_only_and_acl_prechecks_converge(tmp_path: Path) -> None:

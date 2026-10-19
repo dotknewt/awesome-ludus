@@ -52,3 +52,6 @@ Temporary Items
 .venv/
 .env/
 .pytest_cache
+
+# Local orchestration state
+.slim/deepwork/

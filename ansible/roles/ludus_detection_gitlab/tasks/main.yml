@@ -12,17 +12,5 @@
 - name: Prove selected-version GitLab readiness before credential mutations
   ansible.builtin.include_tasks: readiness.yml
 
-- name: Set the fixed isolated-lab root password through protected stdin
-  ansible.builtin.command:
-    argv: [gitlab-rails, runner, '-']
-    stdin: |
-      user = User.find_by_username('root')
-      raise 'root account missing' unless user
-      user.password = {{ detection_gitlab_root_password | to_json }}
-      user.password_confirmation = {{ detection_gitlab_root_password | to_json }}
-      raise 'root password update failed' unless user.save
-  changed_when: true
-  no_log: true
-
 - name: Bootstrap the stable paused runner identity
   ansible.builtin.include_tasks: bootstrap.yml

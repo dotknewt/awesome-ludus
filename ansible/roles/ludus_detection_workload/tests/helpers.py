@@ -52,8 +52,8 @@ def make_fixture(tmp_path: Path) -> dict[str, Any]:
     calls = root / "calls.jsonl"
     calls.touch()
     owner = getpass.getuser()
-    workload_home = str(root / "home/deworkload")
-    kubeconfig = str(root / "home/deworkload/.kube/config")
+    workload_home = str(root / "home/debian")
+    kubeconfig = str(root / "home/debian/.kube/config")
     cluster = "synthetic-range-minikube"
 
     def executable(name: str, body: str, *, log: bool = True) -> Path:
@@ -81,13 +81,13 @@ exec "$@"
         f"""
 case "$1" in
   -u) [ -f {state}/user-$2 ] ;;
-  -nG) user=${{2:-${{DE_IDENTITY:-}}}}; if [ "$user" = deworkload ]; then cat {state}/deworkload-groups; else cat {state}/deotel-groups; fi ;;
+  -nG) user=${{2:-${{DE_IDENTITY:-}}}}; if [ "$user" = debian ]; then cat {state}/debian-groups; else cat {state}/deotel-groups; fi ;;
   *) exit 64 ;;
 esac
 """,
     )
-    executable("useradd", f'for user in "$@"; do :; done; touch {state}/user-$user; [ "$user" = deworkload ] && printf deworkload > {state}/deworkload-groups || printf deotel > {state}/deotel-groups')
-    executable("usermod", f"grep -qw docker {state}/deworkload-groups || printf ' docker' >> {state}/deworkload-groups")
+    executable("useradd", f'for user in "$@"; do :; done; touch {state}/user-$user; printf deotel > {state}/deotel-groups')
+    executable("usermod", f"grep -qw docker {state}/debian-groups || printf ' docker' >> {state}/debian-groups")
     executable("gpasswd", f"[ \"$*\" = '-d deotel docker' ] || exit 64; sed 's/ docker//g' {state}/deotel-groups > {state}/groups.tmp; mv {state}/groups.tmp {state}/deotel-groups")
     executable(
         "dpkg-query",
@@ -218,7 +218,8 @@ if [ -f {state}/gpg-extra-primary ]; then
 fi
 """,
     )
-    (state / "deworkload-groups").write_text("deworkload\n", encoding="utf-8")
+    (state / "user-debian").touch()
+    (state / "debian-groups").write_text("debian\n", encoding="utf-8")
     (state / "deotel-groups").write_text("deotel\n", encoding="utf-8")
 
     common = f"""
@@ -228,7 +229,7 @@ for arg in "$@"; do
   case "$arg" in --context=*|--kube-context=*|--profile=*) context=${{arg#*=}} ;; esac
 done
 printf '%s\\n' "TOOL identity=$identity HOME=${{HOME:-}} KUBECONFIG=${{KUBECONFIG:-}} context=$context $*" >> {calls}
-[ "$identity" = deworkload ] || exit 70
+[ "$identity" = debian ] || exit 70
 [ "${{HOME:-}}" = "{workload_home}" ] || exit 71
 [ "${{KUBECONFIG:-}}" = "{kubeconfig}" ] || exit 72
 """
@@ -388,7 +389,7 @@ esac
             "node_log_inputs": ["/var/log/containers/*.log", "/var/log/pods/kube-system_*/*/*.log"],
             "required_rbac": {"nodes": ["get", "list", "watch"], "pods": ["get", "list", "watch"]},
         },
-        "detection_workload_user": "deworkload", "detection_workload_home": workload_home,
+        "detection_workload_user": "debian", "detection_workload_home": workload_home,
         "detection_cluster_name": cluster, "detection_kubeconfig_path": kubeconfig,
         "detection_splunk_hec_url": "http://synthetic-range-splunk:8088/services/collector/event",
         "detection_runtime_token_state": "present",
@@ -402,8 +403,8 @@ esac
         "detection_etc_dir": str(root / "etc/detection-engineering"),
         "detection_secret_dir": str(root / "etc/detection-engineering/secrets"),
         "detection_host_token_path": str(root / "etc/detection-engineering/secrets/hec-workload.token"),
-        "detection_minikube_home": str(root / "home/deworkload/.minikube"),
-        "detection_audit_policy_stage_path": str(root / "home/deworkload/.minikube/files/etc/kubernetes/audit-policy.yaml"),
+        "detection_minikube_home": str(root / "home/debian/.minikube"),
+        "detection_audit_policy_stage_path": str(root / "home/debian/.minikube/files/etc/kubernetes/audit-policy.yaml"),
         "detection_workload_config_dir": str(root / "etc/detection-engineering/workload"),
         "detection_systemd_dir": str(root / "systemd"), "detection_cache_dir": str(cache),
         "detection_minikube_path": str(fake_bin / "minikube"), "detection_kubectl_path": str(fake_bin / "kubectl"),
@@ -432,7 +433,7 @@ esac
     docker = f"""
 identity=${{DE_IDENTITY:-root}}
 printf '%s\\n' "docker identity=$identity HOME=${{HOME:-}} $*" >> {calls}
-[ "$identity" = deworkload ] || exit 70
+[ "$identity" = debian ] || exit 70
 [ "${{HOME:-}}" = "{workload_home}" ] || exit 71
 case "$*" in info) printf '%s\\n' 'Server Version: synthetic' ;; *) exit 64 ;; esac
 """

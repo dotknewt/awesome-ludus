@@ -1,0 +1,81 @@
+---
+- name: Stage and apply the private stock-log access helper
+  block:
+    - name: Create invocation-owned private stock-log staging directory
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: detection-stock-log-access-
+      register: detection_stock_log_stage
+      changed_when: false
+
+    - name: Stage the accepted stock-log helper bytes
+      ansible.builtin.copy:
+        src: configure_stock_log_access.py
+        dest: "{{ detection_stock_log_stage.path }}/configure_stock_log_access.py"
+        mode: "0700"
+      changed_when: false
+
+    - name: Stage the fixed reviewed Bookworm profile
+      ansible.builtin.copy:
+        src: stock-log-profiles/bookworm/
+        dest: "{{ detection_stock_log_stage.path }}/bookworm/"
+        mode: preserve
+      changed_when: false
+
+    - name: Execute the fixed stock-log access policy
+      ansible.builtin.command:
+        argv:
+          - "{{ detection_logging_python_command }}"
+          - "{{ detection_stock_log_stage.path }}/configure_stock_log_access.py"
+          - --root
+          - "{{ detection_logging_root | default('/') | ternary(detection_logging_root, '/') }}"
+          - --reader
+          - "{{ detection_laurel_read_user }}"
+          - --profile-dir
+          - "{{ detection_stock_log_stage.path }}/bookworm"
+          - --dpkg-query
+          - "{{ detection_logging_dpkg_query_command }}"
+          - --getent
+          - "{{ detection_logging_getent_command }}"
+          - --systemctl
+          - "{{ detection_logging_service_command }}"
+          - --rsyslogd
+          - "{{ detection_logging_rsyslogd_command }}"
+          - --runuser
+          - "{{ detection_logging_runuser_command }}"
+      changed_when: false
+      failed_when: false
+      register: detection_stock_log_helper
+
+    - name: Decode the stock-log helper result
+      ansible.builtin.set_fact:
+        detection_stock_log_access_result: "{{ detection_stock_log_helper.stdout | from_json }}"
+
+    - name: Require complete stock-log access application
+      ansible.builtin.assert:
+        that:
+          - detection_stock_log_helper.rc == 0
+          - detection_stock_log_access_result.stage == 'complete'
+        fail_msg: >-
+          Stock-log access helper failed (rc={{ detection_stock_log_helper.rc }}):
+          {{ detection_stock_log_access_result | to_json }}
+
+    - name: Report stock-log access changes
+      ansible.builtin.debug:
+        var: detection_stock_log_access_result
+      changed_when: detection_stock_log_access_result.changed | bool
+  always:
+    - name: Remove only this invocation's stock-log staging directory
+      ansible.builtin.file:
+        path: "{{ detection_stock_log_stage.path }}"
+        state: absent
+      when: detection_stock_log_stage.path is defined
+      changed_when: false
+      ignore_errors: true
+      register: detection_stock_log_stage_cleanup
+
+- name: Require successful private staging cleanup
+  ansible.builtin.assert:
+    that:
+      - not (detection_stock_log_stage_cleanup.failed | default(false))
+    fail_msg: Stock-log access application completed but invocation-owned staging cleanup failed

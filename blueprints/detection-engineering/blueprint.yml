@@ -3,10 +3,9 @@ manifest_version: 1
 id: detection-engineering
 name: Detection Engineering
 description: >-
-  Staged offline contract for a future five-VM detection-engineering blueprint.
-  Task 8 owns production wiring; deployment remains blocked until its factual
-  gates and new-range predeployment requirements are satisfied.
-version: 0.1.0
+  Save-ready five-VM detection-engineering range configuration. Applying or
+  deploying it remains a separate operator-authorized lifecycle action.
+version: 0.2.0
 config: range-config.yml
 tags:
   - detection-engineering

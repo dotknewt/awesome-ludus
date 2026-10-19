@@ -21,7 +21,7 @@ def _contract() -> dict:
     return {
         "bootstrap_auth": {
             "credential_type": "personal_access_token",
-            "scopes": ["synthetic_create_runner", "synthetic_manage_runner"],
+            "scopes": ["create_runner", "manage_runner", "read_api"],
             "expiration_days": 1,
             "creation_argv": ["gitlab-rails", "runner", "-"],
             "protected_path": "/etc/detection-engineering/secrets/runner-api-bootstrap.token",
@@ -31,8 +31,9 @@ def _contract() -> dict:
         },
         "manager": {
             "runner_type": "instance_type",
-            "create_scope": "synthetic_create_runner",
-            "manage_scope": "synthetic_manage_runner",
+            "create_scope": "create_runner",
+            "manage_scope": "manage_runner",
+            "read_scope": "read_api",
             "create_endpoint": "/api/v4/user/runners",
             "create_method": "POST",
             "lookup_endpoint": "/api/v4/runners/all",
@@ -51,6 +52,7 @@ def _contract() -> dict:
 
 def _readiness_contract() -> dict:
     return {
+        "transport_base_url": "http://localhost",
         "endpoint": "/synthetic-selected-version-readiness",
         "method": "GET",
         "success_statuses": [200],
@@ -180,7 +182,6 @@ def _preflight_variables(tmp_path: Path) -> dict:
         "detection_gitlab_repository_url": "https://packages.synthetic.invalid/gitlab-ce",
         "detection_gitlab_signing_key_url": "https://packages.synthetic.invalid/key.gpg",
         "detection_gitlab_signing_key_fingerprint": "A" * 40,
-        "detection_gitlab_root_password": "synthetic-not-a-real-password",
         "detection_gitlab_readiness_contract": _readiness_contract(),
         "detection_gitlab_fixture_mode": True,
         "detection_gitlab_apply_reconfigure": False,
@@ -209,12 +210,13 @@ def test_readiness_retries_bounded_verified_endpoint(fake_gitlab, tmp_path: Path
     assert result.returncode == 0, result.stdout + result.stderr
     calls = json.loads(state_path.read_text())["calls"]
     assert [(c["method"], c["url"]) for c in calls] == [
-        ("GET", "http://gitlab.synthetic.invalid/synthetic-selected-version-readiness")
+        ("GET", "http://localhost/synthetic-selected-version-readiness")
     ] * 3
     readiness = json.loads(readiness_path.read_text())
     assert readiness == {
         "schema_version": 1,
         "status": "READY",
+        "transport_base_url": "http://localhost",
         "endpoint": "/synthetic-selected-version-readiness",
         "method": "GET",
         "http_status": 200,
@@ -241,10 +243,30 @@ def test_readiness_timeout_blocks(fake_gitlab, tmp_path: Path) -> None:
     assert not readiness_path.exists()
 
 
-def test_main_orders_readiness_before_root_and_bootstrap() -> None:
-    main = (REPOSITORY_ROOT / "ansible/roles/ludus_detection_gitlab/tasks/main.yml").read_text()
-    assert main.index("readiness.yml") < main.index("Set the fixed isolated-lab root password")
-    assert main.index("Set the fixed isolated-lab root password") < main.index("bootstrap.yml")
+def test_main_preserves_package_generated_initial_root_password() -> None:
+    tasks = REPOSITORY_ROOT / "ansible/roles/ludus_detection_gitlab/tasks"
+    main = (tasks / "main.yml").read_text()
+    task_graph = "\n".join(path.read_text() for path in sorted(tasks.glob("*.yml")))
+    assert main.index("readiness.yml") < main.index("bootstrap.yml")
+    assert "detection_gitlab_root_password" not in task_graph
+    assert "user.password" not in task_graph
+    assert "initial_root_password" not in task_graph
+
+
+def test_preflight_does_not_require_root_password(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    result = run_production_include(ROLE, "preflight", _preflight_variables(tmp_path), fake_bin)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_runner_bootstrap_is_rails_local_and_does_not_need_root_password(tmp_path, fake_gitlab) -> None:
+    fake_bin, state_path = fake_gitlab
+    result = _run_bootstrap(tmp_path, fake_bin)
+    assert result.returncode == 0, result.stdout + result.stderr
+    state = json.loads(state_path.read_text())
+    assert state.get("root_password_updates", 0) == 0
+    assert state["rails_calls"][0]["argv"] == ["runner", "-"]
 
 
 def test_fresh_scoped_date_limited_credential_and_created_identity_detail(tmp_path, fake_gitlab) -> None:
@@ -255,7 +277,7 @@ def test_fresh_scoped_date_limited_credential_and_created_identity_detail(tmp_pa
     rails = state["rails_calls"][0]
     assert rails["argv"] == ["runner", "-"]
     assert "Time.now.utc.to_date + 1" in rails["stdin"]
-    assert "%i[synthetic_create_runner synthetic_manage_runner]" in rails["stdin"]
+    assert "%i[create_runner manage_runner read_api]" in rails["stdin"]
     assert "File::EXCL" in rails["stdin"]
     assert "file.flush" in rails["stdin"] and "file.fsync" in rails["stdin"]
     assert "credential.destroy!" in rails["stdin"]
@@ -384,8 +406,10 @@ def test_concurrent_foreign_handle_is_preserved_without_new_pat_orphan(tmp_path,
 
 
 @pytest.mark.parametrize("scopes", [
-    ["synthetic_create_runner", "synthetic_manage_runner", "synthetic_extra_scope"],
-    ["synthetic_create_runner", "synthetic_create_runner"],
+    ["create_runner", "manage_runner"],
+    ["create_runner", "manage_runner", "read_runner"],
+    ["create_runner", "manage_runner", "read_api", "api"],
+    ["create_runner", "create_runner", "read_api"],
 ])
 def test_nonexact_or_duplicate_bootstrap_scopes_are_rejected_before_mint(tmp_path, fake_gitlab, scopes) -> None:
     fake_bin, state_path = fake_gitlab

@@ -1,0 +1,100 @@
+---
+# Controller-provided/user-pasted facts only. Partial observations stay BLOCKED.
+schema_version: 4
+target_range:
+  status: VERIFIED
+  source: {kind: LUDUS_API_READ, reference: range-thrunt-readback, observed_at: null}
+  observed:
+    name: thrunt
+    range_number: 3
+    range_cidr: 10.3.0.0/16
+    state: NEVER_DEPLOYED
+    vm_count: 0
+    testing: false
+  limitation: Read-only identity/state evidence; this does not authorize deployment.
+  required_for_deployment: true
+  unresolved: []
+templates:
+  gitlab: &debian12_partial
+    status: BLOCKED
+    source: {kind: LUDUS_API_READ, reference: debian-12-template-inventory, observed_at: null}
+    observed:
+      name: debian-12-x64-server-template
+      os_type: linux
+      distribution: Debian
+      major_version: 12
+      architecture: null
+      built: true
+      inherited_disk_gb: null
+    limitation: Built Debian 12 Linux availability is known; architecture and inherited disk remain unresolved rather than inferred from the name.
+    required_for_deployment: true
+    unresolved: [architecture, inherited_disk_gb]
+  runner: *debian12_partial
+  malcolm: *debian12_partial
+  splunk: *debian12_partial
+  workload: *debian12_partial
+capacity:
+  status: BLOCKED
+  source: {kind: COMPOSITE, reference: user-supplied-total-ram-plus-target-api-observations, observed_at: null}
+  observed:
+    total_ram_gb: 128
+    free_ram_gb: null
+    reported_cpu_cores: 16
+    current_allocations: null
+    storage_pools:
+      - {name: disks, type: lvmthin, size_gb: 931.32, used_gb: 145.38, free_gb: 785.94}
+      - {name: local, type: dir, size_gb: 305.76, used_gb: 16.05, free_gb: 275.41}
+    deployment_sufficient: null
+    decision_basis: User supplied 128 GB host total; API supplied cores and storage only. Free RAM, allocations, and sufficiency remain unresolved.
+  limitation: Total RAM is user-supplied and is not free RAM. API storage and reported cores are observed; no 1:1 CPU or full-disk threshold is assumed.
+  required_for_deployment: true
+  unresolved: [free_ram_gb, current_allocations, deployment_sufficient]
+network:
+  status: VERIFIED
+  source: {kind: USER_PROVIDED, reference: user-approved-vlan10-and-vmbr-range-id-policy, observed_at: '2026-10-18T19:39:58Z'}
+  observed:
+    range_cidr: 10.3.0.0/16
+    lab_cidr: 10.3.10.0/24
+    host_bridge: vmbr3
+    host_bridge_promiscuous_mode: USER_MANAGED_NOT_A_PROVISIONING_GATE
+  limitation: VLAN-10 and host vmbr3 are approved user policy. Guest and Docker firewall policy is out of scope; Malcolm capture-interface discovery remains a provisioning-time check, and host promiscuous mode is user-managed.
+  required_for_deployment: true
+  unresolved: []
+provisioning_identity:
+  status: VERIFIED
+  source: {kind: USER_PROVIDED, reference: user-confirmed-docs-passwords-debian-default, observed_at: '2026-10-18T19:39:58Z'}
+  observed:
+    user: debian
+    home: /home/debian
+    account_kind: existing_template_login
+    documented_default_login: debian:debian
+    password_action: preserve_existing
+    create_user: false
+  limitation: User selected the documented Debian template login. Roles must preserve the existing identity/password; account existence and HOME are checked during provisioning.
+  required_for_deployment: true
+  unresolved: []
+role_inventory:
+  status: PRESENCE_OBSERVED_CONTENT_VERIFICATION_WAIVED
+  source: {kind: COMPOSITE, reference: target-api-role-name-observation-plus-2026-10-19-user-waiver, observed_at: null}
+  observed:
+    present_roles:
+      - ludus_detection_forwarder
+      - ludus_detection_forwarder_pipeline
+      - ludus_detection_gitlab
+      - ludus_detection_guest_firewall
+      - ludus_detection_linux_logging
+      - ludus_detection_runner
+      - ludus_detection_splunk
+      - ludus_detection_workload
+      - ludus_install_malcolm
+      - ludus_install_docker
+      - ludus_install_minikube
+    collections:
+      - {name: ansible.posix, version: 2.2.2}
+      - {name: community.crypto, version: 3.5.0}
+      - {name: community.general, version: 10.3.0}
+    content_verification: USER_WAIVED_NOT_VERIFIED
+  waiver: {decision: USER_WAIVED_ROLE_VERSION_AND_CONTENT_COMPARISON, recorded_on: '2026-10-19'}
+  limitation: Required in-scope role and collection names are present. By explicit user direction, installed role versions and contents are not compared or claimed verified. The observed firewall role is not required or wired by this blueprint.
+  required_for_deployment: false
+  unresolved: []

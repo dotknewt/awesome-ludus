@@ -2,7 +2,8 @@
 - name: Require a bounded selected-version readiness contract
   ansible.builtin.assert:
     that:
-      - detection_gitlab_readiness_contract.keys() | list | sort == ['attempts', 'delay_seconds', 'endpoint', 'method', 'success_statuses']
+      - detection_gitlab_readiness_contract.keys() | list | sort == ['attempts', 'delay_seconds', 'endpoint', 'method', 'success_statuses', 'transport_base_url']
+      - detection_gitlab_readiness_contract.transport_base_url == 'http://localhost'
       - detection_gitlab_readiness_contract.endpoint is match('^/[^?\s]+$')
       - detection_gitlab_readiness_contract.method == 'GET'
       - detection_gitlab_readiness_contract.success_statuses is sequence

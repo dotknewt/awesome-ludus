@@ -588,6 +588,22 @@ def test_fresh_install_bootstraps_before_unit_service_and_cleans_seed(tmp_path: 
     assert _actual(fixture, "/etc/detection-engineering/forwarder-install-provenance.yml").is_file()
 
 
+def test_bootstrap_keeps_shared_marker_parent_private_and_seed_parent_unchanged(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    marker_parent = _actual(fixture, "/var/lib/detection-engineering")
+    marker_parent.mkdir(parents=True)
+    marker_parent.chmod(0o750)
+    unrelated = marker_parent / "unrelated-state"
+    unrelated.write_text("preserve\n", encoding="utf-8")
+
+    result = _run(fixture)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert marker_parent.stat().st_mode & 0o777 == 0o700
+    assert _actual(fixture, "/opt/splunkforwarder/etc/system/local").stat().st_mode & 0o777 == 0o750
+    assert unrelated.read_text(encoding="utf-8") == "preserve\n"
+
+
 def test_convergence_validates_marker_provenance_and_does_not_rebootstrap(tmp_path: Path) -> None:
     fixture = _fixture(tmp_path)
     first = _run(fixture); assert first.returncode == 0, first.stdout + first.stderr

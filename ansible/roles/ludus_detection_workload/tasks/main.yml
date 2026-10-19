@@ -5,7 +5,8 @@
     that:
       - range_id is string and range_id | length > 0
       - detection_cluster_name == range_id + '-minikube'
-      - detection_workload_user == 'deworkload'
+      - detection_workload_user == 'debian'
+      - detection_workload_home is match('^/')
       - detection_runtime_token_state in ['present', 'absent']
       - detection_splunk_hec_handoff is mapping
       - detection_splunk_hec_handoff.keys() | sort == ['delegate_host', 'input_path', 'service_name', 'source_path']

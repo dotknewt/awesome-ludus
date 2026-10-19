@@ -1,3 +1,9 @@
 ---
+- name: Validate native producer contract before any command primitive
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Establish native producer prerequisites before access migration
+  ansible.builtin.include_tasks: native_prerequisites.yml
+
 - name: Configure native auditd and Laurel logging
   ansible.builtin.include_tasks: configure.yml

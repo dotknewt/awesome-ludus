@@ -29,7 +29,7 @@
         stdin: |
           silent
           show-error
-          url = "{{ detection_gitlab_external_url | regex_replace('/+$', '') }}{{ detection_gitlab_readiness_contract.endpoint }}"
+          url = "{{ detection_gitlab_readiness_contract.transport_base_url }}{{ detection_gitlab_readiness_contract.endpoint }}"
           request = "{{ detection_gitlab_readiness_contract.method }}"
           output = "{{ detection_gitlab_api_work_dir }}/readiness.json"
           write-out = "%{http_code}"
@@ -57,6 +57,7 @@
           {{ {
             'schema_version': 1,
             'status': 'READY',
+            'transport_base_url': detection_gitlab_readiness_contract.transport_base_url,
             'endpoint': detection_gitlab_readiness_contract.endpoint,
             'method': detection_gitlab_readiness_contract.method,
             'http_status': detection_gitlab_readiness_result.stdout | int,

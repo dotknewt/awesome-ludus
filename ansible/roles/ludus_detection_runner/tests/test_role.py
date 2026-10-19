@@ -26,7 +26,7 @@ def _contract() -> dict:
     return {
         "bootstrap_auth": {
             "credential_type": "personal_access_token",
-            "scopes": ["synthetic_create_runner", "synthetic_manage_runner"],
+            "scopes": ["create_runner", "manage_runner", "read_api"],
             "expiration_days": 1,
             "creation_argv": ["gitlab-rails", "runner", "-"],
             "protected_path": "/etc/detection-engineering/secrets/runner-api-bootstrap.token",
@@ -36,8 +36,9 @@ def _contract() -> dict:
         },
         "manager": {
             "runner_type": "instance_type",
-            "create_scope": "synthetic_create_runner",
-            "manage_scope": "synthetic_manage_runner",
+            "create_scope": "create_runner",
+            "manage_scope": "manage_runner",
+            "read_scope": "read_api",
             "create_endpoint": "/api/v4/user/runners",
             "create_method": "POST",
             "lookup_endpoint": "/api/v4/runners/all",
@@ -214,6 +215,7 @@ def _variables(tmp_path: Path) -> dict:
     readiness.write_text(json.dumps({
         "schema_version": 1,
         "status": "READY",
+        "transport_base_url": "http://localhost",
         "endpoint": "/synthetic-ready",
         "method": "GET",
         "http_status": 200,
@@ -234,6 +236,7 @@ def _variables(tmp_path: Path) -> dict:
             "method": "GET",
         },
         "detection_gitlab_readiness_contract": {
+            "transport_base_url": "http://localhost",
             "endpoint": "/synthetic-ready",
             "method": "GET",
             "success_statuses": [200],

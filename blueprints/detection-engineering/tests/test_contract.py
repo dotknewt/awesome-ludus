@@ -28,14 +28,6 @@ CANDIDATE = {
 }
 
 EXPECTED_ROLE_VARIABLES = {
-    "guest_firewall": {
-        "detection_firewall_profile",
-        "detection_firewall_lab_ip",
-        "detection_firewall_management_cidrs",
-        "detection_firewall_vpn_cidrs",
-        "detection_firewall_docker_bridges",
-        "detection_firewall_allowed_tcp",
-    },
     "linux_logging": {
         "detection_linux_host_id",
         "detection_laurel_artifact",
@@ -50,6 +42,7 @@ EXPECTED_ROLE_VARIABLES = {
         "detection_splunk_hec_supported",
         "detection_splunk_search_api_supported",
         "detection_splunk_bind_ip",
+        "detection_splunk_admin_username",
         "detection_splunk_admin_password",
         "detection_splunk_restore_authorized",
         "detection_splunk_maintenance_state_path",
@@ -57,6 +50,7 @@ EXPECTED_ROLE_VARIABLES = {
     "forwarder": {
         "detection_forwarder_artifact",
         "detection_forwarder_download_auth_path",
+        "detection_forwarder_bootstrap_contract",
         "detection_forwarder_profile",
         "detection_forwarder_inputs",
         "detection_splunk_receiver_host",
@@ -67,8 +61,9 @@ EXPECTED_ROLE_VARIABLES = {
         "detection_gitlab_repository_url",
         "detection_gitlab_signing_key_url",
         "detection_gitlab_signing_key_fingerprint",
+        "detection_gitlab_external_url",
+        "detection_gitlab_readiness_contract",
         "detection_runner_api_contract",
-        "detection_gitlab_root_password",
     },
     "runner": {
         "detection_runner_packages",
@@ -78,6 +73,8 @@ EXPECTED_ROLE_VARIABLES = {
         "detection_runner_description",
         "detection_gitlab_host",
         "detection_runner_api_contract",
+        "detection_gitlab_readiness_contract",
+        "detection_runner_jobs_contract",
     },
     "workload": {
         "detection_docker_packages",
@@ -94,6 +91,7 @@ EXPECTED_ROLE_VARIABLES = {
         "detection_workload_user",
         "detection_cluster_name",
         "detection_splunk_hec_url",
+        "detection_splunk_hec_handoff",
         "detection_runtime_token_state",
     },
     "malcolm": {
@@ -224,8 +222,10 @@ def test_exact_resource_totals(blueprint_root, read_yaml):
     ]
     assert sum(vm["ram_gb"] for vm in vms) == 108
     assert sum(vm["cpus"] for vm in vms) == 26
-    assert config["ludus"] == []
-    assert config["ludus_extensions"]["detection_engineering_contract"]["deployment_blocked"] is True
+    assert len(config["ludus"]) == 5
+    render = config["ludus_extensions"]["detection_engineering_publication"]
+    assert render["save_ready"] is True
+    assert render["deployment_authorized"] is False
 
 
 def test_gate_records_have_source_status_limitation_and_stops(blueprint_root, read_yaml):
@@ -272,7 +272,7 @@ def test_every_manifest_value_maps_to_exact_role_var(blueprint_root, read_yaml):
             assert isinstance(mapping["type"], str) and mapping["type"]
             if "source" in mapping:
                 assert mapping["source"].startswith(
-                    ("verified_inputs.", "planned_vm.", "contract.", "runtime_secret.", "role_defaults.")
+                    ("product_pins.", "target_inputs.", "planned_vm.", "contract.", "runtime_secret.", "role_defaults.", "provisioning_time.")
                 ), variable
     assert actual["splunk"]["detection_splunk_restore_authorized"] == {"value": False, "type": "bool"}
     assert actual["forwarder"]["detection_splunk_receiver_port"] == {"value": 9997, "type": "int"}
@@ -280,8 +280,6 @@ def test_every_manifest_value_maps_to_exact_role_var(blueprint_root, read_yaml):
         "source": "contract.cluster_name_template",
         "type": "range_template[str]",
     }
-    assert actual["guest_firewall"]["detection_firewall_lab_ip"]["operation"] == "derive_lab_ip"
-    assert actual["guest_firewall"]["detection_firewall_allowed_tcp"]["operation"] == "assemble_firewall_rules"
     assert actual["forwarder"]["detection_forwarder_inputs"]["operation"] == "project_forwarder_inputs"
     for name in ("detection_minikube_artifact", "detection_kubectl_artifact", "detection_helm_artifact"):
         assert actual["workload"][name]["operation"] == "project_runtime_artifact"
@@ -405,12 +403,13 @@ def test_splunk_candidate_record_matches_spec_urls_verbatim(blueprint_root, read
     }
 
 
-def test_initial_trial_does_not_require_verified_free_gate(blueprint_root, read_yaml):
+def test_static_initial_trial_contract_does_not_promote_future_free_runtime(blueprint_root, read_yaml):
     inputs = _load(blueprint_root, read_yaml, "verified-inputs.yml")
     trial = inputs["capabilities"]["splunk"]
     free = inputs["capabilities"]["splunk_free"]
-    assert trial["status"] == "BLOCKED"
-    assert trial["observed"] is None
+    assert trial["status"] == "VERIFIED"
+    assert trial["observed"]["initial_mode"] == "ENTERPRISE_60_DAY_TRIAL"
+    assert "live service acceptance" in trial["limitation"]
     confirmation = inputs["user_supplied_candidates"]["splunk_initial_trial"]
     assert confirmation == {
         "record_type": "USER_CONFIRMATION",
@@ -482,13 +481,16 @@ def test_production_include_harness_ast_is_unchanged():
     assert digest == "2b49069c34d83f3c58b3c5ef9df092afcd2f215ff0a6098fe78c4f6e9ffe793b"
 
 
-def test_target_inventory_is_deployment_only(blueprint_root, read_yaml):
+def test_save_ready_range_keeps_target_inventory_as_deployment_only_evidence(blueprint_root, read_yaml):
     config = _load(blueprint_root, read_yaml, "range-config.yml")
     contract = config["ludus_extensions"]["detection_engineering_contract"]
     policy = contract["target_inventory_policy"]
-    assert contract["stage"] == "TASK_1_OFFLINE_CONTRACT"
-    assert contract["offline_contract_status"] == "READY_FOR_ROLE_DEVELOPMENT"
-    assert contract["deployment_readiness"] == "BLOCKED"
+    assert contract["stage"] == "SAVE_READY_RANGE_CONFIGURATION"
+    assert contract["offline_contract_status"] == "IMPLEMENTED"
+    assert contract["save_readiness"] == "READY"
+    assert contract["deployment_authorization"] == "NOT_GRANTED"
+    assert "deployment_readiness" not in contract
+    assert "deployment_blocked" not in contract
     assert policy == {
         "collection_method": "MCP",
         "collection_stage": "PREDEPLOYMENT",
@@ -505,13 +507,13 @@ def test_target_inventory_is_deployment_only(blueprint_root, read_yaml):
         assert gate["stops"] == [10]
 
 
-def test_new_range_predeployment_requirement_is_explicit(blueprint_root, read_yaml):
+def test_existing_empty_thrunt_range_is_the_only_authorized_save_target(blueprint_root, read_yaml):
     config = _load(blueprint_root, read_yaml, "range-config.yml")
     requirement = config["ludus_extensions"]["detection_engineering_contract"]["new_range_requirement"]
     assert requirement == {
-        "required": True,
-        "stage": "PREDEPLOYMENT",
-        "existing_range_reuse": "FORBIDDEN",
+        "required": False,
+        "stage": "NOT_APPLICABLE_EXISTING_EMPTY_RANGE",
+        "existing_range_reuse": "AUTHORIZED_THRUNT_ONLY",
         "creation_authorized": False,
         "automatic_action": False,
     }
@@ -523,12 +525,12 @@ def test_mapping_contract_resolves_explicit_synthetic_sources(blueprint_root, re
     schema = contract["mapping_source_schema"]
     assert schema["planned_vm"]["provisioning_user"] == {
         "type": "linux_user",
-        "required_at": "TASK_8_MATERIALIZATION",
-        "source": "MCP_TEMPLATE_DISCOVERY",
+        "required_at": "RANGE_FILE_MATERIALIZATION",
+        "value": "debian",
     }
     assert schema["planned_vm"]["lab_ip"]["derive"] == {
         "operation": "derive_lab_ip",
-        "inputs": ["verified_inputs.network.observed.lab_cidr", "planned_vm.ip_last_octet"],
+        "inputs": ["target_inputs.network.observed.lab_cidr", "planned_vm.ip_last_octet"],
     }
     assert set(schema["planned_vm"]["dependencies"]) == {"gitlab", "splunk"}
 
@@ -551,24 +553,29 @@ def test_mapping_contract_resolves_explicit_synthetic_sources(blueprint_root, re
     }
     runner_api = {
         "bootstrap_auth": {
-            "credential_type": "synthetic-access-token",
-            "minimum_scope": "create_runner",
-            "creation_argv": ["synthetic-client"],
-            "stdin_operation": "token-via-stdin",
+            "credential_type": "personal_access_token",
+            "scopes": ["create_runner", "manage_runner", "read_api"],
+            "expiration_days": 1,
+            "creation_argv": ["gitlab-rails", "runner", "-"],
             "protected_path": "/etc/detection-engineering/secrets/runner-api-bootstrap.token",
             "mode": "0600",
-            "revoke_endpoint": "/synthetic/revoke",
+            "revoke_endpoint": "/api/v4/personal_access_tokens/self",
             "revoke_method": "DELETE",
         },
         "manager": {
-            "runner_type": "project_type",
-            "create_endpoint": "/synthetic/runners",
+            "runner_type": "instance_type",
+            "create_scope": "create_runner",
+            "manage_scope": "manage_runner",
+            "read_scope": "read_api",
+            "create_endpoint": "/api/v4/user/runners",
             "create_method": "POST",
-            "lookup_endpoint": "/synthetic/runners/:id",
+            "lookup_endpoint": "/api/v4/runners/all",
             "lookup_method": "GET",
-            "update_endpoint": "/synthetic/runners/:id",
+            "detail_endpoint": "/api/v4/runners/:id",
+            "detail_method": "GET",
+            "update_endpoint": "/api/v4/runners/:id",
             "update_method": "PUT",
-            "request_fields": ["description", "paused"],
+            "request_fields": ["runner_type", "description", "paused"],
             "response_token_field": "token",
             "local_verify_command": ["gitlab-runner", "verify"],
             "pause_at_create": True,
@@ -621,63 +628,66 @@ def test_mapping_contract_resolves_explicit_synthetic_sources(blueprint_root, re
         "planned_vm.provisioning_user": "debian",
         "contract.planned_vms": planned_vms,
         "contract.cluster_name_template": contract["cluster_name_template"],
-        "contract.firewall_policy": contract["firewall_policy"],
         "contract.forwarder_source_policy": contract["forwarder_source_policy"],
         "contract.telemetry_matrix.sources": _load(blueprint_root, read_yaml, "telemetry-matrix.yml")["sources"],
-        "verified_inputs.network.observed.lab_cidr": "10.77.10.0/24",
-        "verified_inputs.network.observed.management_cidrs": ["10.77.0.0/24"],
-        "verified_inputs.network.observed.vpn_cidrs": ["10.78.0.0/24"],
-        "verified_inputs.network.observed.docker_bridge_interfaces": ["docker0"],
-        "verified_inputs.network.observed.service_ports": {
-            "gitlab": [22, 80],
-            "runner": [22],
-            "malcolm": [22, 443, 5601],
-            "splunk": [22, 8000, 8089, 9997, 8088],
-            "workload": [22],
+        "target_inputs.network.observed.lab_cidr": "10.77.10.0/24",
+        "provisioning_time.guest_capture_interface_discovery": "eth0",
+        "product_pins.downloads.splunk.observed": artifact,
+        "product_pins.downloads.forwarder.observed": artifact,
+        "product_pins.downloads.laurel.observed": artifact,
+        "product_pins.downloads.minikube.observed": artifact,
+        "product_pins.downloads.kubectl.observed": artifact,
+        "product_pins.downloads.helm.observed": artifact,
+        "product_pins.downloads.otel_host.observed": artifact,
+        "product_pins.downloads.minikube": artifact_gates["minikube"],
+        "product_pins.downloads.kubectl": artifact_gates["kubectl"],
+        "product_pins.downloads.helm": artifact_gates["helm"],
+        "product_pins.downloads.otel_host": artifact_gates["otel_host"],
+        "product_pins.artifact_layouts.minikube": layout_gates["minikube"],
+        "product_pins.artifact_layouts.kubectl": layout_gates["kubectl"],
+        "product_pins.artifact_layouts.helm": layout_gates["helm"],
+        "product_pins.artifact_layouts.otel_host": layout_gates["otel_host"],
+        "product_pins.capabilities.splunk.observed": trial,
+        "product_pins.capabilities.splunk.observed.hec": True,
+        "product_pins.capabilities.splunk.observed.search_api": True,
+        "product_pins.apt.gitlab.observed.packages": package_pin,
+        "product_pins.apt.gitlab.observed.repository_url": "https://example.invalid/gitlab",
+        "product_pins.apt.gitlab.observed.signing_key_url": "https://example.invalid/gitlab-key",
+        "product_pins.apt.gitlab.observed.signing_key_fingerprint": "SYNTHETIC-GITLAB",
+        "product_pins.apt.runner.observed.packages": package_pin,
+        "product_pins.apt.runner.observed.repository_url": "https://example.invalid/runner",
+        "product_pins.apt.runner.observed.signing_key_url": "https://example.invalid/runner-key",
+        "product_pins.apt.runner.observed.signing_key_fingerprint": "SYNTHETIC-RUNNER",
+        "product_pins.apt.docker.observed.packages": package_pin,
+        "product_pins.apt.docker.observed.repository_url": "https://example.invalid/docker",
+        "product_pins.apt.docker.observed.signing_key_url": "https://example.invalid/docker-key",
+        "product_pins.apt.docker.observed.signing_key_fingerprint": "SYNTHETIC-DOCKER",
+        "product_pins.apt.docker": package_gates["docker"],
+        "product_pins.apt.containerd": package_gates["containerd"],
+        "product_pins.apt.docker_plugins": package_gates["docker_plugins"],
+        "product_pins.capabilities.runner_api.observed": runner_api,
+        "product_pins.capabilities.gitlab_readiness_contract.observed": {
+            "transport_base_url": "http://localhost",
+            "endpoint": "/-/readiness", "method": "GET", "success_statuses": [200],
+            "attempts": 60, "delay_seconds": 5,
         },
-        "verified_inputs.network.observed.guest_interface": "eth0",
-        "verified_inputs.downloads.splunk.observed": artifact,
-        "verified_inputs.downloads.forwarder.observed": artifact,
-        "verified_inputs.downloads.laurel.observed": artifact,
-        "verified_inputs.downloads.minikube.observed": artifact,
-        "verified_inputs.downloads.kubectl.observed": artifact,
-        "verified_inputs.downloads.helm.observed": artifact,
-        "verified_inputs.downloads.otel_host.observed": artifact,
-        "verified_inputs.downloads.minikube": artifact_gates["minikube"],
-        "verified_inputs.downloads.kubectl": artifact_gates["kubectl"],
-        "verified_inputs.downloads.helm": artifact_gates["helm"],
-        "verified_inputs.downloads.otel_host": artifact_gates["otel_host"],
-        "verified_inputs.artifact_layouts.minikube": layout_gates["minikube"],
-        "verified_inputs.artifact_layouts.kubectl": layout_gates["kubectl"],
-        "verified_inputs.artifact_layouts.helm": layout_gates["helm"],
-        "verified_inputs.artifact_layouts.otel_host": layout_gates["otel_host"],
-        "verified_inputs.capabilities.splunk.observed": trial,
-        "verified_inputs.capabilities.splunk.observed.hec": True,
-        "verified_inputs.capabilities.splunk.observed.search_api": True,
-        "verified_inputs.apt.gitlab.observed.packages": package_pin,
-        "verified_inputs.apt.gitlab.observed.repository_url": "https://example.invalid/gitlab",
-        "verified_inputs.apt.gitlab.observed.signing_key_url": "https://example.invalid/gitlab-key",
-        "verified_inputs.apt.gitlab.observed.signing_key_fingerprint": "SYNTHETIC-GITLAB",
-        "verified_inputs.apt.runner.observed.packages": package_pin,
-        "verified_inputs.apt.runner.observed.repository_url": "https://example.invalid/runner",
-        "verified_inputs.apt.runner.observed.signing_key_url": "https://example.invalid/runner-key",
-        "verified_inputs.apt.runner.observed.signing_key_fingerprint": "SYNTHETIC-RUNNER",
-        "verified_inputs.apt.docker.observed.packages": package_pin,
-        "verified_inputs.apt.docker.observed.repository_url": "https://example.invalid/docker",
-        "verified_inputs.apt.docker.observed.signing_key_url": "https://example.invalid/docker-key",
-        "verified_inputs.apt.docker.observed.signing_key_fingerprint": "SYNTHETIC-DOCKER",
-        "verified_inputs.apt.docker": package_gates["docker"],
-        "verified_inputs.apt.containerd": package_gates["containerd"],
-        "verified_inputs.apt.docker_plugins": package_gates["docker_plugins"],
-        "verified_inputs.capabilities.runner_api.observed": runner_api,
-        "verified_inputs.charts.otel.observed": chart,
-        "verified_inputs.capabilities.otel.observed": otel,
-        "verified_inputs.git.malcolm.observed.tag": "v1.2.3",
-        "verified_inputs.git.malcolm.observed.commit": "b" * 40,
+        "product_pins.capabilities.runner_jobs_contract.observed": {
+            "endpoint": "/api/v4/runners/:id/jobs", "method": "GET",
+        },
+        "product_pins.capabilities.forwarder_bootstrap_contract": _synthetic_gate({
+            "version": "10.6.1.1", "build": "b2ae2962645c",
+            "seed": {"path": "/opt/splunkforwarder/etc/system/local/user-seed.conf", "section": "user_info", "username_key": "USERNAME", "username": "admin", "password_key": "PASSWORD", "mode": "0600", "owner": "splunkfwd", "group": "splunkfwd"},
+            "first_start": {"identity": "splunkfwd", "argv": ["start", "--accept-license", "--answer-yes", "--no-prompt"]},
+            "boot_start": {"identity": "root", "argv": ["enable", "boot-start", "-user", "splunkfwd", "--accept-license", "--answer-yes", "--no-prompt"]},
+            "unit": {"path": "/etc/systemd/system/SplunkForwarder.service", "service_name": "SplunkForwarder.service", "effective_user": "splunkfwd"},
+        }, [4, 8, 9, 10]),
+        "product_pins.charts.otel.observed": chart,
+        "product_pins.capabilities.otel.observed": otel,
+        "product_pins.git.malcolm.observed.tag": "v1.2.3",
+        "product_pins.git.malcolm.observed.commit": "b" * 40,
         "runtime_secret.splunk_download_auth_path": None,
         "runtime_secret.splunk_admin_password": "Synthetic123!",
         "runtime_secret.forwarder_download_auth_path": None,
-        "runtime_secret.gitlab_root_password": "Synthetic123!",
         "runtime_secret.hec_workload.state": "present",
         "runtime_secret.malcolm_admin_username": "synthetic-admin",
         "runtime_secret.malcolm_admin_password": "Synthetic123!",
@@ -697,11 +707,6 @@ def test_mapping_contract_resolves_explicit_synthetic_sources(blueprint_root, re
     }
 
     resolved = support.resolve_role_variable_contracts(contract, sources)
-    assert resolved["guest_firewall"]["detection_firewall_lab_ip"] == "10.77.10.15"
-    assert resolved["guest_firewall"]["detection_firewall_allowed_tcp"] == [{
-        "sources": ["10.77.0.0/24"],
-        "ports": [22],
-    }]
     assert resolved["forwarder"]["detection_splunk_receiver_host"] == "{{ range_id }}-splunk"
     assert resolved["linux_logging"]["detection_laurel_artifact"] == {
         "version": "1.2.3",
@@ -720,104 +725,29 @@ def test_mapping_contract_resolves_explicit_synthetic_sources(blueprint_root, re
     }
     assert "build" not in resolved["workload"]["detection_minikube_artifact"]
     assert resolved["runner"]["detection_gitlab_host"] == "{{ range_id }}-gitlab"
-    assert resolved["workload"]["detection_splunk_hec_url"] == "http://{{ range_id }}-splunk:8088/services/collector"
+    assert resolved["workload"]["detection_splunk_hec_url"] == "http://{{ range_id }}-splunk:8088/services/collector/event"
     assert resolved["malcolm"]["ludus_install_malcolm_user"] == "debian"
-
-    expected_pairs = {
-        "gitlab": {
-            ("10.77.0.0/24", 22),
-            ("10.78.0.0/24", 80),
-            ("10.77.10.12", 80),
-        },
-        "runner": {("10.77.0.0/24", 22)},
-        "malcolm": {
-            ("10.77.0.0/24", 22),
-            ("10.78.0.0/24", 443),
-            ("10.78.0.0/24", 5601),
-        },
-        "splunk": {
-            ("10.77.0.0/24", 22),
-            ("10.78.0.0/24", 8000),
-            ("10.78.0.0/24", 8089),
-            ("10.77.10.11", 9997),
-            ("10.77.10.12", 9997),
-            ("10.77.10.15", 9997),
-            ("10.77.10.15", 8088),
-        },
-        "workload": {("10.77.0.0/24", 22)},
-    }
-    for profile, expected in expected_pairs.items():
-        rules = support.assemble_firewall_rules(contract["firewall_policy"], sources, profile)
-        actual_pairs = {
-            (source, port)
-            for rule in rules
-            for source in rule["sources"]
-            for port in rule["ports"]
-        }
-        assert actual_pairs == expected
-
-    splunk_pairs = expected_pairs["splunk"]
-    assert ("10.78.0.0/24", 9997) not in splunk_pairs
-    assert ("10.78.0.0/24", 8088) not in splunk_pairs
-    assert ("10.77.10.11", 8088) not in splunk_pairs
-    assert ("10.77.10.12", 8088) not in splunk_pairs
-    assert ("10.77.10.13", 9997) not in splunk_pairs
-    assert ("10.77.10.14", 9997) not in splunk_pairs
-    assert ("10.77.10.12", 22) not in expected_pairs["gitlab"]
-
-    required_service_ports = {
-        "gitlab": {22, 80},
-        "runner": {22},
-        "splunk": {22, 8000, 8089, 9997, 8088},
-        "workload": {22},
-    }
-    for profile, required_ports in required_service_ports.items():
-        for missing_port in required_ports:
-            missing_allowance = copy.deepcopy(sources)
-            missing_allowance["verified_inputs.network.observed.service_ports"][profile] = sorted(
-                required_ports - {missing_port}
-            )
-            with pytest.raises(ValueError, match=rf"service_ports\.{profile}"):
-                support.assemble_firewall_rules(
-                    contract["firewall_policy"], missing_allowance, profile
-                )
-
-        contrary_allowance = copy.deepcopy(sources)
-        contrary_allowance["verified_inputs.network.observed.service_ports"][profile].append(65535)
-        with pytest.raises(ValueError, match=rf"service_ports\.{profile}"):
-            support.assemble_firewall_rules(
-                contract["firewall_policy"], contrary_allowance, profile
-            )
-
-    malcolm_rules = support.assemble_firewall_rules(
-        contract["firewall_policy"], sources, "malcolm"
-    )
-    malcolm_vpn_rule = next(
-        rule for rule in malcolm_rules if rule["sources"] == ["10.78.0.0/24"]
-    )
-    assert malcolm_vpn_rule["ports"] == [443, 5601]
-    assert 22 not in malcolm_vpn_rule["ports"]
 
     invalid_runner_api = copy.deepcopy(runner_api)
     invalid_runner_api["manager"]["pause_at_create"] = False
     invalid_complex_sources = [
         (
-            "verified_inputs.capabilities.splunk.observed",
+            "product_pins.capabilities.splunk.observed",
             {**trial, "initial_mode": "SYNTHETIC_WRONG_MODE"},
             "SplunkTrialCapability",
         ),
         (
-            "verified_inputs.capabilities.runner_api.observed",
+            "product_pins.capabilities.runner_api.observed",
             invalid_runner_api,
             "RunnerApiContract",
         ),
         (
-            "verified_inputs.charts.otel.observed",
+            "product_pins.charts.otel.observed",
             {**chart, "digest": ""},
             "HelmChartPin",
         ),
         (
-            "verified_inputs.capabilities.otel.observed",
+            "product_pins.capabilities.otel.observed",
             {**otel, "secret_file_provider": "not-a-bool"},
             "OtelContract",
         ),
@@ -829,14 +759,9 @@ def test_mapping_contract_resolves_explicit_synthetic_sources(blueprint_root, re
             support.resolve_role_variable_contracts(contract, invalid)
 
     missing = copy.deepcopy(sources)
-    del missing["verified_inputs.network.observed.lab_cidr"]
+    del missing["target_inputs.network.observed.lab_cidr"]
     with pytest.raises(ValueError, match="missing source"):
         support.resolve_role_variable_contracts(contract, missing)
-
-    wrong_type = copy.deepcopy(sources)
-    wrong_type["verified_inputs.network.observed.service_ports"]["malcolm"] = "443"
-    with pytest.raises(ValueError, match="service_ports.*list"):
-        support.assemble_firewall_rules(contract["firewall_policy"], wrong_type, "malcolm")
 
     unknown_reader_contract = copy.deepcopy(contract)
     unknown_reader_contract["role_variable_contracts"]["linux_logging"][
@@ -844,6 +769,16 @@ def test_mapping_contract_resolves_explicit_synthetic_sources(blueprint_root, re
     ] = {"value": "root", "type": "enum[splunkfwd,splunk]"}
     with pytest.raises(ValueError, match="must be one of"):
         support.resolve_role_variable_contracts(unknown_reader_contract, sources)
+
+
+def test_firewall_scope_is_absent_from_active_contract(blueprint_root, read_yaml):
+    config = _load(blueprint_root, read_yaml, "range-config.yml")
+    contract = config["ludus_extensions"]["detection_engineering_contract"]
+    assert "firewall_policy" not in contract
+    assert "guest_firewall" not in contract["role_variable_contracts"]
+    text = (blueprint_root / "range-config.yml").read_text()
+    for forbidden in ("ludus_detection_guest_firewall", "detection_firewall_", "guest_docker_bridge"):
+        assert forbidden not in text
 
 
 def test_forwarder_projects_native_laurel_profiles_without_producer_proof(blueprint_root, read_yaml):
@@ -947,12 +882,12 @@ def test_removed_service_contracts_cannot_be_reintroduced(blueprint_root, read_y
 def test_laurel_artifact_and_native_privacy_contract(blueprint_root, read_yaml):
     inputs = _load(blueprint_root, read_yaml, "verified-inputs.yml")
     laurel = inputs["downloads"]["laurel"]
-    assert laurel["status"] == "BLOCKED"
-    assert laurel["observed"] is None
+    assert laurel["status"] == "VERIFIED"
+    assert laurel["observed"]["sha256"] == "110fd0436cb492fafab2ee68fcae681e611488baf376657ff9eab875608ceb6c"
     assert laurel["stops"] == [8, 9, 10]
-    assert laurel["source"]["url"].endswith("/threathunters-io/laurel/releases/tag/v0.6.3")
-    assert "starting" in laurel["limitation"].lower()
-    assert "SHA-256" in laurel["limitation"]
+    assert laurel["source"]["url"].endswith("/laurel-v0.6.3-x86_64-glibc.tar.gz")
+    assert "statically inspected" in laurel["limitation"]
+    assert "runtime gates" in laurel["limitation"]
 
     rows = _load(blueprint_root, read_yaml, "telemetry-matrix.yml")["sources"]
     audit_rows = [row for row in rows if row["class"] == "audit_process"]
@@ -991,15 +926,17 @@ def test_runtime_layouts_and_combined_packages_are_strictly_bound(blueprint_root
     mappings = contract["role_variable_contracts"]["workload"]
     assert mappings["detection_docker_packages"]["operation"] == "combine_apt_package_gates"
     assert mappings["detection_otel_host_artifact"] == {
-        "source": "verified_inputs.downloads.otel_host.observed",
+        "source": "product_pins.downloads.otel_host.observed",
         "type": "Artifact",
     }
     assert mappings["detection_runtime_artifact_layouts"]["operation"] == "bind_artifact_layouts"
 
     inputs = _load(blueprint_root, read_yaml, "verified-inputs.yml")
     assert set(inputs["artifact_layouts"]) == {"minikube", "kubectl", "helm", "otel_host"}
-    assert inputs["downloads"]["otel_host"]["status"] == "BLOCKED"
-    assert inputs["downloads"]["otel_host"]["observed"] is None
+    assert inputs["downloads"]["otel_host"]["status"] == "VERIFIED"
+    assert inputs["downloads"]["otel_host"]["observed"] == _load(
+        blueprint_root, read_yaml, "product-pins.yml"
+    )["downloads"]["otel_host"]["observed"]
 
     def artifact(name, digest):
         return _synthetic_gate(
@@ -1156,6 +1093,18 @@ def test_verified_inputs_strict_schema_rejects_malformed_verified_records(bluepr
     del malformed_future_source["capabilities"]["splunk_free"]["source"]["url"]
     with pytest.raises(ValueError, match="splunk_free.source"):
         support.validate_verified_inputs(malformed_future_source)
+
+
+def test_verified_inputs_separate_static_selection_from_runtime_acceptance(blueprint_root, read_yaml):
+    inputs = _load(blueprint_root, read_yaml, "verified-inputs.yml")
+    support.validate_verified_inputs(inputs)
+    lifecycle = inputs["lifecycle"]
+    assert lifecycle["selected_product_contract"]["status"] == "STATIC_APPROVED"
+    assert lifecycle["selected_product_contract"]["required_for_initial_provisioning"] is True
+    for phase in ("provisioning_time", "post_provisioning"):
+        assert lifecycle[phase]["status"] == "PENDING"
+        assert lifecycle[phase]["required_for_initial_provisioning"] is False
+        assert lifecycle[phase]["evidence"] is None
 
 
 def test_tool_pins_equal_requirements_and_reference_formats_stay_non_v1(blueprint_root, read_yaml):

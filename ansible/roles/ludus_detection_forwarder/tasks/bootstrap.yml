@@ -12,7 +12,7 @@
         mode: "{{ item.mode }}"
       loop:
         - {path: "{{ detection_forwarder_seed_path | dirname }}", owner: "{{ detection_forwarder_file_owner }}", group: "{{ detection_forwarder_file_group }}", mode: "0750"}
-        - {path: "{{ detection_forwarder_marker_path | dirname }}", owner: "{{ detection_forwarder_root_owner }}", group: "{{ detection_forwarder_root_group }}", mode: "0750"}
+        - {path: "{{ detection_forwarder_marker_path | dirname }}", owner: "{{ detection_forwarder_root_owner }}", group: "{{ detection_forwarder_root_group }}", mode: "0700"}
 
     - name: Resolve intended service account uid
       ansible.builtin.command:

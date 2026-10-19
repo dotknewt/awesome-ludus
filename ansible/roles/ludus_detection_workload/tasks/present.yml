@@ -6,7 +6,10 @@
     that:
       - range_id is string and range_id | length > 0
       - detection_cluster_name == range_id + '-minikube'
-      - detection_workload_user == 'deworkload'
+      - detection_workload_user == 'debian'
+      - detection_workload_home is match('^/')
+      - detection_kubeconfig_path == detection_workload_home + '/.kube/config'
+      - detection_minikube_home == detection_workload_home + '/.minikube'
       - detection_runtime_token_state in ['present', 'absent']
       - detection_splunk_hec_url is match('^https?://[^/]+:8088/services/collector/event$')
       - detection_docker_repository_url is match('^https://')
@@ -36,7 +39,8 @@
       - item.keys() | sort == ['name', 'version']
       - item.name is match('^[a-z0-9][a-z0-9+.-]+$')
       - item.version is string and item.version | length > 0
-      - item.version is not search('[*<>~^]')
+      - item.version is not search('[*<>^]')
+      - item.version is not search('~=')
   loop: "{{ detection_docker_packages }}"
   loop_control:
     label: "{{ item.name | default('invalid') }}"
@@ -245,19 +249,31 @@
     _detection_docker_packages | map(attribute='version') | list
   changed_when: true
 
-- name: Inspect workload and collector users
+- name: Require the existing Debian template login
   ansible.builtin.command:
-    argv: ["{{ detection_id }}", -u, "{{ item }}"]
-  loop: ["{{ detection_workload_user }}", deotel]
-  register: _detection_users
+    argv: ["{{ detection_id }}", -u, "{{ detection_workload_user }}"]
+  register: _detection_workload_user
   changed_when: false
   failed_when: false
 
-- name: Create missing non-login workload users
+- name: Refuse to create or replace the existing login identity
+  ansible.builtin.assert:
+    that: _detection_workload_user.rc == 0
+    fail_msg: >-
+      The documented Debian template login must already exist; this role will
+      not create it, replace it, or change its password.
+
+- name: Inspect non-login collector account
   ansible.builtin.command:
-    argv: ["{{ detection_useradd }}", --system, --create-home, --shell, /usr/sbin/nologin, "{{ item.item }}"]
-  loop: "{{ _detection_users.results }}"
-  when: item.rc != 0
+    argv: ["{{ detection_id }}", -u, deotel]
+  register: _detection_otel_user
+  changed_when: false
+  failed_when: false
+
+- name: Create missing non-login collector account
+  ansible.builtin.command:
+    argv: ["{{ detection_useradd }}", --system, --create-home, --shell, /usr/sbin/nologin, deotel]
+  when: _detection_otel_user.rc != 0
   changed_when: true
 
 - name: Inspect workload supplementary groups

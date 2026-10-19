@@ -1,12 +1,11 @@
----
-schema_version: 1
-verified_at: "2026-10-17T13:18:58Z"
+schema_version: 2
+verified_at: '2026-10-18T18:30:00Z'
 user_supplied_candidates:
   splunk_10_6_1_1:
     status: VERIFIED
     source:
       url: https://download.splunk.com/products/splunk/releases/10.6.1.1/linux/splunk-10.6.1.1-b2ae2962645c-linux-amd64.deb
-      observed_at: "2026-10-16T19:27:55Z"
+      observed_at: '2026-10-16T19:27:55Z'
     observed:
       provenance: USER_SUPPLIED_UNVERIFIED
       version: 10.6.1.1
@@ -15,237 +14,559 @@ user_supplied_candidates:
       forwarder_deb_url: https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/linux/splunkforwarder-10.6.1.1-b2ae2962645c-linux-amd64.deb
       forwarder_tgz_reference_url: https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/linux/splunkforwarder-10.6.1.1-b2ae2962645c-linux-amd64.tgz
       windows_msi_reference_url: https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/windows/splunkforwarder-10.6.1.1-b2ae2962645c-windows-x64.msi
-    limitation: >-
-      Only provenance, version/build, and verbatim candidate URLs are verified
-      against the canonical user-supplied table; artifact contents are unverified.
+    limitation: Only provenance, version/build, and verbatim candidate URLs are verified against the canonical user-supplied table; artifact contents are unverified.
     stops: []
   splunk_initial_trial:
     record_type: USER_CONFIRMATION
     status: CONFIRMED
     source:
       kind: USER_CONFIRMATION
-      recorded_at: "2026-10-16T19:42:19Z"
+      recorded_at: '2026-10-16T19:42:19Z'
     observed:
       initial_mode: ENTERPRISE_60_DAY_TRIAL
       trial_days_user_confirmed: 60
       terms_confirmation: USER_CONFIRMED_NOT_INDEPENDENTLY_VERIFIED
-    limitation: >-
-      User intent only; this is not independent package, license, expiry, HEC,
-      search, or authentication evidence.
+    limitation: User intent only; this is not independent package, license, expiry, HEC, search, or authentication evidence.
     stops: []
 templates:
-  gitlab: &blocked_template
+  gitlab: &id001
     status: BLOCKED
     source:
       url: https://docs.ludus.cloud/docs/templates/list
-      observed_at: "2026-10-16T19:24:19Z"
+      observed_at: '2026-10-16T19:24:19Z'
     observed: null
-    limitation: >-
-      Target inventory is unavailable; collect the exact template name and
-      inherited disk size through MCP at predeployment. This does not block
-      offline contract validation or role development.
-    stops: [10]
-  runner: *blocked_template
-  malcolm: *blocked_template
-  splunk: *blocked_template
-  workload: *blocked_template
+    limitation: Collect exact template OS/release/architecture and inherited disk size before initial provisioning. This does not block offline contract validation or role development.
+    stops:
+    - 10
+  runner: *id001
+  malcolm: *id001
+  splunk: *id001
+  workload: *id001
 capacity:
   status: BLOCKED
   source:
     url: https://docs.ludus.cloud/docs/quick-start/install-ludus
-    observed_at: "2026-10-16T19:24:19Z"
+    observed_at: '2026-10-16T19:24:19Z'
   observed: null
-  limitation: >-
-    Target inventory is unavailable; collect physical/logical CPUs, allocations,
-    and free storage through MCP at predeployment. The user-stated 128 GB RAM is
-    not a full capacity record. This does not block offline contract validation
-    or role development.
-  stops: [10]
+  limitation: The user supplied 128 GB total RAM and the API supplied 16 reported cores plus storage pools. Free RAM, current allocations, and the reviewed sufficiency decision remain initial-provisioning inputs. Total RAM is not free RAM and no 1:1 CPU threshold is inferred.
+  stops:
+  - 10
 network:
   status: BLOCKED
   source:
     url: https://docs.ludus.cloud/docs/configuration/range-config
-    observed_at: "2026-10-16T19:24:19Z"
+    observed_at: '2026-10-16T19:24:19Z'
   observed: null
-  limitation: >-
-    Collect target management/VPN/lab CIDRs, interfaces, service-port allowances,
-    and public probe source through MCP at predeployment. Validated fixtures may
-    drive offline role development, but unresolved values block deployment.
-  stops: [10]
+  limitation: VLAN-10 10.3.10.0/24 and host bridge vmbr3 are approved policy. Guest and Docker firewall policy, ingress allowlists, and denied probes are out of scope. Malcolm interface discovery remains a provisioning-time check; host bridge promiscuous mode is user-managed and is not a provisioning blocker.
+  stops:
+  - 10
 apt:
-  gitlab: &blocked_gitlab_apt
-    status: BLOCKED
+  gitlab:
+    status: VERIFIED
     source:
-      url: https://packages.gitlab.com/gitlab/gitlab-ce
-      observed_at: "2026-10-16T19:24:19Z"
-    observed: null
-    limitation: Exact package version, repository, signing-key URL, and fingerprint are not primary-source verified.
-    stops: [5, 8, 9, 10]
+      url: https://packages.gitlab.com/gitlab/gitlab-ce/debian/bookworm
+      observed_at: '2026-10-18T16:33:55Z'
+    observed:
+      repository_url: https://packages.gitlab.com/gitlab/gitlab-ce/debian/bookworm
+      signing_key_url: https://packages.gitlab.com/gpg.key
+      signing_key_fingerprint: F6403F6544A38863DAA0B6E03F01618A51312F3F
+      packages:
+      - name: gitlab-ce
+        version: 19.4.2-ce.0
+    limitation: Signed InRelease metadata, primary-key fingerprint, exact Debian 12 package record, and dependency metadata were inspected statically; guest installation remains a runtime gate.
+    stops:
+    - 5
+    - 8
+    - 9
+    - 10
   runner:
-    <<: *blocked_gitlab_apt
+    status: VERIFIED
     source:
-      url: https://packages.gitlab.com/runner/gitlab-runner
-      observed_at: "2026-10-16T19:24:19Z"
-    stops: [6, 8, 9, 10]
-  docker: &blocked_docker_apt
-    status: BLOCKED
+      url: https://packages.gitlab.com/runner/gitlab-runner/debian
+      observed_at: '2026-10-18T16:33:55Z'
+    observed:
+      repository_url: https://packages.gitlab.com/runner/gitlab-runner/debian
+      signing_key_url: https://packages.gitlab.com/runner/gitlab-runner/gpgkey
+      signing_key_fingerprint: F6403F6544A38863DAA0B6E03F01618A51312F3F
+      packages:
+      - name: gitlab-runner
+        version: 19.4.1-1
+    limitation: Signed InRelease metadata, primary-key fingerprint, and exact Debian 12 package record were inspected statically; guest installation remains a runtime gate.
+    stops:
+    - 6
+    - 8
+    - 9
+    - 10
+  docker:
+    status: VERIFIED
     source:
-      url: https://download.docker.com/linux/debian/
-      observed_at: "2026-10-16T19:24:19Z"
-    observed: null
-    limitation: Exact package versions, repository, signing-key URL, and fingerprint are not primary-source verified.
-    stops: [7, 8, 9, 10]
-  containerd: *blocked_docker_apt
-  docker_plugins: *blocked_docker_apt
+      url: https://download.docker.com/linux/debian/dists/bookworm/stable/binary-amd64/Packages
+      observed_at: '2026-10-18T16:33:55Z'
+    observed:
+      repository_url: https://download.docker.com/linux/debian
+      signing_key_url: https://download.docker.com/linux/debian/gpg
+      signing_key_fingerprint: 9DC858229FC7DD38854AE2D88D81803C0EBFCD88
+      packages:
+      - name: docker-ce
+        version: 5:28.5.2-1~debian.12~bookworm
+      - name: docker-ce-cli
+        version: 5:28.5.2-1~debian.12~bookworm
+    limitation: Signed repository metadata and exact Debian 12 package records were inspected as one Docker 28.5.2 closure; Minikube operation and guest installation remain runtime gates.
+    stops:
+    - 7
+    - 8
+    - 9
+    - 10
+  containerd:
+    status: VERIFIED
+    source:
+      url: https://download.docker.com/linux/debian/dists/bookworm/stable/binary-amd64/Packages
+      observed_at: '2026-10-18T16:33:55Z'
+    observed:
+      repository_url: https://download.docker.com/linux/debian
+      signing_key_url: https://download.docker.com/linux/debian/gpg
+      signing_key_fingerprint: 9DC858229FC7DD38854AE2D88D81803C0EBFCD88
+      packages:
+      - name: containerd.io
+        version: 1.7.29-1~debian.12~bookworm
+    limitation: Signed repository metadata and exact Debian 12 package records were inspected as one Docker 28.5.2 closure; Minikube operation and guest installation remain runtime gates.
+    stops:
+    - 7
+    - 8
+    - 9
+    - 10
+  docker_plugins:
+    status: VERIFIED
+    source:
+      url: https://download.docker.com/linux/debian/dists/bookworm/stable/binary-amd64/Packages
+      observed_at: '2026-10-18T16:33:55Z'
+    observed:
+      repository_url: https://download.docker.com/linux/debian
+      signing_key_url: https://download.docker.com/linux/debian/gpg
+      signing_key_fingerprint: 9DC858229FC7DD38854AE2D88D81803C0EBFCD88
+      packages:
+      - name: docker-buildx-plugin
+        version: 0.29.1-1~debian.12~bookworm
+      - name: docker-compose-plugin
+        version: 2.40.3-1~debian.12~bookworm
+    limitation: Signed repository metadata and exact Debian 12 package records were inspected as one Docker 28.5.2 closure; Minikube operation and guest installation remain runtime gates.
+    stops:
+    - 7
+    - 8
+    - 9
+    - 10
 downloads:
   splunk:
-    status: BLOCKED
+    status: VERIFIED
     source:
       url: https://download.splunk.com/products/splunk/releases/10.6.1.1/linux/splunk-10.6.1.1-b2ae2962645c-linux-amd64.deb
-      observed_at: "2026-10-16T19:27:55Z"
-    observed: null
-    limitation: >-
-      HTTP HEAD returned 200 and Content-Length 1420151880, but SHA-256,
-      package identity/scripts, download authentication, and OS compatibility are unverified.
-    stops: [3, 4, 7, 8, 9, 10]
+      observed_at: '2026-10-18T16:33:55Z'
+    observed:
+      version: 10.6.1.1
+      build: b2ae2962645c
+      url: https://download.splunk.com/products/splunk/releases/10.6.1.1/linux/splunk-10.6.1.1-b2ae2962645c-linux-amd64.deb
+      sha256: 2d917d11d09f312e27f22280f7ad3536d4e1abff20a9726aeeb8b08cfb61c9db
+      download_auth_required: false
+    limitation: Selected bytes were acquired, SHA-256 bound, and statically inspected; target execution, ABI compatibility, and service readiness remain runtime gates.
+    stops:
+    - 3
+    - 4
+    - 7
+    - 8
+    - 9
+    - 10
   forwarder:
-    status: BLOCKED
+    status: VERIFIED
     source:
       url: https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/linux/splunkforwarder-10.6.1.1-b2ae2962645c-linux-amd64.deb
-      observed_at: "2026-10-16T19:27:55Z"
-    observed: null
-    limitation: >-
-      HTTP HEAD returned 200 and Content-Length 116437450, but SHA-256,
-      package identity/scripts, download authentication, and OS compatibility are unverified.
-    stops: [4, 8, 9, 10]
+      observed_at: '2026-10-18T16:33:55Z'
+    observed:
+      version: 10.6.1.1
+      build: b2ae2962645c
+      url: https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/linux/splunkforwarder-10.6.1.1-b2ae2962645c-linux-amd64.deb
+      sha256: c2ff5b4f53dce3f245231044291a9732a141099c24dabfe32d565e1487e4707e
+      download_auth_required: false
+    limitation: Selected bytes were acquired, SHA-256 bound, and statically inspected; target execution, ABI compatibility, and service readiness remain runtime gates.
+    stops:
+    - 4
+    - 8
+    - 9
+    - 10
   laurel:
-    status: BLOCKED
+    status: VERIFIED
     source:
-      url: https://github.com/threathunters-io/laurel/releases/tag/v0.6.3
-      observed_at: "2026-10-17T00:00:00Z"
-    observed: null
-    limitation: >-
-      ConstructingDefense's v0.6.3 is only the V1 starting version. An immutable
-      artifact URL, SHA-256, archive layout, and target compatibility remain
-      unverified; installation is BLOCKED and no checksum is fabricated.
-    stops: [8, 9, 10]
-  minikube: &blocked_runtime_download
-    status: BLOCKED
+      url: https://github.com/threathunters-io/laurel/releases/download/v0.6.3/laurel-v0.6.3-x86_64-glibc.tar.gz
+      observed_at: '2026-10-18T16:33:55Z'
+    observed:
+      version: 0.6.3
+      build: null
+      url: https://github.com/threathunters-io/laurel/releases/download/v0.6.3/laurel-v0.6.3-x86_64-glibc.tar.gz
+      sha256: 110fd0436cb492fafab2ee68fcae681e611488baf376657ff9eab875608ceb6c
+      download_auth_required: false
+    limitation: Selected bytes were acquired, SHA-256 bound, and statically inspected; target execution, ABI compatibility, and service readiness remain runtime gates.
+    stops:
+    - 8
+    - 9
+    - 10
+  minikube:
+    status: VERIFIED
     source:
-      url: https://github.com/kubernetes/minikube/releases
-      observed_at: "2026-10-16T19:24:19Z"
-    observed: null
-    limitation: Exact compatible version, immutable URL, and SHA-256 are not primary-source verified.
-    stops: [7, 8, 9, 10]
+      url: https://github.com/kubernetes/minikube/releases/download/v1.37.0/minikube-linux-amd64
+      observed_at: '2026-10-18T16:33:55Z'
+    observed:
+      version: 1.37.0
+      build: null
+      url: https://github.com/kubernetes/minikube/releases/download/v1.37.0/minikube-linux-amd64
+      sha256: d5cf561c71171152ff67d799f041ac0f65c235c87a1e9fc02a6a17b8226214d0
+      download_auth_required: false
+    limitation: Selected bytes were acquired, SHA-256 bound, and statically inspected; target execution, ABI compatibility, and service readiness remain runtime gates.
+    stops:
+    - 7
+    - 8
+    - 9
+    - 10
   kubectl:
-    <<: *blocked_runtime_download
+    status: VERIFIED
     source:
-      url: https://kubernetes.io/releases/download/
-      observed_at: "2026-10-16T19:24:19Z"
+      url: https://dl.k8s.io/release/v1.34.1/bin/linux/amd64/kubectl
+      observed_at: '2026-10-18T16:33:55Z'
+    observed:
+      version: 1.34.1
+      build: null
+      url: https://dl.k8s.io/release/v1.34.1/bin/linux/amd64/kubectl
+      sha256: 7721f265e18709862655affba5343e85e1980639395d5754473dafaadcaa69e3
+      download_auth_required: false
+    limitation: Selected bytes were acquired, SHA-256 bound, and statically inspected; target execution, ABI compatibility, and service readiness remain runtime gates.
+    stops:
+    - 7
+    - 8
+    - 9
+    - 10
   helm:
-    <<: *blocked_runtime_download
+    status: VERIFIED
     source:
-      url: https://github.com/helm/helm/releases
-      observed_at: "2026-10-16T19:24:19Z"
+      url: https://get.helm.sh/helm-v3.19.0-linux-amd64.tar.gz
+      observed_at: '2026-10-18T16:33:55Z'
+    observed:
+      version: 3.19.0
+      build: null
+      url: https://get.helm.sh/helm-v3.19.0-linux-amd64.tar.gz
+      sha256: a7f81ce08007091b86d8bd696eb4d86b8d0f2e1b9f6c714be62f82f96a594496
+      download_auth_required: false
+    limitation: Selected bytes were acquired, SHA-256 bound, and statically inspected; target execution, ABI compatibility, and service readiness remain runtime gates.
+    stops:
+    - 7
+    - 8
+    - 9
+    - 10
   otel_host:
-    <<: *blocked_runtime_download
+    status: VERIFIED
     source:
-      url: https://github.com/open-telemetry/opentelemetry-collector-releases/releases
-      observed_at: "2026-10-17T00:00:00Z"
+      url: https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v0.136.0/otelcol-contrib_0.136.0_linux_amd64.tar.gz
+      observed_at: '2026-10-18T16:33:55Z'
+    observed:
+      version: 0.136.0
+      build: null
+      url: https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v0.136.0/otelcol-contrib_0.136.0_linux_amd64.tar.gz
+      sha256: e642146998b9559929c34f5b85525e27ca6430585e2951fa88a403ff5ebf9f47
+      download_auth_required: false
+    limitation: Selected bytes were acquired, SHA-256 bound, and statically inspected; target execution, ABI compatibility, and service readiness remain runtime gates.
+    stops:
+    - 7
+    - 8
+    - 9
+    - 10
 artifact_layouts:
-  minikube: &blocked_artifact_layout
-    status: BLOCKED
+  minikube:
+    status: VERIFIED
     source:
-      url: https://github.com/kubernetes/minikube/releases
-      observed_at: "2026-10-17T00:00:00Z"
-    observed: null
-    limitation: >-
-      Artifact bytes have not been checksum-bound to a reviewed raw or tar.gz
-      layout and exact regular member.
-    stops: [7, 8, 9, 10]
+      url: https://github.com/kubernetes/minikube/releases/download/v1.37.0/minikube-linux-amd64
+      observed_at: '2026-10-18T16:33:55Z'
+    observed:
+      artifact_sha256: d5cf561c71171152ff67d799f041ac0f65c235c87a1e9fc02a6a17b8226214d0
+      format: raw
+      member: null
+    limitation: Static format, safe member identity, and checksum binding are verified; target execution remains unverified.
+    stops:
+    - 7
+    - 8
+    - 9
+    - 10
   kubectl:
-    <<: *blocked_artifact_layout
+    status: VERIFIED
     source:
-      url: https://kubernetes.io/releases/download/
-      observed_at: "2026-10-17T00:00:00Z"
+      url: https://dl.k8s.io/release/v1.34.1/bin/linux/amd64/kubectl
+      observed_at: '2026-10-18T16:33:55Z'
+    observed:
+      artifact_sha256: 7721f265e18709862655affba5343e85e1980639395d5754473dafaadcaa69e3
+      format: raw
+      member: null
+    limitation: Static format, safe member identity, and checksum binding are verified; target execution remains unverified.
+    stops:
+    - 7
+    - 8
+    - 9
+    - 10
   helm:
-    <<: *blocked_artifact_layout
+    status: VERIFIED
     source:
-      url: https://github.com/helm/helm/releases
-      observed_at: "2026-10-17T00:00:00Z"
+      url: https://get.helm.sh/helm-v3.19.0-linux-amd64.tar.gz
+      observed_at: '2026-10-18T16:33:55Z'
+    observed:
+      artifact_sha256: a7f81ce08007091b86d8bd696eb4d86b8d0f2e1b9f6c714be62f82f96a594496
+      format: tar.gz
+      member: linux-amd64/helm
+    limitation: Static format, safe member identity, and checksum binding are verified; target execution remains unverified.
+    stops:
+    - 7
+    - 8
+    - 9
+    - 10
   otel_host:
-    <<: *blocked_artifact_layout
+    status: VERIFIED
     source:
-      url: https://github.com/open-telemetry/opentelemetry-collector-releases/releases
-      observed_at: "2026-10-17T00:00:00Z"
+      url: https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v0.136.0/otelcol-contrib_0.136.0_linux_amd64.tar.gz
+      observed_at: '2026-10-18T16:33:55Z'
+    observed:
+      artifact_sha256: e642146998b9559929c34f5b85525e27ca6430585e2951fa88a403ff5ebf9f47
+      format: tar.gz
+      member: otelcol-contrib
+    limitation: Static format, safe member identity, and checksum binding are verified; target execution remains unverified.
+    stops:
+    - 7
+    - 8
+    - 9
+    - 10
 git:
   malcolm:
-    status: BLOCKED
+    status: VERIFIED
     source:
-      url: https://github.com/cisagov/Malcolm
-      observed_at: "2026-10-16T19:24:19Z"
-    observed: null
-    limitation: Existing role tag and commit have not been reverified against primary upstream sources.
-    stops: [7, 8, 9, 10]
+      url: https://github.com/cisagov/Malcolm/tree/v26.08.0
+      observed_at: '2026-10-18T16:33:55Z'
+    observed:
+      repository: https://github.com/cisagov/Malcolm
+      tag: v26.08.0
+      commit: 07bbccdfe2732fb5c5147070cdfca2857b85bacc
+    limitation: The existing role pin was matched to upstream tag and commit; template compatibility and runtime readiness remain unverified.
+    stops:
+    - 7
+    - 8
+    - 9
+    - 10
 charts:
   otel:
-    status: BLOCKED
+    status: VERIFIED
     source:
-      url: https://github.com/open-telemetry/opentelemetry-helm-charts
-      observed_at: "2026-10-16T19:24:19Z"
-    observed: null
-    limitation: Exact chart version and immutable digest are not primary-source verified.
-    stops: [7, 8, 9, 10]
+      url: https://open-telemetry.github.io/opentelemetry-helm-charts
+      observed_at: '2026-10-18T16:33:55Z'
+    observed:
+      repository: https://open-telemetry.github.io/opentelemetry-helm-charts
+      chart: opentelemetry-collector
+      version: 0.80.0
+      digest: sha256:35b3be7684e81cb247a10bb9c9001845ac39ed4d373512f04d3d9dc7bce439a6
+    limitation: The chart archive digest and required default contrib image repository were inspected statically; Helm rendering and cluster readiness remain runtime gates.
+    stops:
+    - 7
+    - 8
+    - 9
+    - 10
 capabilities:
   splunk:
-    status: BLOCKED
+    status: VERIFIED
     source:
-      url: https://help.splunk.com/en/splunk-enterprise/administer/admin-manual/10.4/welcome-to-splunk-enterprise-administration
-      observed_at: "2026-10-16T19:24:19Z"
-    observed: null
-    limitation: >-
-      Exact-version trial expiry, HEC, search API, and authentication behavior
-      need independent evidence. User intent is recorded separately and is not
-      promoted into this capability gate.
-    stops: [3, 4, 7, 8, 9, 10]
+      url: https://download.splunk.com/products/splunk/releases/10.6.1.1/linux/splunk-10.6.1.1-b2ae2962645c-linux-amd64.deb
+      observed_at: '2026-10-18T16:33:55Z'
+    observed:
+      initial_mode: ENTERPRISE_60_DAY_TRIAL
+      trial_days_user_confirmed: 60
+      terms_confirmation: USER_CONFIRMED_NOT_INDEPENDENTLY_VERIFIED
+      expiry_behavior: Trial expiry requires an explicit reviewed license-mode decision; no automatic Free conversion is assumed.
+      hec: true
+      search_api: true
+      auth_behavior: A protected user-seed.conf seeds the initial admin account before first start; later authentication uses Splunk's credential store.
+    limitation: Package metadata and static configuration/bootstrap facts support the initial trial, HEC, search, and authentication contract; live service acceptance and trial expiry behavior are not runtime-tested.
+    stops:
+    - 3
+    - 4
+    - 7
+    - 8
+    - 9
+    - 10
+  runner_api:
+    status: VERIFIED
+    source:
+      url: https://gitlab.com/gitlab-org/gitlab/-/blob/v19.4.2-ee/lib/api/ci/runners.rb
+      observed_at: '2026-10-18T16:33:55Z'
+    observed:
+      bootstrap_auth:
+        credential_type: personal_access_token
+        scopes:
+        - create_runner
+        - manage_runner
+        - read_api
+        expiration_days: 1
+        creation_argv:
+        - gitlab-rails
+        - runner
+        - '-'
+        protected_path: /etc/detection-engineering/secrets/runner-api-bootstrap.token
+        mode: '0600'
+        revoke_endpoint: /api/v4/personal_access_tokens/self
+        revoke_method: DELETE
+      manager:
+        runner_type: instance_type
+        create_scope: create_runner
+        manage_scope: manage_runner
+        read_scope: read_api
+        create_endpoint: /api/v4/user/runners
+        create_method: POST
+        lookup_endpoint: /api/v4/runners/all
+        lookup_method: GET
+        detail_endpoint: /api/v4/runners/:id
+        detail_method: GET
+        update_endpoint: /api/v4/runners/:id
+        update_method: PUT
+        request_fields:
+        - runner_type
+        - description
+        - paused
+        response_token_field: token
+        local_verify_command:
+        - gitlab-runner
+        - verify
+        pause_at_create: true
+    limitation: Selected-version source and request specs prove conventional PAT scopes create_runner/manage_runner/read_api; read_runner is a granular permission, not a PAT scope. Live API acceptance remains unperformed.
+    stops:
+    - 5
+    - 6
+    - 8
+    - 9
+    - 10
+  gitlab_readiness_contract:
+    status: VERIFIED
+    source:
+      url: https://gitlab.com/gitlab-org/gitlab/-/blob/v19.4.2-ee/doc/administration/monitoring/health_check.md
+      observed_at: '2026-10-18T16:33:55Z'
+    observed:
+      transport_base_url: http://localhost
+      endpoint: /-/readiness
+      method: GET
+      success_statuses:
+      - 200
+      attempts: 60
+      delay_seconds: 5
+    limitation: Selected-version readiness route is source documented; timeout values are bounded operator policy and live readiness remains unverified.
+    stops:
+    - 5
+    - 6
+    - 8
+    - 9
+    - 10
+  runner_jobs_contract:
+    status: VERIFIED
+    source:
+      url: https://gitlab.com/gitlab-org/gitlab/-/blob/v19.4.2-ee/lib/api/ci/runners.rb
+      observed_at: '2026-10-18T16:33:55Z'
+    observed:
+      endpoint: /api/v4/runners/:id/jobs
+      method: GET
+    limitation: Selected-version source and request specs establish the jobs route and read_api authorization path; zero jobs remains a live postcondition.
+    stops:
+    - 6
+    - 8
+    - 9
+    - 10
+  forwarder_bootstrap_contract:
+    status: VERIFIED
+    source:
+      url: https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/linux/splunkforwarder-10.6.1.1-b2ae2962645c-linux-amd64.deb
+      observed_at: '2026-10-18T16:33:55Z'
+    observed:
+      version: 10.6.1.1
+      build: b2ae2962645c
+      seed:
+        path: /opt/splunkforwarder/etc/system/local/user-seed.conf
+        section: user_info
+        username_key: USERNAME
+        username: admin
+        password_key: PASSWORD
+        mode: '0600'
+        owner: splunkfwd
+        group: splunkfwd
+      first_start:
+        identity: splunkfwd
+        argv:
+        - start
+        - --accept-license
+        - --answer-yes
+        - --no-prompt
+      boot_start:
+        identity: root
+        argv:
+        - enable
+        - boot-start
+        - -user
+        - splunkfwd
+        - --accept-license
+        - --answer-yes
+        - --no-prompt
+      unit:
+        path: /etc/systemd/system/SplunkForwarder.service
+        service_name: SplunkForwarder.service
+        effective_user: splunkfwd
+    limitation: Package scripts, configuration specifications, launcher strings, and default unit identity were inspected statically; first start and generated unit remain runtime acceptance work.
+    stops:
+    - 4
+    - 8
+    - 9
+    - 10
+  otel:
+    status: VERIFIED
+    source:
+      url: https://github.com/open-telemetry/opentelemetry-helm-charts/tree/opentelemetry-collector-0.80.0/charts/opentelemetry-collector
+      observed_at: '2026-10-18T16:33:55Z'
+    observed:
+      secret_file_provider: true
+      audit_path: /var/log/kubernetes/audit/audit.log
+      node_log_inputs:
+      - /var/log/containers/*.log
+      - /var/log/pods/kube-system_*/*/*.log
+      required_rbac:
+        nodes:
+        - get
+        - list
+        - watch
+        pods:
+        - get
+        - list
+        - watch
+    limitation: Chart templates and collector configuration interfaces were inspected statically; rendered RBAC, file access, and event delivery remain runtime gates.
+    stops:
+    - 7
+    - 8
+    - 9
+    - 10
   splunk_free:
     status: UNVERIFIED
     source:
       url: https://help.splunk.com/en/splunk-enterprise/administer/admin-manual/10.4/configure-splunk-licenses/about-splunk-free
-      observed_at: "2026-10-16T19:24:19Z"
+      observed_at: '2026-10-16T19:24:19Z'
     observed: null
     limitation: Future Free compatibility is unverified and does not block an otherwise verified initial trial.
   splunk_uninstall:
     status: BLOCKED
     source:
       url: https://help.splunk.com/en/splunk-enterprise/administer/install-and-upgrade/10.4/uninstall-splunk-enterprise/uninstall-splunk-enterprise
-      observed_at: "2026-10-16T19:24:19Z"
+      observed_at: '2026-10-16T19:24:19Z'
     observed: null
-    limitation: >-
-      Exact 10.6.1.1 package metadata/scripts and a disposable preservation test
-      are missing; 10.4 guidance cannot prove safe in-place preservation.
-    stops: [11]
-  runner_api:
-    status: BLOCKED
-    source:
-      url: https://docs.gitlab.com/api/runners/
-      observed_at: "2026-10-16T19:24:19Z"
-    observed: null
-    limitation: Exact-version paused-at-creation and minimum local registration semantics are unverified.
-    stops: [5, 6, 8, 9, 10]
-  otel:
-    status: BLOCKED
-    source:
-      url: https://opentelemetry.io/docs/platforms/kubernetes/collector/components/
-      observed_at: "2026-10-16T19:24:19Z"
-    observed: null
-    limitation: Secret provider, exact inputs, metadata-only audit path, and least-privilege RBAC are unverified.
-    stops: [7, 8, 9, 10]
+    limitation: Exact 10.6.1.1 package metadata/scripts and a disposable preservation test are missing; 10.4 guidance cannot prove safe in-place preservation.
+    stops:
+    - 11
 test_tools:
   status: VERIFIED
   source:
     url: https://pypi.org/
-    observed_at: "2026-10-16T19:24:19Z"
+    observed_at: '2026-10-16T19:24:19Z'
   observed:
     pytest: 9.1.1
     PyYAML: 6.0.3
@@ -253,7 +574,69 @@ test_tools:
     ansible-core: 2.21.5
     ansible-lint: 26.10.1
     yamllint: 1.38.0
-  limitation: >-
-    PyPI metadata was checked and all exact pins installed on Python 3.14.8;
-    imports succeeded. yamllint lacks a 3.14 classifier but ran successfully.
-  stops: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+  limitation: PyPI metadata was checked and all exact pins installed on Python 3.14.8; imports succeeded. yamllint lacks a 3.14 classifier but ran successfully.
+  stops:
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  - 7
+  - 8
+  - 9
+lifecycle:
+  selected_product_contract:
+    status: STATIC_APPROVED
+    source:
+      kind: LOCAL_REVIEWED_STATIC_EVIDENCE
+      reference: product-pin-provenance.md
+      observed_at: '2026-10-18T18:30:00Z'
+    gate_paths:
+    - apt.containerd
+    - apt.docker
+    - apt.docker_plugins
+    - apt.gitlab
+    - apt.runner
+    - artifact_layouts.helm
+    - artifact_layouts.kubectl
+    - artifact_layouts.minikube
+    - artifact_layouts.otel_host
+    - capabilities.forwarder_bootstrap_contract
+    - capabilities.gitlab_readiness_contract
+    - capabilities.otel
+    - capabilities.runner_api
+    - capabilities.runner_jobs_contract
+    - capabilities.splunk
+    - charts.otel
+    - downloads.forwarder
+    - downloads.helm
+    - downloads.kubectl
+    - downloads.laurel
+    - downloads.minikube
+    - downloads.otel_host
+    - downloads.splunk
+    - git.malcolm
+    limitation: Approval covers selected static package, artifact, source, chart, and role-input contracts only; it does not establish guest compatibility or runtime acceptance.
+    required_for_initial_provisioning: true
+  provisioning_time:
+    status: PENDING
+    required_for_initial_provisioning: false
+    checks:
+    - existing_debian_account_and_home
+    - guest_capture_interface_discovery_and_validation
+    - selected_product_installation_and_bootstrap
+    - native_producer_and_service_readiness
+    evidence: null
+    limitation: These checks require created guests and run during provisioning; their absence cannot block VM creation.
+  post_provisioning:
+    status: PENDING
+    required_for_initial_provisioning: false
+    checks:
+    - gitlab_external_readiness
+    - runner_registered_paused_and_zero_jobs
+    - splunk_hec_search_and_authentication
+    - telemetry_delivery_and_packet_visibility
+    - credential_cleanup_and_final_service_state
+    evidence: null
+    limitation: Runtime acceptance requires separately authorized live observations after provisioning and is not claimed here.

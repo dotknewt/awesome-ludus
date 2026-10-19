@@ -58,6 +58,24 @@ def test_fresh_upstream_scaffold_initializes_credentials_and_reruns_without_rota
     assert placeholder.read_bytes() == placeholder_before
 
 
+def test_documented_machine_credential_is_applied_and_converges(tmp_path: Path) -> None:
+    source = make_source(tmp_path)
+    variables = {
+        "ludus_install_malcolm_admin_username": "debian",
+        "ludus_install_malcolm_admin_password": "debian",
+    }
+
+    first = run_tasks(tmp_path, [CONFIGURE, AUTHENTICATION], variables=variables)
+    assert first.returncode == 0, first.stdout + first.stderr
+    htpasswd = HtpasswdFile(str(source / "nginx" / "htpasswd"))
+    assert htpasswd.check_password("debian", "debian")
+
+    second = run_tasks(tmp_path, [CONFIGURE, AUTHENTICATION], variables=variables)
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert "changed=0" in second.stdout
+    assert HtpasswdFile(str(source / "nginx" / "htpasswd")).check_password("debian", "debian")
+
+
 def test_backend_secrets_recover_individually_and_converge(tmp_path: Path) -> None:
     source = make_source(tmp_path)
     netbox = source / "config" / "netbox-secret.env"
