@@ -13,6 +13,11 @@ ludus:
       - dotknewt.ludus_splunk_server
     role_vars:
       ludus_splunk_server_accept_license: true
+      ludus_splunk_server_receiver_enabled: true
+      ludus_splunk_server_indexes:
+        - winlogs
+        - sysmon
+        - etw
 
   - vm_name: "{{ range_id }}-malcolm"
     hostname: "{{ range_id }}-malcolm"
@@ -26,6 +31,10 @@ ludus:
       - dotknewt.ludus_install_malcolm
       - dotknewt.ludus_splunk_collector
       - dotknewt.ludus_linux_logging
+    role_vars:
+      ludus_splunk_collector_accept_license: true
+      ludus_splunk_collector_receiver_host: "10.{{ range_second_octet }}.10.11"
+
   - vm_name: "{{ range_id }}-gitlab"
     hostname: "{{ range_id }}-gitlab"
     template: debian-13.5-x64-server-no-template
@@ -38,3 +47,21 @@ ludus:
       - dotknewt.ludus_gitlab_ce
       - dotknewt.ludus_linux_logging
       - dotknewt.ludus_splunk_collector
+    role_vars:
+      ludus_splunk_collector_accept_license: true
+      ludus_splunk_collector_receiver_host: "10.{{ range_second_octet }}.10.11"
+
+  - vm_name: "{{ range_id }}-win11"
+    hostname: "{{ range_id }}-win11"
+    template: windows-11-22h2-x64-enterprise-no-template
+    windows: {}
+    cpus: 2
+    ram_gb: 4
+    vlan: 10
+    ip_last_octet: 21
+    roles:
+      - dotknewt.ludus_install_sysmon
+      - dotknewt.ludus_splunk_collector
+    role_vars:
+      ludus_splunk_collector_accept_license: true
+      ludus_splunk_collector_receiver_host: "10.{{ range_second_octet }}.10.11"
