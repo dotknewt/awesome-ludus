@@ -46,7 +46,9 @@ python3 .opencode/skills/ansible-validation/scripts/validate.py --all
 
 - `PASS`: all tools were available, all checks passed, and target coverage was complete.
 - `PASS WITH WARNINGS — NOT VERIFIED`: coverage was complete and available checks passed, but one or more tools were `NOT AVAILABLE`. Prominently carry forward every unavailable check and its unverified targets when requesting live authorization.
-- `FAIL`: fix every actual check failure and coverage error before requesting live authorization. An available tool's missing role, collection, module, or other dependency is a failure, not tool unavailability.
+- `FAIL`: fix every blocking check failure and coverage error before requesting live authorization. Apply the [repository Galaxy metadata policy](../../../docs/instructions/ludus-authoring.md#reusable-role-design): missing optional Galaxy fields are advisory; missing or empty `galaxy_info.role_name` or `galaxy_info.author` remains blocking. An available tool's missing role, collection, module, or other dependency is a failure, not tool unavailability.
+
+Preserve the validator's raw output, exit status, and overall status. If a raw `FAIL` is caused solely by missing optional Galaxy metadata, report `Workflow gate: NON-BLOCKING — optional Galaxy metadata only`, list those findings as advisory, and continue the authorization-request workflow without requiring metadata padding. Do not report the raw tool result as `PASS`. If blocking findings or coverage errors also exist, report `Workflow gate: BLOCKED` and name those blockers separately from the metadata advisories. Missing optional metadata alone is neither a coverage gap nor a reason to mark runtime behavior unverified; runtime verification remains separate regardless.
 
 Neither `PASS` nor warning-only output proves runtime readiness or authorizes deployment. Report static output separately from `Live verification: NOT RUN — requires separate authorization`; installation, registration, deployment, and guest probes require their own authorization.
 

@@ -1,0 +1,20 @@
+---
+# Static parser target only. Ordinary play execution stops unconditionally
+# before the role. Dynamic include_tasks bodies are not recursively executed
+# or fully validated by ansible-playbook --syntax-check.
+- name: Parse the real Sysmon role entrypoint without executing it
+  hosts: localhost
+  gather_facts: false
+  pre_tasks:
+    - name: Stop before Sysmon role tasks during ordinary execution
+      ansible.builtin.fail:
+        msg: This play is for ansible-playbook --syntax-check only.
+  vars:
+    sysmon_config_file: sysmonconfig.xml
+    sysmon_config_dest: 'C:\Windows\sysmonconfig.xml'
+    sysmon_executable_path: 'C:\Windows\Sysmon64.exe'
+    sysmon_download_latest: false
+    sysmon_installer_version: '15.22'
+    sysmon_eventlog_maxsize_gigabyte: 1
+  roles:
+    - role: ludus_install_sysmon

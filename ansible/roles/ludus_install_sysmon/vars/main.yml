@@ -1,5 +1,6 @@
 ---
 
-sysmon_install_default_parameters:
+# Keep this established role variable stable for existing task references.
+sysmon_install_default_parameters:  # noqa: var-naming[no-role-prefix]
   - "-i"
   - "-accepteula"

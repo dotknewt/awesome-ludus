@@ -1,12 +1,13 @@
 ---
 - name: Configure Sysmon EventLog MaxSize
-  when: # when reg value exists but is wrong
+  # Keep legacy register names stable across the included role task graph.
+  when:  # when reg value exists but is wrong
     - sysmonevtlog_reg_parameters.value is defined
     - (sysmonevtlog_reg_parameters.value | default(0)) | int != (sysmon_eventlog_maxsize_gigabyte | int * 1024 * 1024 * 1024)
   ansible.windows.win_command: >
     wevtutil sl Microsoft-Windows-Sysmon/Operational
     /ms:{{ sysmon_eventlog_maxsize_gigabyte | int * 1024 * 1024 * 1024 }} /rt:false /ab:false
-  register: sysmon_service_update
+  register: sysmon_service_update  # noqa: var-naming[no-role-prefix]
 
 - name: Configure Sysmon
   block:
@@ -16,7 +17,7 @@
         src: "{{ sysmon_config_source }}"
         dest: "{{ sysmon_config_dest }}"
         backup: true
-      register: sysmon_config_created
+      register: sysmon_config_created  # noqa: var-naming[no-role-prefix]
 
     - name: Update config file
       when:
@@ -27,7 +28,7 @@
         src: "{{ sysmon_config_source }}"
         dest: "{{ sysmon_config_dest }}"
         backup: true
-      register: sysmon_config_updated
+      register: sysmon_config_updated  # noqa: var-naming[no-role-prefix]
 
     - name: Reload Sysmon
       when: |
@@ -37,4 +38,4 @@
         or (sysmon_config_updated.changed | default(false))
       ansible.windows.win_command:
         cmd: "{{ sysmon_executable_path }} -c {{ sysmon_config_dest }}"
-      register: sysmon_config_reload
+      register: sysmon_config_reload  # noqa: var-naming[no-role-prefix]

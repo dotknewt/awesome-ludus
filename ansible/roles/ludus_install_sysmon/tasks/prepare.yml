@@ -1,9 +1,10 @@
 ---
+# These task-result names are established interfaces between the included tasks.
 # Temporary staging does not represent a change to the installed Sysmon state.
 - name: Create Sysmon staging directory
   ansible.windows.win_tempfile:
     state: directory
-  register: sysmon_dl_temp
+  register: sysmon_dl_temp  # noqa: var-naming[no-role-prefix]
   changed_when: false
 
 - name: Copy bundled Sysmon archive
@@ -19,7 +20,7 @@
     path: '{{ sysmon_dl_temp.path }}\Sysmon.zip'
     get_checksum: true
     checksum_algorithm: sha256
-  register: sysmon_bundled_archive
+  register: sysmon_bundled_archive  # noqa: var-naming[no-role-prefix]
 
 - name: Validate bundled Sysmon archive checksum
   when: not sysmon_download_latest | bool
@@ -37,7 +38,7 @@
     url: "{{ sysmon_installer_url }}"
     validate_certs: true
     dest: '{{ sysmon_dl_temp.path }}\Sysmon.zip'
-  register: sysmon_download
+  register: sysmon_download  # noqa: var-naming[no-role-prefix]
   until: sysmon_download is succeeded
   retries: 10
   delay: 10
@@ -53,7 +54,7 @@
   ansible.windows.win_stat:
     path: '{{ sysmon_dl_temp.path }}\Sysmon64.exe'
     get_checksum: false
-  register: sysmon_staged_exe
+  register: sysmon_staged_exe  # noqa: var-naming[no-role-prefix]
 
 - name: Validate selected Sysmon executable before changing installation
   ansible.builtin.assert:
@@ -66,7 +67,7 @@
   when: sysmon_download_latest | bool
   community.windows.win_file_version:
     path: '{{ sysmon_dl_temp.path }}\Sysmon64.exe'
-  register: sysmon_archive_version
+  register: sysmon_archive_version  # noqa: var-naming[no-role-prefix]
 
 - name: Validate downloaded Sysmon version before changing installation
   when: sysmon_download_latest | bool
@@ -82,5 +83,4 @@
 - name: Use downloaded Sysmon version
   when: sysmon_download_latest | bool
   ansible.builtin.set_fact:
-    sysmon_target_version: >-
-      {{ sysmon_archive_version.win_file_version.product_version }}
+    sysmon_target_version: "{{ sysmon_archive_version.win_file_version.product_version }}"  # noqa: var-naming[no-role-prefix]

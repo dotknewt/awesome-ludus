@@ -11,24 +11,25 @@
     quiet: true
 
 - name: Check existing Sysmon files
+  # Preserve legacy registered names shared by the role's included task files.
   block:
     - name: Sysmon executable
       ansible.windows.win_stat:
         path: "{{ sysmon_executable_path }}"
-      register: sysmon_exe
+      register: sysmon_exe  # noqa: var-naming[no-role-prefix]
 
     - name: Sysmon executable version
       when: sysmon_exe.stat.exists
       community.windows.win_file_version:
         path: "{{ sysmon_executable_path }}"
-      register: sysmon_exe_version
+      register: sysmon_exe_version  # noqa: var-naming[no-role-prefix]
 
     - name: Sysmon config
       ansible.windows.win_stat:
         path: "{{ sysmon_config_dest }}"
         get_checksum: true
         checksum_algorithm: "sha256"
-      register: sysmon_config
+      register: sysmon_config  # noqa: var-naming[no-role-prefix]
 
     - name: Calculate source config hash
       when: sysmon_config.stat.exists
@@ -37,28 +38,28 @@
         get_checksum: true
         checksum_algorithm: "sha256"
         path: "{{ sysmon_config_source }}"
-      register: sysmon_source_config
+      register: sysmon_source_config  # noqa: var-naming[no-role-prefix]
 
     - name: Sysmon service
       ansible.windows.win_service:
         name: Sysmon64
       changed_when: false
-      register: sysmon_service
+      register: sysmon_service  # noqa: var-naming[no-role-prefix]
 
     - name: Sysmon64
       ansible.windows.win_reg_stat:
         path: HKLM:\SYSTEM\CurrentControlSet\Services\Sysmon64
         name: ImagePath
-      register: sysmon64_reg_parameters
+      register: sysmon64_reg_parameters  # noqa: var-naming[no-role-prefix]
 
     - name: SysmonDrv
       ansible.windows.win_reg_stat:
         path: HKLM:\SYSTEM\CurrentControlSet\Services\SysmonDrv\Parameters
         name: ConfigFile
-      register: sysmondrv_reg_parameters
+      register: sysmondrv_reg_parameters  # noqa: var-naming[no-role-prefix]
 
     - name: Sysmon eventlog Maxsize
       ansible.windows.win_reg_stat:
         path: HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WINEVT\Channels\Microsoft-Windows-Sysmon/Operational
         name: MaxSize
-      register: sysmonevtlog_reg_parameters
+      register: sysmonevtlog_reg_parameters  # noqa: var-naming[no-role-prefix]

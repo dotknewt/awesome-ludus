@@ -33,14 +33,24 @@
   ansible.windows.win_copy:
     dest: C:\ProgramData\Ludus\SplunkCollector\ownership.json
     content: >-
-      {"schema_version":1,"artifact_version":"{{ ludus_splunk_collector_windows_version }}","version":"{{ ludus_splunk_collector_windows_version }}","service_name":"SplunkForwarder","service_account":"NT SERVICE\\SplunkForwarder","inputs_sha256":"","outputs_sha256":"","phase":"pending"}
+      {
+        "schema_version": 1,
+        "artifact_version": "{{ ludus_splunk_collector_windows_version }}",
+        "version": "{{ ludus_splunk_collector_windows_version }}",
+        "service_name": "SplunkForwarder",
+        "service_account": "NT SERVICE\\SplunkForwarder",
+        "inputs_sha256": "",
+        "outputs_sha256": "",
+        "phase": "pending"
+      }
   when: not ludus_splunk_collector_windows_inspection.result.marker_exists
 
 - name: Download the pinned MSI to protected staging with SHA-512 verification
   ansible.windows.win_get_url:
     url: "{{ ludus_splunk_collector_windows_package_url }}"
     dest: C:\ProgramData\Ludus\SplunkCollector\staging\splunkforwarder.msi
-    checksum: "{{ ludus_splunk_collector_windows_package_checksum }}"
+    checksum: "{{ ludus_splunk_collector_windows_package_checksum | regex_replace('^sha512:', '') }}"
+    checksum_algorithm: sha512
     force: false
     validate_certs: true
   when: not ludus_splunk_collector_windows_inspection.result.marker_exists

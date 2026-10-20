@@ -1,43 +1,126 @@
 # Research: Windows Splunk collector
 
-## Scope
+**Documentary reconciliation: 2026-10-20.** This note is limited to the Task 0
+pre-live gate. It is evidence for planning, not evidence of installation,
+authentication, ACL correctness, ingestion, or selected-version runtime support.
 
-This note supports extending `ludus_splunk_collector` to Windows 11 x64 and Server 2019/2022/2025 x64. Windows 10 and Server 2012–2016 are deferred after compatibility review. The existing Debian 13 receiver, Linux collector behavior, and `ludus_install_sysmon` remain unchanged.
+## Primary-source conclusions
 
-## Legacy evidence
+- The pinned artifact remains the publisher URL
+  `https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/windows/splunkforwarder-10.6.1.1-b2ae2962645c-windows-x64.msi`, with SHA-512
+  `980658ef29a964e430ee7b601b170324185a2d93fcee83f55d992a522d20355dc784f2947839690b12265ba775f861810d610244c7cc978c65e20f588147f693`.
+  Its sidecar URL is
+  `https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/windows/splunkforwarder-10.6.1.1-b2ae2962645c-windows-x64.msi.sha512`;
+  parent HTTP 200 and an independent local SHA-512 match were recorded for
+  `/tmp/opencode/uf106.msi` (386322432 bytes). Offline MSI inspection recorded
+  ProductVersion `10.6.1.1`, x64, and `GENRANDOMPASSWORD=1`; this is native
+  file inspection, not execution.
+- Splunk's Windows UF 10.6 installation page (retrieved 2026-10-20; page
+  metadata 10.6.0) documents `LAUNCHSPLUNK` default `1` and
+  `SERVICESTARTTYPE` default `auto`. It documents the no-user quiet route as
+  omitting `SPLUNKUSERNAME`/`SPLUNKPASSWORD` and using `GENRANDOMPASSWORD=0`.
+  The selected implementation's `AGREETOLICENSE=Yes LAUNCHSPLUNK=0
+  GENRANDOMPASSWORD=0` is therefore a documented bootstrap shape; the page
+  does not prove this exact 10.6.1.1 MSI's behavior.
+- Splunk's `user-seed.conf` reference (9.3 reference, retrieved 2026-10-20)
+  defines `[user_info]` with `USERNAME` and `PASSWORD`, and also documents
+  `HASHED_PASSWORD`. The repository template uses the documented plaintext
+  `PASSWORD` form, writes it only after restrictive ACLs, and removes it after
+  successful loopback authentication. No source establishes that this
+  sequence works on the selected MSI; native authentication remains open.
+- Microsoft documents virtual accounts as automatically managed local accounts
+  named `NT SERVICE\<service-name>` with no administrator-managed password.
+  Ansible `ansible.windows.win_service` 3.8.0 independently documents
+  `username: NT SERVICE\service name`. These sources support the requested
+  identity and reject a LocalSystem fallback, but do not grant Event Log read
+  access automatically.
+- Microsoft `wevtutil` documentation says event-log access is controlled by an
+  SDDL security descriptor (`/ca`) and that `get-log` exposes log
+  configuration. It does not document that adding a local virtual-account SID
+  is equivalent to membership in `Event Log Readers`, nor provide a
+  domain-controller-specific recipe. The role's `Translate()` lookup of
+  `NT SERVICE\SplunkForwarder` and additive per-channel READ ACE is a plausible
+  local-preservation strategy, but DC-safe lookup and effective access require
+  live verification. `SeSecurityPrivilege` is not established as required and
+  must not be substituted automatically.
+- Official Ansible docs retrieved 2026-10-20 identify `ansible.windows` 3.8.0;
+  previously recorded Galaxy metadata also pins `community.windows` 3.3.0
+  (depending on `ansible.windows >=3.0,<4`) and Core >=2.16. The local
+  validator recorded Core 2.21.5/Python 3.14.8 without installing collections.
+  `win_package` documents MSI arguments, return code 3010 as
+  `reboot_required`, and checksum support; `win_service` documents virtual
+  accounts and `auto`/`disabled`/`started` states. These facts support the
+  module choices and reboot stop/fail path, not Splunk compatibility.
 
-The legacy role `role_splunk_collector_win11v` and its blueprint are references, not migration targets. Safe ZIP inspection used `/tmp/opencode/splunkappswin11v.zip` (no execution/extraction): source URL `https://github.com/Antonlovesdnb/ConstructingDefense/raw/refs/heads/main/splunkappswin11v.zip`; repo HEAD `0cefe62755eebba7b226e611ece75160706e22f6`; blob `0d4a9cd8d6e071d2ecbc42264689b4f8e45ba673`; SHA256 `5ae6b8741e91211b80e386d3cf97e8f3f4a19b360bc0960444906c4b9004cea2`.
+## Role reconciliation and implementation mismatches
 
-Historically, the Security local input uses XML rendering, `oldest`, `current_only=0`, index `winlogs`; its local `blacklist1` is the 5145 C$ regex while the TA's `blacklist1` is the 4662 filter, so collision/inheritance behavior must be preserved as historical evidence, not copied. The local ADMIN$ `blacklist2` is commented. Sysmon reads channel `Microsoft-Windows-Sysmon/Operational`, sets source `XmlWinEventLog:Microsoft-Windows-Sysmon/Operational`, and uses index `sysmon` with no extra event filters. SilkService-Log is `[WinEventLog://SilkService-Log]`, `disabled=0`, `index=etw`, `sourcetype=json`. Collection must not install/start/configure SilkService or alter producer/audit policy; an absent channel is a producer prerequisite, not something the collector creates. No `outputs.conf` was found. These observations are design evidence, not proof of current Splunk compatibility.
+- `install.yml` uses the documented no-user properties and does not set
+  `SERVICESTARTTYPE`; it later explicitly starts the service and sets `auto`.
+  That is internally intentional, but the exact MSI default/property behavior
+  is not proven by the retrieved Splunk page.
+- `configure.yml` checks the service identity, adds READ ACEs to Security and
+  Sysmon, and conditionally SilkService-Log. It protects the seed with SYSTEM,
+  Administrators, and service-account READ ACLs. This is documentary design
+  evidence only; `SecurityDescriptor`/`SaveChanges` preservation, deny ACE
+  behavior, and effective reads are live-only gates, including on DCs.
+- `inspect.yml` requires Security and Sysmon channels and treats Silk as
+  optional, matching the intended producer boundary. **Static correction made:**
+  PowerShell variable names are case-insensitive; `$home` is the automatic
+  `$HOME` variable, documented by Microsoft as the executing user's home
+  directory (normally `C:\Users\<UserName>`), not an undefined variable. The
+  executable-version path guard and lookup now use the established
+  `$splunkHome`, with a focused static regression assertion. This is source/test
+  evidence only: PowerShell execution and installation/runtime behavior remain
+  unverified. Source: [Microsoft about_Automatic_Variables](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_automatic_variables)
+  (retrieved 2026-10-20).
+- `validate.yml` pins Windows 11/Server 2019/2022/2025 x64, PowerShell >=5.1,
+  and UF 10.6.1.1. The official sources collected here do not provide the
+  exact 10.6.1.1 OS support table. The selected-version applicability gate is
+  therefore unresolved, not failed and not closed.
+- **Static API corrections (2026-10-20):** the installed `ansible.windows`
+  3.8.0 `win_get_url` contract accepts `checksum_algorithm: sha512` and requires
+  the checksum argument as bare hexadecimal, so the task now strips the
+  `sha512:` prefix while retaining the algorithm. The `win_uri` result exposes
+  `status_code`; the retry condition now reads that field. The task still sends
+  `status_code: 200` as its accepted-response argument. These source corrections
+  and static tests do not establish runtime download/authentication behavior.
+  Sources: [Ansible `win_get_url` 3.8.0](https://docs.ansible.com/projects/ansible/latest/collections/ansible/windows/win_get_url_module.html)
+  and [Ansible `win_uri` 3.8.0](https://docs.ansible.com/projects/ansible/latest/collections/ansible/windows/win_uri_module.html).
+- Fresh-install phase transition now requires a non-skipped package result and
+  re-reads a pending marker before advancing; existing initialized markers are
+  not advanced by a skipped registered result. Seed ACL management now
+  restricts parent and file DACLs before rendering secret content and refuses
+  unsafe ownership/reparse state or unrelated files in the shared `system/local`
+  parent. This is a source-level fail-closed correction only; ACL effectiveness,
+  seed authentication, and preservation/runtime behavior remain unverified.
 
-The new desired baseline is zero Security exclusions. Optional, disabled candidates use unique keys: `blacklist1 = EventCode="4662" Message="Object Type:(?!\s*groupPolicyContainer)"`, `blacklist2 = EventCode="566" Message="Object Type:(?!\s*groupPolicyContainer)"`, and `blacklist3 = $XmlRegex="<EventID>5145<\/EventID>.*<Data Name='ShareName'>\W\W\W\WC\W"`. The ADMIN$ candidate remains outside the set. EventCode/Message behavior versus XML matching must be checked before any future application; no filter effectiveness is promised.
+## Gates / status
 
-## Compatibility and installer gaps
+**Documentary prerequisites established:** artifact identity/checksum,
+installer flag meanings at the cited Splunk-page version, seed key syntax,
+virtual-account naming, Ansible module capability, and intended target matrix.
 
-The current Sysmon page lists Windows 11+ and Server 2019+, but is rolling and not version-specific proof. Splunk 9.2 documents removal of Server 2012/R2; Splunk 9.1 was the last documented line, and full support ended 2025-06-28 (P3 through 2028). The modern 10.0 requirements page has a search excerpt mentioning 2025 Universal Forwarder, but the exact 10.6.1.1 OS table was unavailable.
+**Blockers before claiming Task 0 closed:** obtain primary documentation that
+applies specifically to UF 10.6.1.1 (or record the limitation explicitly), and
+obtain an authoritative, DC-safe account/ACL procedure or keep the role's local
+SID approach explicitly as an unverified design. The `$home` source mismatch is
+corrected, but the static regression assertion does not establish runtime
+behavior.
 
-Existing Linux/server artifacts pin 10.6.1.1. The Windows artifact gate is now closed: the publisher URL is `https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/windows/splunkforwarder-10.6.1.1-b2ae2962645c-windows-x64.msi`, with sidecar `https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/windows/splunkforwarder-10.6.1.1-b2ae2962645c-windows-x64.msi.sha512` and checksum `980658ef29a964e430ee7b601b170324185a2d93fcee83f55d992a522d20355dc784f2947839690b12265ba775f861810d610244c7cc978c65e20f588147f693`; parent HTTP 200 and independent local hash matched `/tmp/opencode/uf106.msi` (386322432 bytes). The earlier 404 was only the old `x64-release` filename and does not show that another URL lacks an artifact.
+**Live-only gaps (not documentary blockers):** fresh install and convergence;
+MSI return/reboot behavior; seed authentication and seed removal; service
+identity; effective Security/Sysmon access; optional Silk channel behavior;
+forwarding and event arrival; and preservation of unrelated ACLs/configuration.
+No install, deployment, guest probe, or target-server query was performed.
 
-The offline MSI property table was independently validated with 47 valid IDs using 7z and libmsi decoding; evidence: `/tmp/opencode/uf106-property-decode-corrected.log`. It maps ProductVersion `10.6.1.1`, ProductCode `{B253F87A-EEBB-46C4-AA25-D9FDB2542B63}`, ProductName `UniversalForwarder`, Manufacturer `Splunk, Inc.`, `GENRANDOMPASSWORD=1`, `USE_LOCAL_SYSTEM=0`, and `ALLUSERS=1`. The source algorithm was libmsi `msi_load_string_table` (physical versus logical string IDs): https://raw.githubusercontent.com/GNOME/msitools/master/libmsi/string.c. No MSI execution, installation, or live action occurred; the prior uncertain raw decode is replaced by this corrected mapping.
+## Sources (retrieved 2026-10-20)
 
-The primary Splunk Cloud Universal Forwarder 10.6 Windows installation page (HTTP 200, scrape ID `01a15855-68e6-728c-9c56-b6fdcc50c4b2`, metadata version `10.6.0`) documents `LAUNCHSPLUNK` (default `1`) and `SERVICESTARTTYPE` (default `auto`). Quiet installation with `/quiet`, without `SPLUNKPASSWORD`/`SPLUNKUSERNAME`, and with `GENRANDOMPASSWORD=0`, installs without a user; use `AGREETOLICENSE=Yes`, `LAUNCHSPLUNK=0`, `GENRANDOMPASSWORD=0`, omit MSI credentials, and create a protected seed before first start. The platform-neutral [user-seed.conf reference](https://help.splunk.com/en/splunk-enterprise/administer/admin-manual/9.3/configuration-file-reference/9.3.0-configuration-file-reference/user-seed.conf) defines `[user_info]`, `USERNAME`, `PASSWORD`, or `HASHED_PASSWORD`; existing Linux protects `PASSWORD`, and `HASHED_PASSWORD` is optional rather than a reason to pass a CLI secret. Source-version differences and native validation remain open.
-
-The same source recommends a least-privileged virtual service account in EventLogReaders; `SeSecurityPrivilege` can modify/delete the Security log and is not an automatic substitute. Parent implementation ruling selects per-channel additive READ `0x1` ACEs for the verified local virtual account SID via `EventLogConfiguration.SecurityDescriptor`/`SaveChanges`, preserving owner/group/SACL/unrelated DACLs and deny semantics on all targets including DCs. No AD membership, `SeSecurityPrivilege`, or LocalSystem fallback is automatic. Native ACL correctness remains unverified; required Security/Sysmon access must fail before install, while absent SilkService must not block required logs.
-
-Source: [Splunk Windows Universal Forwarder installation](https://help.splunk.com/en/splunk-cloud-platform/forward-and-process-data/universal-forwarder-manual/10.6/install-the-universal-forwarder/install-a-windows-universal-forwarder), HTTP 200 scrape metadata version `10.6.0`, scrape ID `01a15855-68e6-728c-9c56-b6fdcc50c4b2`. Artifact identity is verified. Authoritative Galaxy metadata records `ansible.windows 3.8.0` (Core >=2.16) and `community.windows 3.3.0` (Core >=2.16, depends on `ansible.windows >=3.0,<4`); local validator has Core 2.21.5/Python 3.14.8 without installs. PowerShell 5.1 and Windows 11/Server 2019/2022/2025 x64 remain target requirements. Native ACL, seed authentication, channel presence, source-version compatibility, and runtime validation remain open.
-
-References: [modern requirements](https://help.splunk.com/en/splunk-enterprise/get-started/install-and-upgrade/10.0/plan-your-splunk-enterprise-installation/system-requirements-for-use-of-splunk-enterprise-on-premises), [9.2 removals](https://help.splunk.com/en/splunk-enterprise/release-notes-and-updates/release-notes/9.2/deprecated-features/deprecated-and-removed-in-version-9.2), [support policy](https://www.splunk.com/en_us/legal/splunk-software-support-policy.html), [forwarder/indexer compatibility](https://help.splunk.com/en/splunk-enterprise/release-notes-and-updates/compatibility-matrix/splunk-products-version-compatibility/compatibility-between-forwarders-and-splunk-enterprise-indexers).
-
-## Implementation research gates
-
-Confirm supported Windows collections, Ansible and PowerShell prerequisites, a documented service account/bootstrap design, safe paths and ACLs, and artifact verification. Use [win_package](https://docs.ansible.com/projects/ansible/latest/collections/ansible/windows/win_package_module.html) and [win_service](https://docs.ansible.com/projects/ansible/latest/collections/ansible/windows/win_service_module.html) only after selected-version behavior is confirmed. No automatic reboot, upgrade, or password rotation.
-
-The collector should render separate Security (`winlogs`), Sysmon (`sysmon`), and SilkService-Log (`etw`) inputs with an unfiltered Security baseline. Optional Splunk TAs are not collection prerequisites and are outside scope; raw XML/indexes do not promise CIM dashboards. Server index management is append-only: `[]` is a no-op only when never managed; after opt-in, removal fails. Future exclusion evaluation is tracked in [TODO SPLUNK-001](../TODO.md); it requires explicit opt-in/authorization and representative native events.
-
-## Verification status
-
-HEC is explicitly deferred and out of scope; do not implement it or copy the legacy secret-output behavior. Historical trace: the old Kubernetes role `main` lines 27–31 post to port `8088` with a token, while the old Universal Forwarder uses `RECEIVING_INDEXER=...:9997`, so HEC was never required for UF delivery. Future work must preserve Kubernetes/application consumers, leave native `9997` unchanged, and separately decide optional HEC `8088`, secure token handling, default index, and TLS from official documentation. See [SPLUNK-002](../TODO.md).
-
-Historical artifact research: the obsolete `x64-release.msi` filename and its checksum URLs returned HTTP 404. This finding is superseded by the verified `windows-x64.msi` artifact above. Documentary prerequisites are now established; native installation, service access, and ingestion remain unverified and require separate authorization.
-
-Static repository and Ansible validation are the next evidence. No simulated runtime tests and no live actions are authorized. Later native authorization must independently verify fresh installation, convergence without restart, configuration-change restart, Security/Sysmon/SilkService-Log arrival in `winlogs`/`sysmon`/`etw`, the unfiltered baseline, and any explicitly approved candidate exclusions with keep/drop canaries, absent-channel behavior, service identity/access, conflict and credential failures, and unrelated-data preservation.
+- [Splunk Windows UF installation](https://help.splunk.com/en/splunk-cloud-platform/forward-and-process-data/universal-forwarder-manual/10.6/install-the-universal-forwarder/install-a-windows-universal-forwarder)
+- [Splunk `user-seed.conf` reference](https://help.splunk.com/en/splunk-enterprise/administer/admin-manual/9.3/configuration-file-reference/9.3.0-configuration-file-reference/user-seed.conf)
+- [Microsoft service accounts](https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/understand-service-accounts)
+- [Microsoft `wevtutil`](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/wevtutil)
+- [Ansible `win_package` 3.8.0](https://docs.ansible.com/projects/ansible/latest/collections/ansible/windows/win_package_module.html)
+- [Ansible `win_service` 3.8.0](https://docs.ansible.com/projects/ansible/latest/collections/ansible/windows/win_service_module.html)
+- [Ansible `win_get_url` 3.8.0](https://docs.ansible.com/projects/ansible/latest/collections/ansible/windows/win_get_url_module.html)
+- [Ansible `win_uri` 3.8.0](https://docs.ansible.com/projects/ansible/latest/collections/ansible/windows/win_uri_module.html)
+- [Splunk system requirements](https://help.splunk.com/en/splunk-enterprise/get-started/install-and-upgrade/10.0/plan-your-splunk-enterprise-installation/system-requirements-for-use-of-splunk-enterprise-on-premises)

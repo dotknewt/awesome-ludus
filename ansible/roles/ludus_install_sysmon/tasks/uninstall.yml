@@ -1,5 +1,6 @@
 ---
+# The included install/configure flow consumes this established result name.
 - name: SYSMON UNINSTALL TASK
   ansible.windows.win_command:
     cmd: "{{ sysmon_executable_path }} -u force"
-  register: sysmon_uninstall
+  register: sysmon_uninstall  # noqa: var-naming[no-role-prefix]

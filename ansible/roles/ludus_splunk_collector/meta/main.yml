@@ -10,6 +10,7 @@ galaxy_info:
       versions: [trixie]
     - name: Ubuntu
       versions: [noble, resolute]
+    # Galaxy's metadata schema has no Windows 11 version token; runtime guards include it.
     - name: Windows
-      versions: ['all']
+      versions: ['2019', '2022', '2025']
 dependencies: []

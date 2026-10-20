@@ -1,7 +1,10 @@
 ---
 galaxy_info:
+  description: Install and configure Sysmon on supported Windows hosts.
+  license: GPL-3.0-only
   role_name: ludus_install_sysmon
   author: dotknewt
+  min_ansible_version: "2.16"
 dependencies: []
 
-collections: [] # Add any collections needed here
+collections: []  # Add any collections needed here

@@ -352,8 +352,7 @@
       ansible.builtin.set_fact:
         ludus_linux_logging_auditd_loader: >-
           {{ ludus_linux_logging_auditd_unit_cats.results[0].stdout
-          | ludus_linux_logging_auditd_loader_contract(
-          ludus_linux_logging_auditd_unit_cats.results[1].stdout) }}
+          | ludus_linux_logging_auditd_loader_contract(ludus_linux_logging_auditd_unit_cats.results[1].stdout) }}
       when: ludus_linux_logging_initial_service_state.stdout != 'active'
 
     - name: Validate effective auditd rule-loader configuration
@@ -532,8 +531,7 @@
       ansible.builtin.set_fact:
         ludus_linux_logging_managed_rules: >-
           {{ ludus_linux_logging_upstream_rules.content | b64decode
-          | ludus_linux_logging_transform_audit_rules(
-          ludus_linux_logging_rule_paths.results,
+          | ludus_linux_logging_transform_audit_rules(ludus_linux_logging_rule_paths.results,
           ludus_linux_logging_policy_identity_results.results | default([]),
           ludus_linux_logging_selinux_enforce.stat.get('exists', false)) }}
 
@@ -553,9 +551,9 @@
       ansible.builtin.set_fact:
         ludus_linux_logging_managed_config: >-
           {{ ludus_linux_logging_upstream_config.content | b64decode
-          | ludus_linux_logging_transform_laurel_config(
-          ludus_linux_logging_laurel_log_dir, ludus_linux_logging_laurel_log_file,
-          ludus_linux_logging_laurel_user, ludus_linux_logging_read_users) }}
+          | ludus_linux_logging_transform_laurel_config(ludus_linux_logging_laurel_log_dir,
+          ludus_linux_logging_laurel_log_file, ludus_linux_logging_laurel_user,
+          ludus_linux_logging_read_users) }}
         ludus_linux_logging_managed_plugin: "{{ lookup('ansible.builtin.template', 'laurel.conf.j2') }}"
 
     - name: Calculate desired managed content digests

@@ -10,6 +10,7 @@
 
 - name: Validate and configure the Linux Universal Forwarder collector
   become: true
+  when: ansible_system == 'Linux'
   block:
     - name: Validate platform and role inputs before mutation
       ansible.builtin.import_tasks: validate.yml
@@ -22,4 +23,3 @@
 
     - name: Configure and bootstrap the collector
       ansible.builtin.import_tasks: configure.yml
-  when: ansible_system == 'Linux'

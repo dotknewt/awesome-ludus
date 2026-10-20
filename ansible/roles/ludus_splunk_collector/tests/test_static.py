@@ -130,16 +130,20 @@ class SplunkCollectorStaticContract(unittest.TestCase):
             [{"path": "/var/log/laurel/audit.log", "sourcetype": "laurel:json", "index": "main"}],
         )
 
-    def test_metadata_declares_only_supported_systemd_amd64_platforms(self):
+    def test_metadata_declares_linux_subset_and_supported_windows_server_matrix(self):
         info = self.meta.get("galaxy_info", {})
         self.assertEqual(info.get("author"), "dotknewt")
         self.assertEqual(info.get("role_name"), "ludus_splunk_collector")
         self.assertEqual(info.get("min_ansible_version"), "2.16")
-        self.assertEqual(
-            {(item.get("name"), tuple(item.get("versions", []))) for item in info.get("platforms", [])},
-            {("Debian", ("trixie",)), ("Ubuntu", ("noble", "resolute")),
-             ("Windows", ("11", "2019", "2022", "2025"))},
-        )
+        platforms = {(item.get("name"), tuple(item.get("versions", [])))
+                     for item in info.get("platforms", [])}
+        linux_platforms = {platform for platform in platforms if platform[0] != "Windows"}
+        self.assertEqual(linux_platforms,
+                         {("Debian", ("trixie",)), ("Ubuntu", ("noble", "resolute"))})
+        # Galaxy's metadata schema does not allow Windows 11 as a version token;
+        # runtime validation separately admits Windows 11 plus these Server versions.
+        self.assertEqual({platform for platform in platforms if platform[0] == "Windows"},
+                         {("Windows", ("2019", "2022", "2025"))})
         self.assertEqual(self.meta.get("dependencies"), [])
 
     def test_platform_license_and_injected_inputs_are_checked_before_mutation(self):

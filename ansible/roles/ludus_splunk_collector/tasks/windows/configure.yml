@@ -1,4 +1,82 @@
 ---
+- name: Preflight newly installed seed paths before marker or Event Log changes
+  ansible.windows.win_powershell:
+    error_action: stop
+    script: |
+      $ErrorActionPreference = 'Stop'
+      function Get-SeedAclPlan([string]$Path, [string]$ExpectedKind) {
+        if (-not (Test-Path -LiteralPath $Path)) { return $null }
+        $item = Get-Item -LiteralPath $Path -Force
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Reparse seed path: $Path" }
+        if (($ExpectedKind -eq 'Directory' -and -not $item.PSIsContainer) -or
+            ($ExpectedKind -eq 'File' -and $item.PSIsContainer)) { throw "Wrong seed path type: $Path" }
+        $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+        $ownerSid = ([System.Security.Principal.NTAccount]$acl.Owner).
+          Translate([System.Security.Principal.SecurityIdentifier]).Value
+        if ($ownerSid -notin @('S-1-5-18', 'S-1-5-32-544')) { throw "Unsupported seed owner: $Path" }
+        $sddl = $acl.GetSecurityDescriptorSddlForm(
+          [System.Security.AccessControl.AccessControlSections]::All)
+        $raw = New-Object System.Security.AccessControl.RawSecurityDescriptor($sddl)
+        if (($raw.ControlFlags -band [System.Security.AccessControl.ControlFlags]::DiscretionaryAclPresent) -eq 0 -or
+            $null -eq $raw.DiscretionaryAcl) { throw "Missing or null seed DACL: $Path" }
+        $serviceSid = ([System.Security.Principal.NTAccount]'NT SERVICE\SplunkForwarder').
+          Translate([System.Security.Principal.SecurityIdentifier]).Value
+        $flags = if ($ExpectedKind -eq 'Directory') { 3 } else { 0 }
+        $serviceMask = if ($ExpectedKind -eq 'Directory') {
+          [int]([System.Security.AccessControl.FileSystemRights]::ReadAndExecute -bor
+               [System.Security.AccessControl.FileSystemRights]::Synchronize)
+        } else {
+          [int]([System.Security.AccessControl.FileSystemRights]::Read -bor
+               [System.Security.AccessControl.FileSystemRights]::Synchronize)
+        }
+        $expected = @{}
+        $expected['S-1-5-18'] = @{
+          mask = [int][System.Security.AccessControl.FileSystemRights]::FullControl
+          flags = $flags
+        }
+        $expected['S-1-5-32-544'] = @{
+          mask = [int][System.Security.AccessControl.FileSystemRights]::FullControl
+          flags = $flags
+        }
+        $expected[$serviceSid] = @{ mask = $serviceMask; flags = $flags }
+        $seen = @{}
+        $inheritedSeen = $false
+        foreach ($ace in $raw.DiscretionaryAcl) {
+          if ($ace -isnot [System.Security.AccessControl.CommonAce]) { throw "Unsupported seed ACE type: $Path" }
+          if ($ace.IsCallback) { throw "Callback/conditional seed ACE is unsupported: $Path" }
+          if ($ace.AceQualifier -eq [System.Security.AccessControl.AceQualifier]::AccessDenied) { throw "Any seed deny ACE is unsupported: $Path" }
+          if ($ace.AceQualifier -ne [System.Security.AccessControl.AceQualifier]::AccessAllowed) { throw "Unsupported seed ACE qualifier: $Path" }
+          $isInherited = ($ace.AceFlags -band [System.Security.AccessControl.AceFlags]::Inherited) -ne 0
+          if ($isInherited) { $inheritedSeen = $true; continue }
+          if ($inheritedSeen) { throw "Noncanonical seed DACL ordering: $Path" }
+          $sid = $ace.SecurityIdentifier.Value
+          if (-not $expected.ContainsKey($sid)) { throw "Unfamiliar explicit seed allow SID: $Path" }
+          if ($seen.ContainsKey($sid)) { throw "Duplicate explicit seed allow ACE: $Path" }
+          $policy = $expected[$sid]
+          if ([int]$ace.AccessMask -ne [int]$policy.mask -or [int]$ace.AceFlags -ne [int]$policy.flags) {
+            throw "Unfamiliar explicit seed allow rights/scope: $Path"
+          }
+          $seen[$sid] = $true
+        }
+        return @{ acl = $acl; owner = $ownerSid; path = $Path; kind = $ExpectedKind }
+      }
+      $parent = 'C:\Program Files\SplunkUniversalForwarder\etc\system\local'
+      $seed = Join-Path $parent 'user-seed.conf'
+      $parentPlan = Get-SeedAclPlan $parent 'Directory'
+      if (-not $parentPlan -and (Test-Path -LiteralPath $seed)) { throw 'Seed file exists without its parent directory.' }
+      $seedPlan = Get-SeedAclPlan $seed 'File'
+      if ($parentPlan) {
+        $unrelated = @(Get-ChildItem -LiteralPath $parent -Force | Where-Object { $_.FullName -ne $seed })
+        if ($unrelated.Count -gt 0) { throw 'Unrelated system/local children prevent seed ACL management.' }
+      }
+      $Ansible.Changed = $false
+      $Ansible.Result = @{ parent_exists = [bool]$parentPlan; seed_exists = [bool]$seedPlan }
+  when: >-
+    ludus_splunk_collector_windows_phase == 'bootstrapPending'
+    or (ludus_splunk_collector_windows_phase in ['absent', 'pending']
+        and ludus_splunk_collector_windows_package is defined
+        and not (ludus_splunk_collector_windows_package.skipped | default(false)))
+
 - name: Inspect fresh Windows service account and installation path before ownership transition
   ansible.windows.win_powershell:
     error_action: stop
@@ -18,7 +96,8 @@
       $Ansible.Result = @{ service_account = $service.StartName; service_path = $service.PathName; product_version = $exe.VersionInfo.ProductVersion }
   register: ludus_splunk_collector_windows_verified_service
   when: ludus_splunk_collector_windows_inspection.result.marker_exists or
-        ludus_splunk_collector_windows_package is defined
+        (ludus_splunk_collector_windows_package is defined and
+         not (ludus_splunk_collector_windows_package.skipped | default(false)))
 
 - name: Advance the fresh verified installation from pending to bootstrapPending
   ansible.windows.win_powershell:
@@ -27,15 +106,23 @@
       $ErrorActionPreference = 'Stop'
       $path = 'C:\ProgramData\Ludus\SplunkCollector\ownership.json'
       $marker = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
-      if ($marker.phase -ne 'pending' -or $marker.schema_version -ne 1) { throw 'Unexpected ownership transition.' }
+      if ($marker.phase -ne 'pending' -or $marker.schema_version -ne 1) {
+        throw 'Fresh-install ownership transition requires a newly re-read pending marker.'
+      }
       $marker.phase = 'bootstrapPending'
       $marker | ConvertTo-Json -Compress | Set-Content -LiteralPath $path -Encoding UTF8
-  when: ludus_splunk_collector_windows_package is defined or ludus_splunk_collector_windows_phase == 'pending'
+  when:
+    - ludus_splunk_collector_windows_package is defined
+    - not (ludus_splunk_collector_windows_package.skipped | default(false))
+    - ludus_splunk_collector_windows_phase in ['absent', 'pending']
 
 - name: Record bootstrapPending phase after verified installation
   ansible.builtin.set_fact:
     ludus_splunk_collector_windows_phase: bootstrapPending
-  when: ludus_splunk_collector_windows_package is defined or ludus_splunk_collector_windows_phase == 'pending'
+  when:
+    - ludus_splunk_collector_windows_package is defined
+    - not (ludus_splunk_collector_windows_package.skipped | default(false))
+    - ludus_splunk_collector_windows_phase in ['absent', 'pending']
 
 - name: Ensure the verified service identity is recorded in the protected marker
   ansible.windows.win_powershell:
@@ -47,7 +134,8 @@
       if ($marker.service_account -ne 'NT SERVICE\SplunkForwarder') { throw 'Ownership service identity mismatch.' }
       if ($marker.phase -notin @('bootstrapPending', 'ready')) { throw 'Installation is not at a configurable ownership phase.' }
   when: ludus_splunk_collector_windows_inspection.result.marker_exists or
-        ludus_splunk_collector_windows_package is defined
+        (ludus_splunk_collector_windows_package is defined and
+         not (ludus_splunk_collector_windows_package.skipped | default(false)))
 
 - name: Inspect newly installed application paths for reparse points before any guest ACL/configuration mutation
   ansible.windows.win_powershell:
@@ -119,7 +207,7 @@
   when: not ludus_splunk_collector_windows_inspection.result.marker_exists or
         ludus_splunk_collector_windows_phase != 'ready'
 
-- name: Create the protected seed parent before writing credentials
+- name: Create seed parent only after ownership and contents pass preflight
   ansible.windows.win_file:
     path: C:\Program Files\SplunkUniversalForwarder\etc\system\local
     state: directory
@@ -127,7 +215,96 @@
     - ludus_splunk_collector_windows_phase == 'bootstrapPending'
     - not ludus_splunk_collector_windows_passwd.stat.exists
 
-- name: Create empty seed file before applying restrictive ACLs
+- name: Protect the seed parent using its inspected supported ACL
+  ansible.windows.win_powershell:
+    error_action: stop
+    script: |
+      $ErrorActionPreference = 'Stop'
+      function Get-SeedAclPlan([string]$Path, [string]$ExpectedKind) {
+        $item = Get-Item -LiteralPath $Path -Force
+        if (($ExpectedKind -eq 'Directory' -and -not $item.PSIsContainer) -or
+            ($ExpectedKind -eq 'File' -and $item.PSIsContainer) -or
+            ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+          throw 'Seed path type/reparse check failed.'
+        }
+        $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+        $ownerSid = ([System.Security.Principal.NTAccount]$acl.Owner).
+          Translate([System.Security.Principal.SecurityIdentifier]).Value
+        if ($ownerSid -notin @('S-1-5-18', 'S-1-5-32-544')) { throw 'Unsupported seed parent owner.' }
+        $sddl = $acl.GetSecurityDescriptorSddlForm(
+          [System.Security.AccessControl.AccessControlSections]::All)
+        $raw = New-Object System.Security.AccessControl.RawSecurityDescriptor($sddl)
+        if (($raw.ControlFlags -band [System.Security.AccessControl.ControlFlags]::DiscretionaryAclPresent) -eq 0 -or
+            $null -eq $raw.DiscretionaryAcl) {
+          throw 'Missing or null seed DACL.'
+        }
+        $serviceSid = ([System.Security.Principal.NTAccount]'NT SERVICE\SplunkForwarder').
+          Translate([System.Security.Principal.SecurityIdentifier]).Value
+        $flags = if ($ExpectedKind -eq 'Directory') { 3 } else { 0 }
+        $serviceMask = if ($ExpectedKind -eq 'Directory') {
+          [int]([System.Security.AccessControl.FileSystemRights]::ReadAndExecute -bor
+               [System.Security.AccessControl.FileSystemRights]::Synchronize)
+        } else {
+          [int]([System.Security.AccessControl.FileSystemRights]::Read -bor
+               [System.Security.AccessControl.FileSystemRights]::Synchronize)
+        }
+        $expected = @{
+          'S-1-5-18' = @{
+            mask = [int][System.Security.AccessControl.FileSystemRights]::FullControl
+            flags = $flags
+          }
+          'S-1-5-32-544' = @{
+            mask = [int][System.Security.AccessControl.FileSystemRights]::FullControl
+            flags = $flags
+          }
+        }
+        $expected[$serviceSid] = @{ mask = $serviceMask; flags = $flags }
+        $seen = @{}; $inheritedSeen = $false
+        foreach ($ace in $raw.DiscretionaryAcl) {
+          if ($ace -isnot [System.Security.AccessControl.CommonAce]) { throw 'Unsupported seed ACE type.' }
+          if ($ace.IsCallback) { throw 'Callback/conditional seed ACE is unsupported.' }
+          if ($ace.AceQualifier -eq [System.Security.AccessControl.AceQualifier]::AccessDenied) { throw 'Any seed deny ACE is unsupported.' }
+          if ($ace.AceQualifier -ne [System.Security.AccessControl.AceQualifier]::AccessAllowed) { throw 'Unsupported seed ACE qualifier.' }
+          $isInherited = ($ace.AceFlags -band [System.Security.AccessControl.AceFlags]::Inherited) -ne 0
+          if ($isInherited) { $inheritedSeen = $true; continue }
+          if ($inheritedSeen) { throw 'Noncanonical seed DACL ordering.' }
+          $sid = $ace.SecurityIdentifier.Value
+          if (-not $expected.ContainsKey($sid) -or $seen.ContainsKey($sid)) { throw 'Unfamiliar or duplicate explicit seed allow.' }
+          if ([int]$ace.AccessMask -ne $expected[$sid].mask -or
+              [int]$ace.AceFlags -ne $expected[$sid].flags) {
+            throw 'Unfamiliar explicit seed allow rights/scope.'
+          }
+          $seen[$sid] = $true
+        }
+        return $acl
+      }
+      $path = 'C:\Program Files\SplunkUniversalForwarder\etc\system\local'
+      $seed = Join-Path $path 'user-seed.conf'
+      $acl = Get-SeedAclPlan $path 'Directory'
+      if (Test-Path -LiteralPath $seed) { [void](Get-SeedAclPlan $seed 'File') }
+      $unrelated = @(Get-ChildItem -LiteralPath $path -Force | Where-Object { $_.FullName -ne $seed })
+      if ($unrelated.Count -gt 0) { throw 'Unrelated system/local children prevent seed ACL management.' }
+      $acl.SetAccessRuleProtection($true, $false)
+      $inherit = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+                 [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+      foreach ($entry in @(
+        @{ account = 'SYSTEM'; rights = [System.Security.AccessControl.FileSystemRights]::FullControl },
+        @{ account = 'BUILTIN\Administrators'; rights = [System.Security.AccessControl.FileSystemRights]::FullControl },
+        @{ account = 'NT SERVICE\SplunkForwarder'; rights = [System.Security.AccessControl.FileSystemRights]::ReadAndExecute }
+      )) {
+        $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+          $entry.account, $entry.rights, $inherit,
+          [System.Security.AccessControl.PropagationFlags]::None,
+          [System.Security.AccessControl.AccessControlType]::Allow)
+        $acl.SetAccessRule($rule)
+      }
+      Set-Acl -LiteralPath $path -AclObject $acl
+      $Ansible.Result = @{ parent_acl_protected = $true }
+  when:
+    - ludus_splunk_collector_windows_phase == 'bootstrapPending'
+    - not ludus_splunk_collector_windows_passwd.stat.exists
+
+- name: Create empty seed file only after its parent is protected
   ansible.windows.win_file:
     path: C:\Program Files\SplunkUniversalForwarder\etc\system\local\user-seed.conf
     state: touch
@@ -135,26 +312,190 @@
     - ludus_splunk_collector_windows_phase == 'bootstrapPending'
     - not ludus_splunk_collector_windows_passwd.stat.exists
 
-- name: Remove inherited seed-file access before secret content is written
-  ansible.windows.win_acl_inheritance:
-    path: C:\Program Files\SplunkUniversalForwarder\etc\system\local\user-seed.conf
-    state: absent
-    reorganize: true
+- name: Protect the seed file using its inspected supported ACL
+  ansible.windows.win_powershell:
+    error_action: stop
+    script: |
+      $ErrorActionPreference = 'Stop'
+      $parent = 'C:\Program Files\SplunkUniversalForwarder\etc\system\local'
+      $path = Join-Path $parent 'user-seed.conf'
+      $parentItem = Get-Item -LiteralPath $parent -Force
+      if (-not $parentItem.PSIsContainer -or
+          ($parentItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'Seed parent recheck failed.'
+      }
+      $parentAcl = Get-Acl -LiteralPath $parent -ErrorAction Stop
+      if (-not $parentAcl.AreAccessRulesProtected) { throw 'Seed parent ACL was not protected before file ACL update.' }
+      $parentOwner = ([System.Security.Principal.NTAccount]$parentAcl.Owner).
+        Translate([System.Security.Principal.SecurityIdentifier]).Value
+      if ($parentOwner -notin @('S-1-5-18', 'S-1-5-32-544')) { throw 'Unsupported seed parent owner before file ACL update.' }
+      $parentSddl = $parentAcl.GetSecurityDescriptorSddlForm(
+        [System.Security.AccessControl.AccessControlSections]::All)
+      $parentRaw = New-Object System.Security.AccessControl.RawSecurityDescriptor($parentSddl)
+      if (($parentRaw.ControlFlags -band [System.Security.AccessControl.ControlFlags]::DiscretionaryAclPresent) -eq 0 -or
+          $null -eq $parentRaw.DiscretionaryAcl) {
+        throw 'Missing or null parent DACL before file ACL update.'
+      }
+      $serviceSid = ([System.Security.Principal.NTAccount]'NT SERVICE\SplunkForwarder').
+        Translate([System.Security.Principal.SecurityIdentifier]).Value
+      $parentExpected = @{
+        'S-1-5-18' = [int][System.Security.AccessControl.FileSystemRights]::FullControl
+        'S-1-5-32-544' = [int][System.Security.AccessControl.FileSystemRights]::FullControl
+      }
+      $parentExpected[$serviceSid] = [int]([System.Security.AccessControl.FileSystemRights]::ReadAndExecute -bor
+                                           [System.Security.AccessControl.FileSystemRights]::Synchronize)
+      $parentSeen = @{}
+      foreach ($parentAce in $parentRaw.DiscretionaryAcl) {
+        if ($parentAce -isnot [System.Security.AccessControl.CommonAce] -or $parentAce.IsCallback) { throw 'Unsupported parent ACE before file ACL update.' }
+        if ($parentAce.AceQualifier -eq [System.Security.AccessControl.AceQualifier]::AccessDenied) { throw 'Parent deny ACE appeared before file ACL update.' }
+        if ($parentAce.AceQualifier -ne [System.Security.AccessControl.AceQualifier]::AccessAllowed -or
+            ($parentAce.AceFlags -band [System.Security.AccessControl.AceFlags]::Inherited) -ne 0) { throw 'Unexpected parent ACE before file ACL update.' }
+        $parentSid = $parentAce.SecurityIdentifier.Value
+        if (-not $parentExpected.ContainsKey($parentSid) -or $parentSeen.ContainsKey($parentSid) -or
+            [int]$parentAce.AccessMask -ne $parentExpected[$parentSid] -or
+            [int]$parentAce.AceFlags -ne 3) {
+          throw 'Unfamiliar parent ACE before file ACL update.'
+        }
+        $parentSeen[$parentSid] = $true
+      }
+      if ($parentSeen.Count -ne 3) { throw 'Required parent ACEs are missing before file ACL update.' }
+      $unrelated = @(
+        Get-ChildItem -LiteralPath $parent -Force |
+          Where-Object { $_.FullName -ne $path }
+      )
+      if ($unrelated.Count -gt 0) { throw 'Unrelated system/local children appeared before seed ACL update.' }
+      $item = Get-Item -LiteralPath $path -Force
+      if ($item.PSIsContainer -or
+          ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'Seed file type/reparse check failed.'
+      }
+      $acl = Get-Acl -LiteralPath $path -ErrorAction Stop
+      $ownerSid = ([System.Security.Principal.NTAccount]$acl.Owner).
+        Translate([System.Security.Principal.SecurityIdentifier]).Value
+      if ($ownerSid -notin @('S-1-5-18', 'S-1-5-32-544')) { throw 'Unsupported seed file owner.' }
+      $sddl = $acl.GetSecurityDescriptorSddlForm(
+        [System.Security.AccessControl.AccessControlSections]::All)
+      $raw = New-Object System.Security.AccessControl.RawSecurityDescriptor($sddl)
+      if (($raw.ControlFlags -band [System.Security.AccessControl.ControlFlags]::DiscretionaryAclPresent) -eq 0 -or
+          $null -eq $raw.DiscretionaryAcl) {
+        throw 'Missing or null seed DACL.'
+      }
+      $serviceSid = ([System.Security.Principal.NTAccount]'NT SERVICE\SplunkForwarder').
+        Translate([System.Security.Principal.SecurityIdentifier]).Value
+      $expected = @{
+        'S-1-5-18' = [int][System.Security.AccessControl.FileSystemRights]::FullControl
+        'S-1-5-32-544' = [int][System.Security.AccessControl.FileSystemRights]::FullControl
+      }
+      $expected[$serviceSid] = [int]([System.Security.AccessControl.FileSystemRights]::Read -bor
+                                     [System.Security.AccessControl.FileSystemRights]::Synchronize)
+      $seen = @{}; $inheritedSeen = $false
+      foreach ($ace in $raw.DiscretionaryAcl) {
+        if ($ace -isnot [System.Security.AccessControl.CommonAce]) { throw 'Unsupported seed ACE type.' }
+        if ($ace.IsCallback) { throw 'Callback/conditional seed ACE is unsupported.' }
+        if ($ace.AceQualifier -eq [System.Security.AccessControl.AceQualifier]::AccessDenied) { throw 'Any seed deny ACE is unsupported.' }
+        if ($ace.AceQualifier -ne [System.Security.AccessControl.AceQualifier]::AccessAllowed) { throw 'Unsupported seed ACE qualifier.' }
+        $isInherited = ($ace.AceFlags -band [System.Security.AccessControl.AceFlags]::Inherited) -ne 0
+        if ($isInherited) { $inheritedSeen = $true; continue }
+        if ($inheritedSeen) { throw 'Noncanonical seed DACL ordering.' }
+        $sid = $ace.SecurityIdentifier.Value
+        if (-not $expected.ContainsKey($sid) -or $seen.ContainsKey($sid)) { throw 'Unfamiliar or duplicate explicit seed allow.' }
+        if ([int]$ace.AccessMask -ne $expected[$sid] -or [int]$ace.AceFlags -ne 0) {
+          throw 'Unfamiliar explicit seed allow rights/scope.'
+        }
+        $seen[$sid] = $true
+      }
+      $acl.SetAccessRuleProtection($true, $false)
+      foreach ($entry in @(
+        @{ account = 'SYSTEM'; rights = [System.Security.AccessControl.FileSystemRights]::FullControl },
+        @{ account = 'BUILTIN\Administrators'; rights = [System.Security.AccessControl.FileSystemRights]::FullControl },
+        @{ account = 'NT SERVICE\SplunkForwarder'; rights = [System.Security.AccessControl.FileSystemRights]::Read }
+      )) {
+        $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+          $entry.account, $entry.rights,
+          [System.Security.AccessControl.AccessControlType]::Allow)
+        $acl.SetAccessRule($rule)
+      }
+      Set-Acl -LiteralPath $path -AclObject $acl
+      $Ansible.Result = @{ seed_acl_protected = $true }
   when:
     - ludus_splunk_collector_windows_phase == 'bootstrapPending'
     - not ludus_splunk_collector_windows_passwd.stat.exists
 
-- name: Grant seed access only to SYSTEM, Administrators, and service-account read
-  ansible.windows.win_acl:
-    path: C:\Program Files\SplunkUniversalForwarder\etc\system\local\user-seed.conf
-    user: "{{ item.user }}"
-    rights: "{{ item.rights }}"
-    type: allow
-    state: present
-  loop:
-    - { user: SYSTEM, rights: FullControl }
-    - { user: 'BUILTIN\Administrators', rights: FullControl }
-    - { user: 'NT SERVICE\SplunkForwarder', rights: Read }
+- name: Recheck seed parent and file ACLs immediately before secret rendering
+  ansible.windows.win_powershell:
+    error_action: stop
+    script: |
+      $ErrorActionPreference = 'Stop'
+      function Assert-ProtectedSeedAcl([string]$Path, [string]$Kind) {
+        $item = Get-Item -LiteralPath $Path -Force
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            ($Kind -eq 'Directory' -and -not $item.PSIsContainer) -or
+            ($Kind -eq 'File' -and $item.PSIsContainer)) {
+          throw "Unsafe seed path immediately before secret write: $Path"
+        }
+        $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+        if (-not $acl.AreAccessRulesProtected) { throw "Seed DACL is not protected: $Path" }
+        $owner = ([System.Security.Principal.NTAccount]$acl.Owner).
+          Translate([System.Security.Principal.SecurityIdentifier]).Value
+        if ($owner -notin @('S-1-5-18', 'S-1-5-32-544')) { throw "Unsupported seed owner: $Path" }
+        $sddl = $acl.GetSecurityDescriptorSddlForm(
+          [System.Security.AccessControl.AccessControlSections]::All)
+        $raw = New-Object System.Security.AccessControl.RawSecurityDescriptor($sddl)
+        if (($raw.ControlFlags -band [System.Security.AccessControl.ControlFlags]::DiscretionaryAclPresent) -eq 0 -or
+            $null -eq $raw.DiscretionaryAcl) {
+          throw "Missing or null seed DACL: $Path"
+        }
+        $serviceSid = ([System.Security.Principal.NTAccount]'NT SERVICE\SplunkForwarder').
+          Translate([System.Security.Principal.SecurityIdentifier]).Value
+        $expected = @{
+          'S-1-5-18' = @{
+            mask = [int][System.Security.AccessControl.FileSystemRights]::FullControl
+            flags = if ($Kind -eq 'Directory') { 3 } else { 0 }
+          }
+          'S-1-5-32-544' = @{
+            mask = [int][System.Security.AccessControl.FileSystemRights]::FullControl
+            flags = if ($Kind -eq 'Directory') { 3 } else { 0 }
+          }
+        }
+        $flags = if ($Kind -eq 'Directory') { 3 } else { 0 }
+        $serviceMask = if ($Kind -eq 'Directory') {
+          [int]([System.Security.AccessControl.FileSystemRights]::ReadAndExecute -bor
+               [System.Security.AccessControl.FileSystemRights]::Synchronize)
+        } else {
+          [int]([System.Security.AccessControl.FileSystemRights]::Read -bor
+               [System.Security.AccessControl.FileSystemRights]::Synchronize)
+        }
+        $expected[$serviceSid] = @{ mask = $serviceMask; flags = $flags }
+        $seen = @{}; $inheritedSeen = $false
+        foreach ($ace in $raw.DiscretionaryAcl) {
+          if ($ace -isnot [System.Security.AccessControl.CommonAce]) { throw "Unsupported seed ACE type: $Path" }
+          if ($ace.IsCallback) { throw "Callback/conditional seed ACE: $Path" }
+          if ($ace.AceQualifier -eq [System.Security.AccessControl.AceQualifier]::AccessDenied) { throw "Any seed deny ACE is rejected: $Path" }
+          if ($ace.AceQualifier -ne [System.Security.AccessControl.AceQualifier]::AccessAllowed) { throw "Unsupported seed ACE qualifier: $Path" }
+          $inherited = ($ace.AceFlags -band [System.Security.AccessControl.AceFlags]::Inherited) -ne 0
+          if ($inherited) { $inheritedSeen = $true; continue }
+          if ($inheritedSeen) { throw "Noncanonical seed DACL ordering: $Path" }
+          $sid = $ace.SecurityIdentifier.Value
+          if (-not $expected.ContainsKey($sid) -or $seen.ContainsKey($sid)) { throw "Unfamiliar or duplicate explicit seed allow: $Path" }
+          if ([int]$ace.AccessMask -ne [int]$expected[$sid].mask -or
+              [int]$ace.AceFlags -ne [int]$expected[$sid].flags) {
+            throw "Unfamiliar explicit seed allow rights/scope: $Path"
+          }
+          $seen[$sid] = $true
+        }
+        if ($seen.Count -ne 3) { throw "Seed ACL is missing one or more required explicit allow entries: $Path" }
+      }
+      $parent = 'C:\Program Files\SplunkUniversalForwarder\etc\system\local'
+      $seed = Join-Path $parent 'user-seed.conf'
+      Assert-ProtectedSeedAcl $parent 'Directory'
+      Assert-ProtectedSeedAcl $seed 'File'
+      $unrelated = @(
+        Get-ChildItem -LiteralPath $parent -Force |
+          Where-Object { $_.FullName -ne $seed }
+      )
+      if ($unrelated.Count -gt 0) { throw 'Unrelated system/local children appeared before secret rendering.' }
+      $Ansible.Changed = $false
+      $Ansible.Result = @{ parent_acl_checked = $true; seed_acl_checked = $true }
   when:
     - ludus_splunk_collector_windows_phase == 'bootstrapPending'
     - not ludus_splunk_collector_windows_passwd.stat.exists
@@ -205,7 +546,7 @@
     status_code: 200
     timeout: 15
   register: ludus_splunk_collector_windows_auth
-  until: ludus_splunk_collector_windows_auth.status | default(0) == 200
+  until: ludus_splunk_collector_windows_auth.status_code | default(0) == 200
   retries: 30
   delay: 10
   when:
@@ -253,8 +594,17 @@
       $markerPath = 'C:\ProgramData\Ludus\SplunkCollector\ownership.json'
       $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
       if ($marker.phase -notin @('bootstrapPending', 'ready')) { throw 'Ready transition is not permitted from this ownership phase.' }
-      $marker.inputs_sha256 = (Get-FileHash -LiteralPath (Join-Path $root 'inputs.conf') -Algorithm SHA256).Hash.ToLowerInvariant()
-      $marker.outputs_sha256 = (Get-FileHash -LiteralPath (Join-Path $root 'outputs.conf') -Algorithm SHA256).Hash.ToLowerInvariant()
-      $marker.phase = 'ready'
-      $marker | ConvertTo-Json -Compress | Set-Content -LiteralPath $markerPath -Encoding UTF8
+      $inputs = (Get-FileHash -LiteralPath (Join-Path $root 'inputs.conf') -Algorithm SHA256).Hash.ToLowerInvariant()
+      $outputs = (Get-FileHash -LiteralPath (Join-Path $root 'outputs.conf') -Algorithm SHA256).Hash.ToLowerInvariant()
+      $changed = $marker.phase -ne 'ready'
+      if ($marker.inputs_sha256 -cne $inputs -or $marker.outputs_sha256 -cne $outputs) {
+        $changed = $true
+      }
+      if ($changed) {
+        $marker.inputs_sha256 = $inputs
+        $marker.outputs_sha256 = $outputs
+        $marker.phase = 'ready'
+        $marker | ConvertTo-Json -Compress | Set-Content -LiteralPath $markerPath -Encoding UTF8
+      }
+      $Ansible.Changed = $changed
   when: ludus_splunk_collector_windows_phase in ['bootstrapPending', 'ready']

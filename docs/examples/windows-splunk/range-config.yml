@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://docs.ludus.cloud/schemas/range-config.json
+---
+# Illustrative only. See README.md: template and installed-role identities
+# require confirmation on the target Ludus server before use.
+ludus:
+  - vm_name: "{{ range_id }}-splunk"
+    hostname: "{{ range_id }}-splunk"
+    template: REPLACE_WITH_AVAILABLE_DEBIAN_13_TEMPLATE
+    vlan: 10
+    ip_last_octet: 10
+    ram_gb: 8
+    cpus: 4
+    linux: true
+    roles:
+      - ludus_splunk_server
+    role_vars:
+      ludus_splunk_server_accept_license: true
+      ludus_splunk_server_receiver_enabled: true
+      ludus_splunk_server_receiver_port: 9997
+      ludus_splunk_server_indexes: [winlogs, sysmon, etw]
+
+  - vm_name: "{{ range_id }}-win11"
+    hostname: "{{ range_id }}-WIN11"
+    template: REPLACE_WITH_AVAILABLE_WINDOWS_11_X64_TEMPLATE
+    vlan: 10
+    ip_last_octet: 11
+    ram_gb: 8
+    cpus: 4
+    windows: {}
+    roles:
+      - ludus_install_sysmon
+      - name: ludus_splunk_collector
+        depends_on:
+          - vm_name: "{{ range_id }}-splunk"
+            role: ludus_splunk_server
+          - vm_name: "{{ range_id }}-win11"
+            role: ludus_install_sysmon
+    role_vars:
+      ludus_splunk_collector_accept_license: true
+      ludus_splunk_collector_receiver_host: REPLACE_WITH_RESOLVABLE_SPLUNK_SERVER_ADDRESS
+      ludus_splunk_collector_receiver_port: 9997
+      ludus_splunk_collector_windows_security_index: winlogs
+      ludus_splunk_collector_windows_sysmon_index: sysmon
+      ludus_splunk_collector_windows_silk_index: etw

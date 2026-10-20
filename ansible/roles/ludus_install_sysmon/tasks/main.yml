@@ -1,4 +1,5 @@
 ---
+# Keep established local fact and include-result names stable across task files.
 - name: LUDUS_INSTALL_SYSMON
   block:
     - name: SYSMON CHECK TASK
@@ -7,7 +8,7 @@
 
     - name: Use declared bundled Sysmon version
       ansible.builtin.set_fact:
-        sysmon_target_version: "{{ sysmon_installer_version }}"
+        sysmon_target_version: "{{ sysmon_installer_version }}"  # noqa: var-naming[no-role-prefix]
 
     - name: Prepare selected Sysmon archive
       when: >-
@@ -29,7 +30,7 @@
         file: uninstall.yml
 
     - name: SYSMON INSTALL TASK
-      when: | # if not sysmon_service.exists OR uninstall ran successfully
+      when: |  # if not sysmon_service.exists OR uninstall ran successfully
         not sysmon_service.exists
         or not sysmon_exe.stat.exists
         or (sysmon_uninstall.changed is defined and sysmon_uninstall.changed)
@@ -53,7 +54,7 @@
         file: configure.yml
   always:
     - name: Remove Sysmon staging directory
-      when: sysmon_dl_temp.path is defined
+      when: sysmon_dl_temp.path is defined  # noqa: var-naming[no-role-prefix]
       ansible.windows.win_file:
         path: "{{ sysmon_dl_temp.path }}"
         state: absent

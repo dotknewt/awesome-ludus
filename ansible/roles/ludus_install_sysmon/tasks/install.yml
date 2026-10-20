@@ -1,4 +1,5 @@
 ---
+# Existing included-task consumers rely on this register name; retain compatibility.
 - name: Copy Sysmon executable to SystemRoot
   ansible.windows.win_copy:
     remote_src: true
@@ -10,5 +11,5 @@
     cmd: >-
       "{{ sysmon_executable_path }}"
       {{ sysmon_install_default_parameters | join(" ") }}
-  register: sysmon_install
+  register: sysmon_install  # noqa: var-naming[no-role-prefix]
   changed_when: sysmon_install.rc == 0

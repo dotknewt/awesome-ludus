@@ -178,23 +178,45 @@ These package inputs are now a verified pin; ProductCode `{B253F87A-EEBB-46C4-AA
 - Declare Windows collection prerequisites and supported pins; no full Splunk TA or optional CIM assets.
 - Static checks cover no hidden sibling calls, legacy blueprint migration, firewall/TLS changes, or Sysmon filter edits.
 - Do not query a target server or invent installed IDs; document explicit role ordering and server-owned indexes.
-- [ ] First add syntax/static assertions for example ordering and no hidden role calls; ask fast-generic to run collector/server test suites and expected-red syntax checks.
-- [ ] Implement the three docs only; rerun the same tests and `git diff --check -- docs/examples/windows-splunk ansible/roles/ludus_splunk_collector/tests ansible/roles/ludus_splunk_server/tests`; checkpoint docs/example files only.
-- [ ] Fast-generic must inspect `.opencode/skills/ansible-validation/SKILL.md` and run actual syntax/inventory scope: `python3 .opencode/skills/ansible-validation/scripts/validate.py --role ansible/roles/ludus_splunk_collector --role ansible/roles/ludus_splunk_server --role ansible/roles/ludus_install_sysmon --playbook ansible/roles/ludus_splunk_collector/tests/syntax-windows.yml --data docs/examples/windows-splunk/range-config.yml --data docs/examples/windows-splunk/requirements.yml`; add `--coverage-gap <exact-gap>` for each exact gap. Missing tools warn only when coverage is complete and all available checks pass; any missing role/module/collection dependency or coverage gap is FAIL. Existing role `tests/syntax.yml` is included by `--role`.
+- [x] Add and execute the static assertion for example server/Sysmon/collector ordering, dependencies, collection pins, and excluded optional scope. The Windows syntax harness enters the real role entrypoint and has an unconditional fail pre-task.
+- [x] Create and validate the standalone range config, requirements, README, and pre-live tracker. Official Draft 2019-09 schema validation passed; details are in `docs/examples/windows-splunk/PRE-LIVE.md`.
+- [x] Run collector/server/Linux-logging tests and five Linux/Windows/Sysmon syntax targets. Fresh collector suite: 28 PASS; unchanged server 28 and Linux-logging 21 results reused (77 total). Exact validation scope/results are recorded in `docs/examples/windows-splunk/PRE-LIVE.md` and `/tmp/opencode/splunk-prelive-closeout-validation.txt`.
+- [x] Run the final repository `ansible-validation` inventory for all four roles, Windows syntax harness, range config, and collection requirements. Result: 0 coverage errors; ansible-playbook, ansible-lint, yamllint, schema check, and `git diff --check` PASS. The command and warnings are recorded in the PRE-LIVE closeout.
 
 ## Task 6: Evidence report and authorization handoff
 
 **Files:**
 - Modify only scoped test/report documentation if needed; do not modify unrelated docs/TODO/blueprints.
 
-- [ ] Record one evidence owner per claim: Task 0 primary-source compatibility, static tests for contracts, fast-generic for command output, parent for diff/review.
-- [ ] Report static task tests, selected-role/dependency inventory, repository `ansible-validation`, both Linux and Windows syntax targets, and existing Linux/server regression static tests separately.
-- [ ] Keep native work unexecuted and separately listed: fresh install, convergence without restart, config restart, reboot handling, unsafe-state pre-mutation failure, partial recovery, protected credential failure/cleanup, unrelated-resource preservation, and actual logs in all three indexes.
-- [ ] State explicitly that Security 4662/566/5145 events are expected to remain in the default baseline and SPLUNK-001 is a later separately authorized evaluation.
+- [x] Record evidence provenance for static contracts, selected roles/dependencies, validator output, schema, and the scoped ACL review in `docs/examples/windows-splunk/PRE-LIVE.md`.
+- [x] Report static tests, role inventory, five syntax targets, lint/schema checks, and diff check separately in the PRE-LIVE closeout.
+- [x] Keep all native work unexecuted and separately listed, including install, convergence/restart, reboot/recovery, credential cleanup, resource preservation, and ingestion gates.
+- [x] State explicitly that Security 4662/566/5145 remain in the default baseline and SPLUNK-001 evaluation requires separate authorization.
 - [ ] Ensure static tests reject regex/control/newline injection, detect unmanaged inherited TA blacklist collisions, reject owned-index removal including `[]`, and assert credential-failure seed retention; these are static contracts only and do not establish lifecycle behavior.
 - [ ] Parent self-reviews this plan and the final implementation diff; this plan does not substitute for parent review or authorize execution.
 
 ## Syntax harness and self-review checklist
+
+## Final static closeout — 2026-10-20
+
+- Local pre-live static work is complete. Final validator scope: 4 roles, 5
+  syntax targets, 5 lint targets, 42 YAML targets, 0 coverage errors; all
+  available checks passed. Test evidence totals 77 (collector 28 fresh; server
+  28 and Linux-logging 21 reused unchanged). Official schema validation selected
+  `Draft201909Validator`, passed `check_schema`, and found zero instance errors.
+- Official Ludus configuration documentation/schema confirm the example's
+  `roles` and `depends_on` shapes and ordering semantics. Oracle accepted the
+  scoped ACL review, including Synchronize-normalized filesystem masks and
+  directly executed PowerShell inspections under Ansible's condition.
+- Warnings and evidence paths are recorded in
+  [`PRE-LIVE.md`](../../examples/windows-splunk/PRE-LIVE.md). Sysmon dynamic
+  `include_tasks` bodies are not recursively checked by syntax-check.
+- This is static closeout only. Target role IDs/templates/receiver address,
+  selected OS support, MSI ACL compatibility, effective permissions, and
+  runtime behavior remain unverified; deployment readiness is not claimed.
+  Unfamiliar ACL policy is refused and may require a separately reviewed
+  adjustment. No TODO work was performed; external TODO/policy edits were
+  preserved and excluded.
 
 - [ ] `tests/syntax-windows.yml` must enter the real collector role through `tasks/main.yml`, use an unconditional `ansible.builtin.fail` in `pre_tasks` so the play cannot execute locally, and provide dummy variables only for parsing. `--syntax-check` parses static `import_tasks` seams without running the fail task; the harness must never conditionally escape it. It is a static syntax target, not a runtime simulation.
 - [x] Parent checks Skill requirement coverage: file map names every created/modified path; every task has interfaces; every implementation task writes assertions, runs expected-red, edits, reruns green, and records `git diff --check`; exact values and commands are present; review-focus risks map to tests.
@@ -207,4 +229,5 @@ These package inputs are now a verified pin; ProductCode `{B253F87A-EEBB-46C4-AA
 - `feat(server): add append-only configured indexes` — server role files/tests/docs only.
 - `docs: add standalone Windows Splunk integration example` — standalone scoped example/requirements only.
 
-Plan approval/execution handoff is required before implementation; all live actions remain separately unauthorized. Documentation-only checks are permitted.
+Local implementation and static closeout are recorded above. Target preparation
+and all live actions remain outstanding and separately unauthorized.
