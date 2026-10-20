@@ -37,6 +37,9 @@
         fail_msg: Credentials must be valid single-line ASCII; password must be at least 8 characters and not end in a backslash.
       no_log: true
 
+    - name: Preflight optional Splunk receiver configuration
+      ansible.builtin.import_tasks: receiver_preflight.yml
+
     - name: Read existing package, filesystem, identity, process, and unit state
       block:
         - name: Query exact dpkg package status and version
@@ -402,11 +405,31 @@
             == ['ExecStart=/opt/splunk/bin/splunk _internal_launch_under_systemd']
         fail_msg: Refusing to start a root-run or unrelated systemd unit.
 
+    - name: Read Splunk service state before receiver configuration changes
+      ansible.builtin.command:
+        argv: [systemctl, show, Splunkd.service, --property=ActiveState, --value]
+      register: ludus_splunk_server_receiver_service_state
+      changed_when: false
+
+    - name: Apply only the owned optional Splunk receiver configuration
+      ansible.builtin.import_tasks: receiver_configure.yml
+
     - name: Enable and start vendor-generated Splunk service
       ansible.builtin.systemd_service:
         name: Splunkd.service
         enabled: true
         state: started
+
+    - name: Apply pending receiver service restart before readiness checks
+      ansible.builtin.meta: flush_handlers
+
+    - name: Wait for the configured Splunk receiver listener
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ ludus_splunk_server_receiver_port }}"
+        timeout: 600
+        state: started
+      when: ludus_splunk_server_receiver_enabled
 
     - name: Wait for the Splunk web listener
       ansible.builtin.wait_for:

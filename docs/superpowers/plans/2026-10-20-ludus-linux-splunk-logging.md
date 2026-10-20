@@ -15,8 +15,17 @@ Splunk Universal Forwarder 10.6.1.1, Python static contract tests.
 
 **Spec:** `docs/superpowers/specs/2026-10-20-ludus-linux-splunk-logging-design.md`
 
-**Status:** awaiting implementation-plan confirmation. No deployment, live
+**Status:** user approved implementation; isolated worktree selected. No deployment, live
 testing, guest probes, tool installation, or commits are authorized.
+
+**Execution closeout (2026-10-20):** implementation and scoped source review
+complete; 53 Python static tests and the three-role Ansible validator pass.
+Tools were installed by the user, not by the agents. Live behavior remains
+unverified. Evidence and exact provenance are recorded in
+`.superpowers/sdd/2026-10-20-ludus-linux-splunk-logging/progress.md`.
+Review-driven refinements remove upstream `-i`, explicitly record unavailable
+path/account/SELinux rules, and check the distribution's actual startup loader.
+`augenrules --check` is not used as a syntax validator: it only compares content.
 
 ## Shared contract
 
@@ -123,29 +132,29 @@ contracts. No commits unless the parent explicitly requests them.
 
 ## Execution checklist and focused checks
 
-- [ ] Server writer first adds static tests for disabled-by-default receiver,
+- [x] Server writer first adds static tests for disabled-by-default receiver,
   port validation before mutation, unmanaged-app preservation, changed-only
   restart, and configured listener readiness in `tests/test_static.py`.
-- [ ] Collector writer first adds `tests/test_static.py` for exact artifact
+- [x] Collector writer first adds `tests/test_static.py` for exact artifact
   pin, Debian/Ubuntu platform allowlist, required host, monitor stanza safety,
   fixed non-root service identity, fresh-only secret handling, and missing-log
   tolerance. Add a guarded `tests/syntax.yml` exercising the actual entrypoint.
-- [ ] Logging writer first adds `tests/test_static.py` for pinned sources,
+- [x] Logging writer first adds `tests/test_static.py` for pinned sources,
   platform allowlist, reader preflight, removal of global audit controls,
   missing-path handling, immutable-state refusal, and no remote shell script.
   Add a guarded `tests/syntax.yml` with explicit role-specific inputs.
-- [ ] Validator records initial failing static tests before implementations.
-- [ ] Each writer implements its numbered steps, templates, defaults,
+- [x] Validator records initial failing static tests before implementations.
+- [x] Each writer implements its numbered steps, templates, defaults,
   metadata, handlers as needed, README, and narrow static tests.
-- [ ] Parent reads all artifacts and reconciles interfaces and review focus.
-- [ ] Validator runs `python3 -m unittest discover -s <role>/tests -v` for
+- [x] Parent reads all artifacts and reconciles interfaces and review focus.
+- [x] Validator runs `python3 -m unittest discover -s <role>/tests -v` for
   each of the three roles: all selected tests must pass.
-- [ ] Validator inventories dependencies/harnesses and runs
+- [x] Validator inventories dependencies/harnesses and runs
   `python3 .opencode/skills/ansible-validation/scripts/validate.py`
   with an explicit `--role` for each selected role and coverage-gap arguments
   for anything unresolved. PASS or warning-only means static-only evidence;
   actual failures and coverage errors must be resolved.
-- [ ] Validator runs `git diff --check`, reports scoped changes and preserves
+- [x] Validator runs `git diff --check`, reports scoped changes and preserves
   the pre-existing `blueprints/threat-hunting/range-config.yml` modification.
-- [ ] Parent records evidence and limits; live fresh install, rerun, reboot,
+- [x] Parent records evidence and limits; live fresh install, rerun, reboot,
   rotation, ingestion, and failure scenarios remain NOT RUN.

@@ -259,3 +259,17 @@ startup or enrichment as configured. Therefore explicit ACLs can address
 Splunk readability, but must not be described as removing Laurel's capability
 requirements; capability opt-out remains an unresolved packaging/service
 design question requiring native testing and possibly a build/runtime change.
+
+## UF ownership and generated-unit review follow-up
+
+Splunk's [UF 10.4 least-privileged-user guide](https://help.splunk.com/en/splunk-cloud-platform/forward-and-process-data/universal-forwarder-manual/10.4/working-with-the-universal-forwarder/manage-a-linux-least-privileged-user)
+explicitly instructs `chown -R splunkfwd:splunkfwd $SPLUNK_HOME`. Fresh recursive
+ownership of the verified forwarder tree is therefore vendor-documented.
+Its reference unit also includes an application-tree `ExecStartPre` chown and
+CPU/memory cgroup `ExecStartPost` chowns, alongside the main launch command.
+Rejecting every pre/post command would reject that documented unit shape.
+The reference's main executable path differs from the package path selected
+here; it must not be copied blindly. The page grants `CAP_DAC_READ_SEARCH` and
+does not establish an opt-out flag. This role's empty-capability policy is a
+local least-privilege choice, not a vendor compatibility claim. These 10.4
+instructions are not evidence of the exact 10.6.1.1-generated unit or runtime.

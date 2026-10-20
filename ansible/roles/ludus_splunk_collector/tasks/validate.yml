@@ -1,0 +1,70 @@
+---
+- name: Validate platform, license, artifact, and receiver inputs
+  ansible.builtin.assert:
+    that:
+      - >-
+        ansible_distribution == 'Debian' and ansible_distribution_major_version | int == 13
+        or ansible_distribution == 'Ubuntu' and ansible_distribution_version in ['24.04', '26.04']
+      - ansible_architecture == "x86_64"
+      - ansible_service_mgr == "systemd"
+      - ludus_splunk_collector_package_url is string
+      - ludus_splunk_collector_package_url is match('^https://[^/@]+(?:/|$)')
+      - "'@' not in ludus_splunk_collector_package_url"
+      - ludus_splunk_collector_package_checksum is match('^sha512:[0-9a-fA-F]{128}$')
+      - ludus_splunk_collector_version is match('^[0-9][A-Za-z0-9.+:~_-]*$')
+      - ludus_splunk_collector_accept_license is boolean
+      - ludus_splunk_collector_accept_license
+      - ludus_splunk_collector_receiver_host is string
+      - ludus_splunk_collector_receiver_host | ludus_splunk_collector_valid_receiver_host
+      - ludus_splunk_collector_receiver_port is integer
+      - ludus_splunk_collector_receiver_port is not boolean
+      - ludus_splunk_collector_receiver_port | int >= 1
+      - ludus_splunk_collector_receiver_port | int <= 65535
+      - ludus_splunk_collector_monitors is sequence and ludus_splunk_collector_monitors is not string
+    fail_msg: Supply a supported systemd platform, explicitly accept the license, and provide valid artifact and receiver inputs.
+
+- name: Require each monitor entry to be a mapping
+  ansible.builtin.assert:
+    that: item is mapping
+    fail_msg: Every monitor entry must be a mapping.
+  loop: "{{ ludus_splunk_collector_monitors }}"
+  loop_control:
+    label: monitor mapping validation
+
+- name: Validate monitor fields and reject stanza injection
+  ansible.builtin.assert:
+    that:
+      - item.get('path', '') is string
+      - item.get('path', '') | length > 1
+      - item.get('path', '') | ludus_splunk_collector_valid_monitor_path
+      - item.get('sourcetype', '') is string
+      - item.get('sourcetype', '') | ludus_splunk_collector_valid_sourcetype
+      - item.get('index', '') is string
+      - item.get('index', '') | ludus_splunk_collector_valid_index
+    fail_msg: Each monitor must provide a safe absolute path, sourcetype, and index.
+  loop: "{{ ludus_splunk_collector_monitors }}"
+  loop_control:
+    label: monitor metadata validation
+
+- name: Require unique monitor paths
+  ansible.builtin.assert:
+    that:
+      - >-
+        (ludus_splunk_collector_monitors | map(attribute='path') | list | length)
+        == (ludus_splunk_collector_monitors | map(attribute='path') | list | unique | length)
+    fail_msg: Monitor paths must be unique.
+
+- name: Validate administrator credentials without logging operands
+  ansible.builtin.assert:
+    that:
+      - ludus_splunk_collector_admin_username is string
+      - ludus_splunk_collector_admin_username | ludus_splunk_collector_valid_username
+      - ludus_splunk_collector_admin_password is string
+      - ludus_splunk_collector_admin_password | length >= 8
+      - ludus_splunk_collector_admin_password is match('^[ -~]+$')
+      - "'\\n' not in ludus_splunk_collector_admin_password"
+      - "'\\r' not in ludus_splunk_collector_admin_password"
+      - ludus_splunk_collector_admin_password == ludus_splunk_collector_admin_password.strip()
+      - "not ludus_splunk_collector_admin_password.endswith('\\\\')"
+    fail_msg: Credentials must be valid single-line ASCII, and the password must not have leading/trailing spaces or end in a backslash.
+  no_log: true

@@ -1,0 +1,14 @@
+---
+- name: Load only the managed audit rules fragment
+  become: true
+  ansible.builtin.command:
+    argv: [/usr/sbin/auditctl, -R, /etc/audit/rules.d/60-ludus-linux-logging.rules]
+  changed_when: true
+  when: ludus_linux_logging_initial_service_state.stdout == 'active'
+
+- name: Reload auditd configuration without restarting the service
+  become: true
+  ansible.builtin.command:
+    argv: [/usr/sbin/auditctl, --signal, reload]
+  changed_when: true
+  when: ludus_linux_logging_initial_service_state.stdout == 'active'

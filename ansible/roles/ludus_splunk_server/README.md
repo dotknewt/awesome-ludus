@@ -21,6 +21,8 @@ checks package metadata before installation.
 | `ludus_splunk_server_accept_license` | `false` | Must be set to `true` only after the operator accepts applicable terms. |
 | `ludus_splunk_server_admin_username` | `admin` | Initial Splunk application administrator username. |
 | `ludus_splunk_server_admin_password` | `SplunkLab-ChangeMe1!` | Disposable lab credential; override it for each lab. |
+| `ludus_splunk_server_receiver_enabled` | `false` | Explicitly opt in to a Splunk TCP (`splunktcp`) receiver. Disabled runs do not create or change receiver configuration. |
+| `ludus_splunk_server_receiver_port` | `9997` | TCP listener port, integer 1–65535; ports 8000 (web) and 8089 (management) are rejected. |
 
 Example (the artifact values are the defaults; terms acceptance remains an
 explicit operator choice):
@@ -41,6 +43,65 @@ the URL must be reachable without an authentication flow. Do not use the
 default admin password as a production credential. Setting
 `ludus_splunk_server_accept_license: true` requires the operator to accept
 applicable terms first.
+
+## Optional TCP receiver
+
+The receiver is disabled by default. The server role owns only its dedicated
+`/opt/splunk/etc/apps/ludus_receiver/local/inputs.conf` and a marker in that
+app. It refuses symlinks, an app without its exact ownership marker, and a
+configured `splunktcp` port already present in another `inputs.conf`. When
+enabled, it writes `[splunktcp://<port>]` with `disabled = 0`; changing the port
+replaces this role-owned stanza. Disabling removes only the receiver's owned
+inputs file and retains the ownership marker. Other app files and unrelated
+Splunk configuration are preserved; retaining the marker supports later
+disabled runs and re-enabling. Configuration changes restart Splunk once after
+service identity checks. The role waits for the configured TCP port after
+enabling it; this is listener readiness, not evidence of end-to-end ingestion.
+
+The input is plaintext TCP (no TLS) and is for isolated labs only. It does not
+configure HEC, indexes, or firewall rules. Permit the selected port through your
+lab network separately if required.
+
+## Separate server/client range example
+
+Enable the receiver explicitly on the server VM:
+
+```yaml
+- vm_name: "splunk-server"
+  roles:
+    - ludus_splunk_server
+  role_vars:
+    ludus_splunk_server_accept_license: true
+    ludus_splunk_server_receiver_enabled: true
+    ludus_splunk_server_receiver_port: 9997
+```
+
+On a separate client VM, order the collector after the server with `depends_on`.
+The logging role follows the collector so its forwarder service is available
+when logging configuration is applied:
+
+```yaml
+- vm_name: "splunk-client"
+  roles:
+    - name: ludus_splunk_collector
+      depends_on:
+        - vm_name: "splunk-server"
+          role: ludus_splunk_server
+    - ludus_linux_logging
+  role_vars:
+    ludus_splunk_collector_receiver_host: "<splunk-server-address>"
+    ludus_splunk_collector_receiver_port: 9997
+    ludus_splunk_collector_accept_license: true
+    ludus_linux_logging_read_users: [splunkfwd]
+```
+
+The client example uses the fully namespaced collector and logging role inputs
+`ludus_splunk_collector_receiver_host`, `ludus_splunk_collector_receiver_port`,
+`ludus_splunk_collector_accept_license`, and
+`ludus_linux_logging_read_users`. Keep the server and
+client as distinct VMs; the examples show role ordering and relevant inputs,
+not complete range configurations. Role names are shown as source role
+identities; resolve installed catalog identities for the target Ludus version.
 
 The administrator password seeds only a fresh instance. Existing
 `/opt/splunk/etc/passwd` is preserved and credentials are not rotated when
@@ -77,7 +138,8 @@ certificate verification is disabled there only for Splunk's default
 self-signed local certificate, and proxy use/redirects are disabled so the
 basic-auth credentials are not sent elsewhere.
 
-This is a bare server bootstrap: it does not configure HEC, inputs, apps,
+This is a bare server bootstrap, with the explicitly enabled receiver app as
+the only optional input/app configuration. It does not configure HEC, indexes,
 forwarding, telemetry, firewall/network rules, license-group changes, or
 trial-to-Free transitions. Splunk's trial/Free licensing is an operator
 lifecycle decision; Free mode has different authentication/user capabilities.

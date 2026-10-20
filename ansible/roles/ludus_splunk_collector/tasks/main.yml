@@ -1,0 +1,15 @@
+---
+- name: Install and configure Splunk Universal Forwarder as a protected system service
+  become: true
+  block:
+    - name: Validate platform and role inputs before mutation
+      ansible.builtin.import_tasks: validate.yml
+
+    - name: Inspect existing collector state and reject conflicts
+      ansible.builtin.import_tasks: inspect.yml
+
+    - name: Download and install the exact verified forwarder package
+      ansible.builtin.import_tasks: install.yml
+
+    - name: Configure and bootstrap the collector
+      ansible.builtin.import_tasks: configure.yml
