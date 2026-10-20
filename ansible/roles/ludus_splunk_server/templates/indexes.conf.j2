@@ -1,0 +1,7 @@
+{% for index_name in ludus_splunk_server_indexes %}
+[{{ index_name }}]
+homePath = /opt/splunk/var/lib/splunk/{{ index_name }}/db
+coldPath = /opt/splunk/var/lib/splunk/{{ index_name }}/colddb
+thawedPath = /opt/splunk/var/lib/splunk/{{ index_name }}/thaweddb
+
+{% endfor %}

@@ -40,6 +40,9 @@
     - name: Preflight optional Splunk receiver configuration
       ansible.builtin.import_tasks: receiver_preflight.yml
 
+    - name: Preflight optional Splunk index configuration before any mutation
+      ansible.builtin.import_tasks: indexes_preflight.yml
+
     - name: Read existing package, filesystem, identity, process, and unit state
       block:
         - name: Query exact dpkg package status and version
@@ -405,7 +408,7 @@
             == ['ExecStart=/opt/splunk/bin/splunk _internal_launch_under_systemd']
         fail_msg: Refusing to start a root-run or unrelated systemd unit.
 
-    - name: Read Splunk service state before receiver configuration changes
+    - name: Read Splunk service state before optional app configuration changes
       ansible.builtin.command:
         argv: [systemctl, show, Splunkd.service, --property=ActiveState, --value]
       register: ludus_splunk_server_receiver_service_state
@@ -414,13 +417,16 @@
     - name: Apply only the owned optional Splunk receiver configuration
       ansible.builtin.import_tasks: receiver_configure.yml
 
+    - name: Apply only the separately owned Splunk index configuration
+      ansible.builtin.import_tasks: indexes_configure.yml
+
     - name: Enable and start vendor-generated Splunk service
       ansible.builtin.systemd_service:
         name: Splunkd.service
         enabled: true
         state: started
 
-    - name: Apply pending receiver service restart before readiness checks
+    - name: Apply pending Splunk configuration restart before readiness checks
       ansible.builtin.meta: flush_handlers
 
     - name: Wait for the configured Splunk receiver listener

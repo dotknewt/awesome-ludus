@@ -281,13 +281,19 @@ disabled = 1
         for task in ownership_assertions:
             self.assertIn("ludus_splunk_server_receiver_enabled", str(task.get("when")))
 
-        scans = [task for task in self.flat_tasks if _module(task)[0] == "ansible.builtin.find"]
+        receiver_scoped = lambda task: any(
+            token in str(task)
+            for token in ("ludus_splunk_server_receiver_", "ludus_receiver", ".ludus-splunk-server-owner")
+        )
+        scans = [task for task in self.flat_tasks
+                 if _module(task)[0] == "ansible.builtin.find" and receiver_scoped(task)]
         config_reads = [task for task in self.flat_tasks if
                         _module(task)[0] == "ansible.builtin.slurp"
                         and "ludus_splunk_server_receiver_existing_input_configs" in str(task.get("loop", ""))]
         collision_asserts = [task for task in self.flat_tasks if
                              "ansible.builtin.assert" in task
-                             and "item.content" in str(task["ansible.builtin.assert"].get("that", []))]
+                             and "item.content" in str(task["ansible.builtin.assert"].get("that", []))
+                             and receiver_scoped(task)]
         self.assertTrue(scans)
         self.assertTrue(config_reads)
         self.assertTrue(collision_asserts)

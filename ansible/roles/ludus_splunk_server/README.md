@@ -23,6 +23,7 @@ checks package metadata before installation.
 | `ludus_splunk_server_admin_password` | `SplunkLab-ChangeMe1!` | Disposable lab credential; override it for each lab. |
 | `ludus_splunk_server_receiver_enabled` | `false` | Explicitly opt in to a Splunk TCP (`splunktcp`) receiver. Disabled runs do not create or change receiver configuration. |
 | `ludus_splunk_server_receiver_port` | `9997` | TCP listener port, integer 1–65535; ports 8000 (web) and 8089 (management) are rejected. |
+| `ludus_splunk_server_indexes` | `[]` | Optional append-only list of lowercase index names; an empty list does not create an app on a never-managed server. |
 
 Example (the artifact values are the defaults; terms acceptance remains an
 explicit operator choice):
@@ -59,8 +60,43 @@ service identity checks. The role waits for the configured TCP port after
 enabling it; this is listener readiness, not evidence of end-to-end ingestion.
 
 The input is plaintext TCP (no TLS) and is for isolated labs only. It does not
-configure HEC, indexes, or firewall rules. Permit the selected port through your
-lab network separately if required.
+configure HEC or firewall rules. Permit the selected port through your lab
+network separately if required.
+
+## Optional append-only indexes
+
+Set `ludus_splunk_server_indexes` to explicitly create indexes in the separately
+owned `/opt/splunk/etc/apps/ludus_indexes` app. For example, the Windows logging
+integration uses:
+
+```yaml
+ludus_splunk_server_indexes: [winlogs, sysmon, etw]
+```
+
+The role writes only `local/indexes.conf` in that app, with hot, cold, and thawed
+paths under `/opt/splunk/var/lib/splunk/<name>/{db,colddb,thaweddb}`. Custom
+Splunk data roots are unsupported. Names must be unique and
+match `[a-z][a-z0-9_]{0,79}`; default and internal/reserved Splunk indexes are
+not accepted. Before any role mutation, preflight checks ownership and marker/config
+consistency, index-definition collisions, and relevant symlink/type conflicts.
+The marker is `.ludus-managed.json` with schema version 1 and the owned index list.
+
+Index ownership is append-only: once an index is recorded, removing it or
+changing the input to `[]` fails closed. The role does not remove index data,
+change retention, rewrite other apps' definitions, or adopt an unmanaged app.
+If an interrupted write leaves a partial app or marker/config mismatch, preserve
+the state and reconcile it explicitly before retrying; the role will not infer
+ownership from a matching stanza or data directory. Changed managed configuration
+notifies the existing guarded service-restart handler; unchanged configuration
+does not notify it, and the initial service start is not followed by a redundant
+restart.
+
+The empty default is backward-compatible and does not create the index app on a
+never-managed host. Static tests validate source structure and render the actual
+template; they do not prove selected-version runtime compatibility or deployment
+readiness. The Windows integration's Task 0 artifact/account compatibility gate
+remains unresolved, so this example is configuration intent, not a deploy-ready
+Windows logging claim. HEC remains deferred and is not part of this index feature.
 
 ## Separate server/client range example
 
@@ -138,8 +174,8 @@ certificate verification is disabled there only for Splunk's default
 self-signed local certificate, and proxy use/redirects are disabled so the
 basic-auth credentials are not sent elsewhere.
 
-This is a bare server bootstrap, with the explicitly enabled receiver app as
-the only optional input/app configuration. It does not configure HEC, indexes,
+This is a bare server bootstrap, with separately owned receiver and optional
+index apps as its optional input/app configuration. It does not configure HEC,
 forwarding, telemetry, firewall/network rules, license-group changes, or
 trial-to-Free transitions. Splunk's trial/Free licensing is an operator
 lifecycle decision; Free mode has different authentication/user capabilities.
