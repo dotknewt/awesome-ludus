@@ -37,3 +37,27 @@ None.
 ## License
 
 GPLv3
+
+## Troubleshooting: Docker socket access after group changes
+
+If a task adds the Ludus `debian` account to the `docker` group and then uses
+`meta: reset_connection`, a subsequent Docker socket operation may report
+permission denied. A reset can reconnect with connection variables that have
+not been templated, so the refreshed session may not have the expected user or
+SSH options. Do not work around this by broadening socket permissions or
+running Docker as root.
+
+The documented controller-side workaround is the Ansible Core 2.16.14
+`reset_connection` hotfix in
+[`docs/troubleshooting/docker-socket-reset/`](../../../docs/troubleshooting/docker-socket-reset/).
+It moves connection-option variable templating into a shared helper used by
+normal connection setup and connection reset. The accompanying patch is
+available there as
+[`ansible-core-2.16.14-reset-connection.patch`](../../../docs/troubleshooting/docker-socket-reset/ansible-core-2.16.14-reset-connection.patch).
+
+This patch targets the shared system Ansible installation, not this role. It
+was prepared for Ansible Core 2.16.14 and does not address the documented
+unsupported Ansible 2.16/Python 3.13 baseline. Review the troubleshooting
+document's scope, safeguards, and verification status before considering it;
+do not apply it automatically. The incident's precise causal trace and Docker
+role behavior after the patch remain unverified.
