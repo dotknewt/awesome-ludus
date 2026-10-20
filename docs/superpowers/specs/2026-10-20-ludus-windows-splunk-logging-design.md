@@ -2,11 +2,13 @@
 
 ## Status and decisions
 
-This is a design and research gate, not an implementation or deployment approval.
+This design is approved by the user. Implementation planning and execution remain pending separate review and authorization; it is not deployment authorization.
+
+**Latest user decision:** collect Security logs without exclusions by default, keep optional exclusion keys distinct, and evaluate the logs before deciding whether to enable any exclusions. The later review is tracked as `SPLUNK-001` in [the backlog](../../TODO.md).
 
 **User decisions:** add Windows collector support using the logging configured by `ludus_install_sysmon`; include Windows Security events and the legacy SilkService-Log input; use the legacy `role_splunk_collector_win11v` as a reference; prioritize modern Windows and defer legacy support; use separate `winlogs`, `sysmon`, and `etw` indexes and extend the server role to create configured indexes.
 
-**Proposed assistant defaults (not approvals):** extend `ludus_splunk_collector` rather than create a new role; target Windows 11 x64 and Server 2019/2022/2025 x64; preserve Linux behavior and the Debian 13 server scope; leave `ludus_install_sysmon` unchanged; XML inputs; Security history `oldest` with `current_only = 0` and the effective legacy exclusions below; Sysmon role-owned filters; collect (but do not install, start, configure, or alter policy for) SilkService-Log; no unrelated TA scripts, firewall changes, or TLS work; standalone illustrative integration rather than migrate the legacy roles/blueprint. The selected Windows artifact, service account/bootstrap method, and checksum must be established from primary sources before implementation. No invented MSI properties or fallback installer path.
+**Approved design choices (originally proposed by assistant):** extend `ludus_splunk_collector` rather than create a new role; target Windows 11 x64 and Server 2019/2022/2025 x64; preserve Linux behavior and the Debian 13 server scope; leave `ludus_install_sysmon` unchanged; XML inputs; Security history `oldest` with `current_only = 0` and zero Security exclusions by default; Sysmon role-owned filters; collect (but do not install, start, configure, or alter policy for) SilkService-Log; no unrelated TA scripts, firewall changes, or TLS work; standalone illustrative integration rather than migrate the legacy roles/blueprint. The selected Windows artifact, service account/bootstrap method, and checksum must be established from primary sources before implementation. No invented MSI properties or fallback installer path.
 
 ## Goals and non-goals
 
@@ -18,7 +20,15 @@ Non-goals are changing Linux behavior, expanding server OS support, migrating th
 
 The collector dispatches by platform; existing Linux tasks are confined to Linux, while Windows receives separately named Security, Sysmon, and SilkService-Log inputs plus shared receiver/license/admin inputs. Inputs use role-prefixed variables, bounded identifiers, documented Windows paths, and explicit URL/version/checksum values. Installed identities and role names must be verified rather than inferred from source directories; examples must show explicit source/role ordering and `depends_on` (`vm_name` and `role`) where applicable.
 
-The Security contract is XML/history/index `winlogs` with exactly these effective exclusions: `blacklist1 = $XmlRegex="<EventID>5145<\/EventID>.*<Data Name='ShareName'>\W\W\W\WC\W"`; inherited `blacklist2 = EventCode="566" Message="Object Type:(?!\s*groupPolicyContainer)"`. The legacy local `blacklist2` ADMIN$ line remains commented and must not be activated; the overridden inherited default `blacklist1` EventCode4662 must not be accidentally restored. Matching this intended reference configuration is only a static config target, not proof that rendered XML filtering works; native canary/event testing is required later.
+The Security contract is XML/history/index `winlogs` with **zero exclusions by default**, including no inherited exclusions from the TA. The following are a commented-out, docs-only optional candidate set; none may be enabled by default, and each key is unique:
+
+```ini
+# blacklist1 = EventCode="4662" Message="Object Type:(?!\s*groupPolicyContainer)"
+# blacklist2 = EventCode="566" Message="Object Type:(?!\s*groupPolicyContainer)"
+# blacklist3 = $XmlRegex="<EventID>5145<\/EventID>.*<Data Name='ShareName'>\W\W\W\WC\W"
+```
+
+The ADMIN$ candidate remains inactive and outside this selected set. The archive's local/TA collision is historical evidence only; no upstream archive or legacy role is edited. Future managed configuration must avoid inherited active filters and must not claim that omitting local keys overrides TA defaults. Matching any candidate is only a static target, not proof of rendered-XML filtering; later explicit opt-in and authorized native canary/event testing must check EventCode/Message versus XML semantics.
 
 SilkService-Log is `[WinEventLog://SilkService-Log]`, `disabled=0`, `index=etw`, `sourcetype=json`. This is collection only: the collector must not install, start, configure, or alter SilkService or its producer/audit policy, must not add XML-specific Security flags, and must not promise data when the channel is absent. Channel availability is a producer prerequisite; the collector must not create it.
 
@@ -43,23 +53,24 @@ Additional assistant decisions after builder review:
 
 Fresh install validates platform and artifact, creates only owned paths/service configuration, configures inputs, and starts the service with the selected documented identity. A converged rerun is idempotent and does not restart for unchanged configuration. A configuration change restarts only when rendered managed configuration changes. Conflicting versions, checksums, unmanaged files, unsafe paths/ACLs, missing credentials, unsupported collections, or incompatible platforms fail before mutation and preserve unrelated data. Reboots and upgrades are never automatic.
 
-Later authorized native tests must cover fresh install, no-op rerun, config-change restart, Security/Sysmon/SilkService-Log arrival in the correct indexes, both effective Security exclusions (including canary events), absent-channel behavior, service identity/access, version conflicts, credential failures, and preservation of unrelated data. Live tests are **not authorized now**.
+Later authorized native tests must cover fresh install, no-op rerun, config-change restart, an unfiltered Security baseline plus Security/Sysmon/SilkService-Log arrival in the correct indexes, and (only after explicit opt-in) candidate exclusion canaries with keep/drop controls. They must also cover absent-channel behavior, service identity/access, version conflicts, credential failures, and preservation of unrelated data. Live evaluation and enabling exclusions are **not authorized now**.
 
 ## Evidence and verification plan
 
 Static-only work now: review role metadata/tasks/templates/defaults, run repository Ansible validation for the selected roles/dependencies, and add static tests for dispatch, ownership, append-only indexes, validation, and restart conditions. Do not add simulations, stateful fakes, or runtime mocks. Static results do not establish native compatibility or deployment readiness.
 
-Evidence to preserve: legacy ZIP URL `https://github.com/Antonlovesdnb/ConstructingDefense/raw/refs/heads/main/splunkappswin11v.zip`, repository HEAD `0cefe62755eebba7b226e611ece75160706e22f6`, blob `0d4a9cd8d6e071d2ecbc42264689b4f8e45ba673`, SHA256 `5ae6b8741e91211b80e386d3cf97e8f3f4a19b360bc0960444906c4b9004cea2` at `/tmp/opencode/splunkappswin11v.zip`. Safe ZIP reading found local Security XML (`oldest`, `current_only=0`, effective blacklist1 `$XmlRegex="<EventID>5145<\/EventID>.*<Data Name='ShareName'>\W\W\W\WC\W"`; inherited blacklist2 `EventCode="566" Message="Object Type:(?!\s*groupPolicyContainer)"`; commented local ADMIN$ blacklist and overridden EventCode4662 default not activated), Sysmon exact `XmlWinEventLog:Microsoft-Windows-Sysmon/Operational` to `sysmon`, and SilkService-Log ETW/JSON to `etw`; no `outputs.conf` was present.
+Evidence to preserve: legacy ZIP URL `https://github.com/Antonlovesdnb/ConstructingDefense/raw/refs/heads/main/splunkappswin11v.zip`, repository HEAD `0cefe62755eebba7b226e611ece75160706e22f6`, blob `0d4a9cd8d6e071d2ecbc42264689b4f8e45ba673`, SHA256 `5ae6b8741e91211b80e386d3cf97e8f3f4a19b360bc0960444906c4b9004cea2` at `/tmp/opencode/splunkappswin11v.zip`. Safe ZIP reading found the historical local/TA blacklist1 collision and inheritance, local Security XML (`oldest`, `current_only=0`), Sysmon exact `XmlWinEventLog:Microsoft-Windows-Sysmon/Operational` to `sysmon`, and SilkService-Log ETW/JSON to `etw`; no `outputs.conf` was present. The archive remains unmodified.
 
 Primary references: [Ansible win_package](https://docs.ansible.com/projects/ansible/latest/collections/ansible/windows/win_package_module.html), [win_service](https://docs.ansible.com/projects/ansible/latest/collections/ansible/windows/win_service_module.html), [Ludus configuration](https://docs.ludus.cloud/docs/configuration), [Sysmon](https://learn.microsoft.com/en-us/sysinternals/downloads/sysmon), [Splunk 9.2 removals](https://help.splunk.com/en/splunk-enterprise/release-notes-and-updates/release-notes/9.2/deprecated-features/deprecated-and-removed-in-version-9.2), [support policy](https://www.splunk.com/en_us/legal/splunk-software-support-policy.html), [forwarder compatibility](https://help.splunk.com/en/splunk-enterprise/release-notes-and-updates/compatibility-matrix/splunk-products-version-compatibility/compatibility-between-forwarders-and-splunk-enterprise-indexers).
 
-Known gaps: the rolling Sysmon page is not version-specific proof; exact Windows Splunk 10.6.1.1 MSI URL/checksum and MSI bootstrap/service properties remain unverified (direct help pages returned 403); selected-version service-account/bootstrap design is mandatory research. Splunk 9.2 removed Server 2012/R2 and 9.1 was the last documented line; older targets remain deferred and unverified. Compatibility claims are not native evidence.
+Known gaps: the rolling Sysmon page is not version-specific proof; the exact Windows MSI URL/checksum, protected seed syntax, account/Event Log permissions (including a DC-safe least-privilege route), and selected-version compatibility remain unverified. Research records a documented launch/no-user seed route (`AGREETOLICENSE=Yes`, `LAUNCHSPLUNK=0`, `GENRANDOMPASSWORD=0`) but this does not establish the missing artifact or permission evidence. Splunk 9.2 removed Server 2012/R2 and 9.1 was the last documented line; older targets remain deferred and unverified. Compatibility claims are not native evidence.
 
 ## Tracked plan
 
 - [ ] Research primary-source Windows artifact, checksum, service identity, bootstrap, and supported collections.
 - [x] Review this contract and legacy evidence; resolve ownership and failure semantics.
 - [x] Parent reads this design and the research note; fresh builder-review agent checks it.
-- [ ] Obtain explicit approval, then implement only the scoped roles/tasks/tests/docs.
+- [x] Obtain explicit approval for this design.
+- [ ] Review and approve the implementation plan, then separately authorize execution.
 - [ ] Run static repository/Ansible validation and report gaps separately.
 - [ ] Request separate authorization for native live lifecycle and ingestion tests; none is granted here.

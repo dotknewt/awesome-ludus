@@ -11,6 +11,12 @@
     - Leading cause remains a hypothesis: stale Ansible session groups due to untemplated connection options during `reset_connection` ([upstream fix](https://github.com/ansible/ansible/pull/84240)). Before the hotfix, controller Ansible-core 2.16.14 passed raw variables to reset, while Ludus `c6528ccc` templates `ansible_user`; this may select a different SSH control socket. The failing process's groups were not captured, so the original incident's causal trace is unconfirmed.
     - The [controller backport and safeguards](troubleshooting/docker-socket-reset/README.md) were applied with explicit user authorization on 2026-10-20. The operator log records successful pre/post service runtime, version, config/module path, import, syntax, and file-hash checks; the retained backup is `/var/backups/ludus-ansible-reset-rrf8afhd`. Parent-session read-only SSH independently confirmed installed hashes match all three expected patched hashes. No service restart, deployment, guest probe, or role entrypoint execution occurred. Ansible-core 2.16.14/Python 3.13.5 remains an unsupported baseline.
     - Acceptance remains pending: separately authorized fresh deployment succeeds without a second run and rerun remains convergent. No full Ansible play or fresh-role behavior has been verified; static and import checks alone do not establish this.
+- [ ] Add opt-out installation of the PSTree splunk app (https://github.com/murchisd/splunk_pstree_app) when installing ludus_splunk_server
+- [ ] **SPLUNK-001 — proposed:** Evaluate optional Windows Security event exclusions after collecting a baseline.
+    - Decide separately whether the 4662, 566, and 5145 C$ exclusions are warranted by event volume, noise, and detection value; document the rationale for each decision.
+    - Before applying filters, verify XML field/regex behavior with separately authorized native keep/drop control events and confirm distinct blacklist keys do not override one another.
+    - Depends on a deployed Windows logging pipeline and representative unfiltered logs. Keep every exclusion disabled until explicitly approved; this item does not authorize live evaluation or enabling filters.
+    - See [Windows Splunk design](superpowers/specs/2026-10-20-ludus-windows-splunk-logging-design.md).
 
 ### New
 - [ ] Create a kubernetes installer role

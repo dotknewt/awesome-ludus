@@ -24,7 +24,8 @@ ludus:
     ip_last_octet: 17
     roles:
       - dotknewt.ludus_install_malcolm
-
+      - dotknewt.ludus_splunk_collector
+  	  - dotknewt.ludus_linux_logging
   - vm_name: "{{ range_id }}-gitlab"
     hostname: "{{ range_id }}-gitlab"
     template: debian-13.5-x64-server-no-template
@@ -35,3 +36,5 @@ ludus:
     ip_last_octet: 18
     roles:
       - dotknewt.ludus_gitlab_ce
+	  - dotknewt.ludus_linux_logging
+	  - dotknewt.ludus_splunk_collector
