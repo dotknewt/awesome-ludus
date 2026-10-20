@@ -7,7 +7,14 @@
     "servers": {
       "default": {
         "type": "local",
-        "command": ["docker", "mcp", "gateway", "run", "--profile", "default"],
+        "command": [
+          "docker",
+          "mcp",
+          "gateway",
+          "run",
+          "--profile",
+          "default"
+        ],
         "disabled": false
       },
       "ludus-mcp": {
