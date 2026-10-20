@@ -2,7 +2,7 @@
 ludus_splunk_collector_package_url: >-
   https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/linux/splunkforwarder-10.6.1.1-b2ae2962645c-linux-amd64.deb
 ludus_splunk_collector_package_checksum: >-
-  sha512:2172ed26173b4f29e3ffb051800dce3b21701f8fa202466063a5355dd9e7c2cac03714e5db026c4a5dd37249a23be017661a80b4969a339e1d653a16622180c31
+  sha512:2172ed26173b4f29e3ffb051800dce3b21701f8fa202466063a535dd9e7c2cac03714e5db026c4a5dd37249a23be017661a80b4969a339e1d653a16622180c31
 ludus_splunk_collector_version: "10.6.1.1"
 ludus_splunk_collector_accept_license: false
 ludus_splunk_collector_admin_username: admin

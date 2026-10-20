@@ -1,11 +1,11 @@
 ---
 # Install Gitlab-CE
 
-# Preserve existing prerequisite refresh policy.
-- name: (GITLAB-CE) Install prerequisites  # noqa: package-latest
+# Ensure prerequisites exist without replacing installed versions.
+- name: (GITLAB-CE) Install prerequisites
   ansible.builtin.package:
     name: "{{ package }}"
-    state: latest
+    state: present
   loop:
     - curl
     - openssh-server

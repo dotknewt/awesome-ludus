@@ -138,19 +138,23 @@ this collector configures a receiver.
 
 The seed is created only when the forwarder's `etc/passwd` is absent. It is
 mode `0600`, hidden from task logs and diffs, retained after any bootstrap or
-authentication failure, and removed only after fresh loopback authenticated
-readiness and a nonempty initialized passwd database. Existing initialized
-authentication is untouched; the role does not rotate credentials. The lab
-password is a committed convenience default, not a production credential
-management strategy.
+authentication failure, and removed only after fresh authenticated readiness
+and a nonempty initialized passwd database. On Linux, management API readiness
+and fresh administrator authentication use Splunk's local
+`/opt/splunkforwarder/var/run/splunk/cli.socket` Unix socket; readiness requires
+an unauthenticated HTTP 401 response, rather than merely an open TCP port.
+Existing initialized authentication is untouched; the role does not rotate
+credentials. The lab password is a committed convenience default, not a
+production credential management strategy.
 
 No live verification of package compatibility, boot persistence, Laurel
 rotation/readability, forwarder ingestion, or server interoperability has been
 performed. Static checks cannot prove those behaviors. In particular, the
 selected-version capability policy, seed syntax, and actual listener behavior
 need authorized native tests; rotation and ingestion live verification remain
-absent. The unauthenticated-to-authenticated bootstrap path should be verified
-on the selected package before relying on it in a deployed lab.
+absent. The unauthenticated-to-authenticated bootstrap path, including Unix
+socket readiness and authentication on the selected package, remains
+unverified until authorized native testing.
 
 Windows MSI reboot-required results stop the owned service, disable automatic
 start, retain pending evidence, and fail without rebooting. Authentication

@@ -10,6 +10,10 @@ When authoring or reviewing Ludus sources, blueprints, range configs, or roles, 
 
 # Project workflow
 
+## Live deployment debugging and retries
+
+- For live Ludus deployment failures or retries, follow [`docs/instructions/live-debugging.md`](docs/instructions/live-debugging.md); each operator approval authorizes only one fix-upload-deploy-monitor cycle.
+
 ## Router state and recovery
 
 - Read the active session's router head once on entry or recovery, then use the cached result. A repeated reminder alone is not evidence of a state change.

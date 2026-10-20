@@ -18,7 +18,7 @@ Thu, 15 Oct 2026 20:52:18 GMT`) without downloading the package:
 
 ```
 SHA512(splunkforwarder-10.6.1.1-b2ae2962645c-linux-amd64.deb)=
-2172ed26173b4f29e3ffb051800dce3b21701f8fa202466063a5355dd9e7c2cac03714e5db026c4a5dd37249a23be017661a80b4969a339e1d653a16622180c31
+2172ed26173b4f29e3ffb051800dce3b21701f8fa202466063a535dd9e7c2cac03714e5db026c4a5dd37249a23be017661a80b4969a339e1d653a16622180c31
 ```
 
 Use `sha512:<digest>` with Ansible `get_url`; retain HTTPS certificate

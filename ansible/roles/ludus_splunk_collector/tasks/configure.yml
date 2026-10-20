@@ -161,24 +161,34 @@
 - name: Apply queued forwarder restarts before readiness checks
   ansible.builtin.meta: flush_handlers
 
-- name: Wait for the local Universal Forwarder management listener
-  ansible.builtin.wait_for:
-    host: 127.0.0.1
-    port: 8089
-    state: started
-    timeout: 600
-
-- name: Verify fresh administrator authentication over loopback management API
+- name: Wait for the local Universal Forwarder management API over its Unix socket
   ansible.builtin.uri:
-    url: https://127.0.0.1:8089/services/server/info?output_mode=json
+    url: http://localhost:8089/services/server/info?output_mode=json
     method: GET
+    unix_socket: /opt/splunkforwarder/var/run/splunk/cli.socket
+    status_code: 401
+    timeout: 15
+    use_proxy: false
+    use_netrc: false
+    follow_redirects: none
+    return_content: false
+  register: ludus_splunk_collector_unauthenticated_readiness
+  until: ludus_splunk_collector_unauthenticated_readiness.status | default(0) == 401
+  retries: 60
+  delay: 10
+
+- name: Verify fresh administrator authentication over the Unix-socket management API
+  ansible.builtin.uri:
+    url: http://localhost:8089/services/server/info?output_mode=json
+    method: GET
+    unix_socket: /opt/splunkforwarder/var/run/splunk/cli.socket
     user: "{{ ludus_splunk_collector_admin_username }}"
     password: "{{ ludus_splunk_collector_admin_password }}"
     force_basic_auth: true
-    validate_certs: false
     status_code: 200
     timeout: 15
     use_proxy: false
+    use_netrc: false
     follow_redirects: none
     unredirected_headers: [Authorization]
     return_content: false
