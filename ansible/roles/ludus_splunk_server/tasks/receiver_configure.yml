@@ -1,0 +1,46 @@
+---
+- name: Create dedicated receiver app directory when enabled
+  ansible.builtin.file:
+    path: /opt/splunk/etc/apps/ludus_receiver
+    state: directory
+    owner: splunk
+    group: splunk
+    mode: "0750"
+  when: ludus_splunk_server_receiver_enabled
+
+- name: Create receiver app local configuration directory when enabled
+  ansible.builtin.file:
+    path: /opt/splunk/etc/apps/ludus_receiver/local
+    state: directory
+    owner: splunk
+    group: splunk
+    mode: "0750"
+  when: ludus_splunk_server_receiver_enabled
+
+- name: Write receiver app ownership marker
+  ansible.builtin.copy:
+    dest: /opt/splunk/etc/apps/ludus_receiver/.ludus-splunk-server-owner
+    content: "ludus_splunk_server_receiver_v1\n"
+    owner: splunk
+    group: splunk
+    mode: "0640"
+  when: ludus_splunk_server_receiver_enabled
+
+- name: Write the managed Splunk TCP receiver stanza
+  ansible.builtin.template:
+    src: receiver-inputs.conf.j2
+    dest: /opt/splunk/etc/apps/ludus_receiver/local/inputs.conf
+    owner: splunk
+    group: splunk
+    mode: "0640"
+  when: ludus_splunk_server_receiver_enabled
+  notify: Restart Splunk for receiver configuration change
+
+- name: Remove only the owned receiver inputs file when disabled
+  ansible.builtin.file:
+    path: /opt/splunk/etc/apps/ludus_receiver/local/inputs.conf
+    state: absent
+  when:
+    - not ludus_splunk_server_receiver_enabled
+    - ludus_splunk_server_receiver_owned
+  notify: Restart Splunk for receiver configuration change

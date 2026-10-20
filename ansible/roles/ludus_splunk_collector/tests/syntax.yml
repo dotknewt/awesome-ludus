@@ -1,0 +1,15 @@
+---
+# Syntax-check only. Running this play normally must stop before role execution.
+- name: Parse the native Splunk Universal Forwarder collector role entrypoint
+  hosts: localhost
+  gather_facts: false
+  pre_tasks:
+    - name: Prevent accidental collector execution
+      ansible.builtin.fail:
+        msg: This playbook is for --syntax-check only; do not run it normally.
+  roles:
+    - role: ludus_splunk_collector
+  vars:
+    ludus_splunk_collector_accept_license: true
+    ludus_splunk_collector_receiver_host: "127.0.0.1"
+    ludus_splunk_collector_admin_password: "Syntax-Only-Password1!"

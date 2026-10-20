@@ -1,0 +1,20 @@
+---
+ludus_linux_logging_read_users:
+  - debian
+ludus_linux_logging_laurel_log_dir: /var/log/laurel
+ludus_linux_logging_laurel_log_file: audit.log
+ludus_linux_logging_laurel_user: _laurel
+ludus_linux_logging_laurel_config_path: /etc/laurel/config.toml
+ludus_linux_logging_audit_rules_path: /etc/audit/rules.d/60-ludus-linux-logging.rules
+ludus_linux_logging_laurel_plugin_path: /etc/audit/plugins.d/laurel.conf
+ludus_linux_logging_laurel_version: 0.6.3
+ludus_linux_logging_laurel_archive_url: https://github.com/threathunters-io/laurel/releases/download/v0.6.3/laurel-v0.6.3-x86_64-musl.tar.gz
+ludus_linux_logging_laurel_archive_checksum: sha256:ee7704e87c831bbfcac8cf8741e92eb56b49b3c6d64629d4730c98d97568ec53
+ludus_linux_logging_audit_rules_url: https://raw.githubusercontent.com/Antonlovesdnb/ConstructingDefense/0cefe62755eebba7b226e611ece75160706e22f6/audit.rules
+ludus_linux_logging_audit_rules_checksum: sha256:fbcf55a50c76ffd8e8090c32a55d85015db0fda40d5ff1276e273d4a1af0f4a8
+ludus_linux_logging_laurel_config_url: https://raw.githubusercontent.com/Antonlovesdnb/ConstructingDefense/0cefe62755eebba7b226e611ece75160706e22f6/config.toml
+ludus_linux_logging_laurel_config_checksum: sha256:8020587c28d90de86b1e52db3128d490b57e271221ef1ce249e73a23706bda34
+ludus_linux_logging_cache_dir: /var/cache/ludus-linux-logging
+ludus_linux_logging_state_dir: /var/lib/ludus-linux-logging
+ludus_linux_logging_pending_path: /var/lib/ludus-linux-logging/pending
+ludus_linux_logging_applied_path: /var/lib/ludus-linux-logging/applied.sha256

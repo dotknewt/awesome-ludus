@@ -1,0 +1,849 @@
+---
+# augenrules --check compares generated content; it is not syntax validation.
+# Exact upstream optional target /usr/local/bin/kubectl is stat-checked like every
+# parsed -w, -F path=, and -F dir= target.
+- name: Install native auditd and Laurel logging
+  become: true
+  block:
+    - name: Validate platform, public inputs, and path ownership boundaries before mutation
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution in ['Debian', 'Ubuntu']
+          - >-
+            (ansible_distribution == 'Debian' and ansible_distribution_major_version | int == 13)
+            or (ansible_distribution == 'Ubuntu' and ansible_distribution_version in ['24.04', '26.04'])
+          - ansible_architecture == 'x86_64'
+          - ansible_service_mgr == 'systemd'
+          - ludus_linux_logging_read_users is sequence and ludus_linux_logging_read_users is not string and ludus_linux_logging_read_users | length > 0
+          - ludus_linux_logging_read_users | select('match', '^[a-z_][a-z0-9_-]*[$]?$') | list | length == ludus_linux_logging_read_users | length
+          - ludus_linux_logging_laurel_user == '_laurel'
+          - ludus_linux_logging_laurel_log_dir is string and ludus_linux_logging_laurel_log_dir is match('^/[A-Za-z0-9_./-]+$')
+          - "'..' not in ludus_linux_logging_laurel_log_dir.split('/')"
+          - ludus_linux_logging_laurel_log_dir.startswith('/var/log/')
+          - ludus_linux_logging_laurel_log_dir.rstrip('/') == ludus_linux_logging_laurel_log_dir
+          - ludus_linux_logging_laurel_log_dir.split('/')[1:] | select('in', ['.', '..']) | list | length == 0
+          - not (ludus_linux_logging_laurel_log_dir == '/var/log/audit' or ludus_linux_logging_laurel_log_dir.startswith('/var/log/audit/'))
+          - ludus_linux_logging_laurel_log_file is string and ludus_linux_logging_laurel_log_file is match('^[A-Za-z0-9_.-]+$')
+          - ludus_linux_logging_laurel_log_file not in ['.', '..']
+          - ludus_linux_logging_laurel_config_path == '/etc/laurel/config.toml'
+          - ludus_linux_logging_audit_rules_path == '/etc/audit/rules.d/60-ludus-linux-logging.rules'
+          - ludus_linux_logging_laurel_plugin_path == '/etc/audit/plugins.d/laurel.conf'
+          - ludus_linux_logging_cache_dir == '/var/cache/ludus-linux-logging'
+          - ludus_linux_logging_state_dir == '/var/lib/ludus-linux-logging'
+          - ludus_linux_logging_pending_path == '/var/lib/ludus-linux-logging/pending'
+          - ludus_linux_logging_applied_path == '/var/lib/ludus-linux-logging/applied.sha256'
+          - ludus_linux_logging_laurel_version == '0.6.3'
+          - >-
+            ludus_linux_logging_laurel_archive_url is match(
+            '^https://github\.com/threathunters-io/laurel/releases/download/v0\.6\.3/laurel-v0\.6\.3-x86_64-musl\.tar\.gz$')
+          - ludus_linux_logging_laurel_archive_checksum == 'sha256:ee7704e87c831bbfcac8cf8741e92eb56b49b3c6d64629d4730c98d97568ec53'
+          - >-
+            ludus_linux_logging_audit_rules_url is match(
+            '^https://raw\.githubusercontent\.com/Antonlovesdnb/ConstructingDefense/0cefe62755eebba7b226e611ece75160706e22f6/audit\.rules$')
+          - >-
+            ludus_linux_logging_laurel_config_url is match(
+            '^https://raw\.githubusercontent\.com/Antonlovesdnb/ConstructingDefense/0cefe62755eebba7b226e611ece75160706e22f6/config\.toml$')
+          - ludus_linux_logging_audit_rules_checksum is match('^sha256:[0-9a-f]{64}$')
+          - ludus_linux_logging_audit_rules_checksum == 'sha256:fbcf55a50c76ffd8e8090c32a55d85015db0fda40d5ff1276e273d4a1af0f4a8'
+          - ludus_linux_logging_laurel_config_checksum is match('^sha256:[0-9a-f]{64}$')
+          - ludus_linux_logging_laurel_config_checksum == 'sha256:8020587c28d90de86b1e52db3128d490b57e271221ef1ce249e73a23706bda34'
+        fail_msg: >-
+          This role supports Debian 13 or Ubuntu 24.04/26.04 x86_64 with systemd.
+          Use the pinned HTTPS sources/checksums and existing, valid Laurel reader accounts.
+
+    - name: Check each requested Laurel log-reader account before mutation
+      ansible.builtin.command:
+        argv: [getent, passwd, "{{ item }}"]
+      loop: "{{ ludus_linux_logging_read_users }}"
+      register: ludus_linux_logging_reader_accounts
+      changed_when: false
+      failed_when: false
+
+    - name: Require every Laurel log-reader account to exist
+      ansible.builtin.assert:
+        that: >-
+          ludus_linux_logging_reader_accounts.results | map(attribute='rc')
+          | select('equalto', 0) | list | length == ludus_linux_logging_read_users | length
+        fail_msg: >-
+          Every ludus_linux_logging_read_users entry must already exist. The role
+          does not create or modify template/login accounts; order the collector
+          role first and pass its existing splunkfwd account explicitly.
+
+    - name: Inspect pending and applied marker paths before package or policy mutation
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      loop:
+        - "{{ ludus_linux_logging_state_dir }}"
+        - "{{ ludus_linux_logging_pending_path }}"
+        - "{{ ludus_linux_logging_applied_path }}"
+      register: ludus_linux_logging_state_paths
+
+    - name: Refuse interrupted state or unsafe marker paths
+      ansible.builtin.assert:
+        that:
+          - >-
+            not ludus_linux_logging_state_paths.results[0].stat.get('exists', false)
+            or (ludus_linux_logging_state_paths.results[0].stat.get('isdir', false)
+            and not (ludus_linux_logging_state_paths.results[0].stat.get('islnk', false) | bool))
+          - not ludus_linux_logging_state_paths.results[1].stat.get('exists', false)
+          - >-
+            not ludus_linux_logging_state_paths.results[2].stat.get('exists', false)
+            or (ludus_linux_logging_state_paths.results[2].stat.get('isreg', false)
+            and not (ludus_linux_logging_state_paths.results[2].stat.get('islnk', false) | bool))
+        fail_msg: >-
+          An earlier logging apply is pending or its marker paths are unsafe.
+          Do not replay or clear policy automatically. Inspect the managed files,
+          kernel auditctl state, and auditd/Laurel processes; recover deliberately
+          before removing /var/lib/ludus-linux-logging/pending.
+
+    - name: Read prior applied content digests when present
+      ansible.builtin.slurp:
+        src: "{{ ludus_linux_logging_applied_path }}"
+      register: ludus_linux_logging_applied_marker
+      when: ludus_linux_logging_state_paths.results[2].stat.get('exists', false)
+
+    - name: Validate the applied marker digest format
+      ansible.builtin.assert:
+        that:
+          - >-
+            ludus_linux_logging_applied_marker.content | b64decode is match(
+            '(?s)^rules_sha256=[0-9a-f]{64}\\nconfig_sha256=[0-9a-f]{64}\\nplugin_sha256=[0-9a-f]{64}\\n$')
+        fail_msg: Existing applied marker is malformed; explicit recovery is required.
+      when: ludus_linux_logging_state_paths.results[2].stat.get('exists', false)
+
+    - name: Inspect any pre-existing Laurel service account
+      ansible.builtin.command:
+        argv: [getent, passwd, "{{ ludus_linux_logging_laurel_user }}"]
+      register: ludus_linux_logging_laurel_account
+      changed_when: false
+      failed_when: false
+
+    - name: Reject an existing Laurel identity that this role must not rewrite
+      ansible.builtin.assert:
+        that:
+          - ludus_linux_logging_laurel_account.rc in [0, 2]
+          - ludus_linux_logging_laurel_account.rc != 0 or ludus_linux_logging_laurel_account.stdout.split(':') | length == 7
+          - >-
+            ludus_linux_logging_laurel_account.rc != 0
+            or (ludus_linux_logging_laurel_account.stdout.split(':')[2] | int > 0
+            and ludus_linux_logging_laurel_account.stdout.split(':')[2] | int < 1000)
+          - ludus_linux_logging_laurel_account.rc != 0 or ludus_linux_logging_laurel_account.stdout.split(':')[5] == ludus_linux_logging_laurel_log_dir
+          - ludus_linux_logging_laurel_account.rc != 0 or ludus_linux_logging_laurel_account.stdout.split(':')[6] == '/usr/sbin/nologin'
+        fail_msg: >-
+          Existing _laurel is not the expected dedicated system account. The
+          role will not change an existing account; reconcile it explicitly.
+
+    - name: Inspect auditctl availability before changing packages or rules
+      ansible.builtin.stat:
+        path: /usr/sbin/auditctl
+        follow: false
+      register: ludus_linux_logging_auditctl
+
+    - name: Read existing kernel audit status before package work when auditctl is present
+      ansible.builtin.command:
+        argv: [/usr/sbin/auditctl, -s]
+      register: ludus_linux_logging_preinstall_audit_status
+      changed_when: false
+      when: ludus_linux_logging_auditctl.stat.get('exists', false)
+
+    - name: Refuse an already immutable kernel audit state before package work
+      ansible.builtin.assert:
+        that:
+          - ludus_linux_logging_preinstall_audit_status.stdout is not search('(?m)^enabled\\s+2\\s*$')
+        fail_msg: >-
+          Kernel audit is immutable (enabled=2). The role cannot safely replace
+          or append its rules; arrange an authorized reboot into mutable audit
+          state and rerun. No global reset is attempted.
+      when: ludus_linux_logging_auditctl.stat.get('exists', false)
+
+    - name: Inspect auditd active state before package work when auditctl is present
+      ansible.builtin.command:
+        argv: [systemctl, is-active, auditd.service]
+      register: ludus_linux_logging_preinstall_service_state
+      changed_when: false
+      failed_when: false
+      when: ludus_linux_logging_auditctl.stat.get('exists', false)
+
+    - name: Refuse active auditd when kernel auditing is disabled
+      ansible.builtin.assert:
+        that:
+          - >-
+            ludus_linux_logging_preinstall_service_state.stdout != 'active'
+            or ludus_linux_logging_preinstall_audit_status.stdout is not search('(?m)^enabled\\s+0\\s*$')
+        fail_msg: >-
+          auditd is active while kernel auditing is disabled (enabled=0). The
+          role will not override operator state; reconcile it explicitly first.
+      when: ludus_linux_logging_auditctl.stat.get('exists', false)
+
+    - name: Ensure auditd prerequisite is installed without allowing package startup
+      ansible.builtin.apt:
+        name: auditd
+        state: present
+        update_cache: false
+        policy_rc_d: 101
+
+    - name: Inspect role-owned targets without following symlinks
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      loop:
+        - /usr/local/sbin/laurel
+        - /etc/laurel
+        - /etc/laurel/config.toml
+        - /etc/audit/rules.d/60-ludus-linux-logging.rules
+        - /etc/audit/plugins.d
+        - /etc/audit/plugins.d/laurel.conf
+        - "{{ ludus_linux_logging_laurel_log_dir }}"
+      register: ludus_linux_logging_targets
+
+    - name: Refuse symlinked role-owned targets and unmanaged existing files
+      ansible.builtin.assert:
+        that:
+          - not (item.stat.get('islnk', false) | bool)
+          - item.stat.get('isdir', false) or item.stat.get('isreg', false) or not item.stat.get('exists', false)
+          - >-
+            item.stat.get('exists', false) == false
+            or (item.item in ['/etc/laurel', '/etc/audit/plugins.d', ludus_linux_logging_laurel_log_dir]
+            and item.stat.get('isdir', false))
+            or (item.item not in ['/etc/laurel', '/etc/audit/plugins.d', ludus_linux_logging_laurel_log_dir]
+            and item.stat.get('isreg', false))
+        fail_msg: "Refusing symlink or non-regular role-owned target {{ item.item }}; reconcile it explicitly."
+      loop: "{{ ludus_linux_logging_targets.results }}"
+
+    - name: Inspect the existing augenrules output without following symlinks
+      ansible.builtin.stat:
+        path: /etc/audit/audit.rules
+        follow: false
+      register: ludus_linux_logging_generated_rules_stat
+
+    - name: Require existing augenrules output to be a regular file
+      ansible.builtin.assert:
+        that:
+          - not (ludus_linux_logging_generated_rules_stat.stat.get('islnk', false) | bool)
+          - ludus_linux_logging_generated_rules_stat.stat.get('isreg', false) or not ludus_linux_logging_generated_rules_stat.stat.get('exists', false)
+        fail_msg: Refusing symlinked or non-file /etc/audit/audit.rules.
+
+    - name: Read existing augenrules output for ownership protection
+      ansible.builtin.slurp:
+        src: /etc/audit/audit.rules
+      register: ludus_linux_logging_existing_generated_rules
+      when: ludus_linux_logging_generated_rules_stat.stat.get('exists', false)
+
+    - name: Protect pre-existing unmanaged augenrules output
+      ansible.builtin.assert:
+        that:
+          - >-
+            not ludus_linux_logging_generated_rules_stat.stat.get('exists', false)
+            or ludus_linux_logging_existing_generated_rules.content | b64decode is search('Managed by ludus_linux_logging')
+            or ludus_linux_logging_existing_generated_rules.content | b64decode is search('(?im)^#.*(automatically generated|generated by augenrules)')
+            or ludus_linux_logging_existing_generated_rules.content | b64decode
+            | regex_search('(?m)^\\s*[^#\\s]') is none
+        fail_msg: >-
+          Existing /etc/audit/audit.rules contains unmarked active policy. The
+          role will not regenerate over unmanaged rules; reconcile it explicitly.
+
+    - name: Read pre-existing managed target markers
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      loop:
+        - /etc/laurel/config.toml
+        - /etc/audit/rules.d/60-ludus-linux-logging.rules
+        - /etc/audit/plugins.d/laurel.conf
+      when: item in (ludus_linux_logging_targets.results | selectattr('stat.exists') | map(attribute='item') | list)
+      register: ludus_linux_logging_existing_targets
+      failed_when: false
+
+    - name: Protect existing unmanaged role-target files
+      ansible.builtin.assert:
+        that: item.skipped | default(false) or (item.content | default('') | b64decode is search('Managed by ludus_linux_logging'))
+        fail_msg: "Existing {{ item.item }} is not marked as managed by this role; preserve it and reconcile manually."
+      loop: "{{ ludus_linux_logging_existing_targets.results }}"
+
+    - name: Require digest evidence for previously managed policy files
+      ansible.builtin.assert:
+        that:
+          - >-
+            ludus_linux_logging_state_paths.results[2].stat.get('exists', false)
+            or not (ludus_linux_logging_targets.results[2].stat.get('exists', false)
+            or ludus_linux_logging_targets.results[3].stat.get('exists', false)
+            or ludus_linux_logging_targets.results[5].stat.get('exists', false))
+        fail_msg: >-
+          Existing role-marked logging files have no applied digest from the
+          pending-marker protocol. This prior local implementation requires
+          explicit recovery; the role will not infer what reached the kernel.
+
+    - name: Inspect existing Laurel executable version before mutation
+      ansible.builtin.command:
+        argv: [/usr/local/sbin/laurel, --version]
+      register: ludus_linux_logging_existing_laurel_version
+      changed_when: false
+      failed_when: false
+      when: ludus_linux_logging_targets.results[0].stat.get('exists', false)
+
+    - name: Require an existing Laurel executable to be the selected release
+      ansible.builtin.assert:
+        that:
+          - ludus_linux_logging_existing_laurel_version.rc == 0
+          - ludus_linux_logging_existing_laurel_version.stdout is search('0\\.6\\.3')
+        fail_msg: Existing /usr/local/sbin/laurel is not the expected Laurel 0.6.3 executable; refusing to replace a conflict.
+      when: ludus_linux_logging_targets.results[0].stat.get('exists', false)
+
+    - name: Verify auditctl after the bounded prerequisite install
+      ansible.builtin.stat:
+        path: /usr/sbin/auditctl
+        follow: false
+      register: ludus_linux_logging_installed_auditctl
+
+    - name: Require the prerequisite package to provide executable auditctl
+      ansible.builtin.assert:
+        that:
+          - ludus_linux_logging_installed_auditctl.stat.get('exists', false)
+          - ludus_linux_logging_installed_auditctl.stat.get('isreg', false)
+          - ludus_linux_logging_installed_auditctl.stat.get('executable', false)
+        fail_msg: The auditd prerequisite did not provide executable /usr/sbin/auditctl; refusing to change audit policy.
+
+    - name: Read current kernel audit status before role policy or service changes
+      ansible.builtin.command:
+        argv: [/usr/sbin/auditctl, -s]
+      register: ludus_linux_logging_audit_status
+      changed_when: false
+
+    - name: Refuse immutable audit state before role policy or service changes
+      ansible.builtin.assert:
+        that:
+          - ludus_linux_logging_audit_status.stdout is not search('(?m)^enabled\\s+2\\s*$')
+        fail_msg: >-
+          Kernel audit is immutable (enabled=2). The role cannot safely replace
+          or append its rules; arrange an authorized reboot into mutable audit
+          state and rerun. No global reset is attempted.
+
+    - name: Inspect current runtime rules without mutation
+      ansible.builtin.command:
+        argv: [/usr/sbin/auditctl, -l]
+      register: ludus_linux_logging_runtime_rules
+      changed_when: false
+
+    - name: Inspect auditd service state without starting it
+      ansible.builtin.command:
+        argv: [systemctl, is-active, auditd.service]
+      register: ludus_linux_logging_initial_service_state
+      changed_when: false
+      failed_when: false
+
+    - name: Refuse active auditd with auditing disabled before role policy mutation
+      ansible.builtin.assert:
+        that:
+          - ludus_linux_logging_initial_service_state.stdout != 'active' or ludus_linux_logging_audit_status.stdout is not search('(?m)^enabled\\s+0\\s*$')
+        fail_msg: auditd is active but kernel auditing is disabled; the role will not force auditctl -e 1 over operator state.
+
+    - name: Inspect effective auditd loader units before a fresh start
+      ansible.builtin.command:
+        argv: [systemctl, cat, "{{ item }}"]
+      loop:
+        - auditd.service
+        - audit-rules.service
+      register: ludus_linux_logging_auditd_unit_cats
+      changed_when: false
+      failed_when: false
+      when: ludus_linux_logging_initial_service_state.stdout != 'active'
+
+    - name: Parse the effective auditd rules-loader startup layout
+      ansible.builtin.set_fact:
+        ludus_linux_logging_auditd_loader: >-
+          {{ ludus_linux_logging_auditd_unit_cats.results[0].stdout
+          | ludus_linux_logging_auditd_loader_contract(
+          ludus_linux_logging_auditd_unit_cats.results[1].stdout) }}
+      when: ludus_linux_logging_initial_service_state.stdout != 'active'
+
+    - name: Validate effective auditd rule-loader configuration
+      ansible.builtin.assert:
+        that:
+          - ludus_linux_logging_auditd_loader is not none
+        fail_msg: >-
+          Unsupported effective auditd unit/drop-in shape. Expected either the
+          audit-rules.service oneshot augenrules loader ordered before auditd,
+          or one auditable auditd ExecStartPost loader. Refusing ambiguous
+          startup configuration.
+      when: ludus_linux_logging_initial_service_state.stdout != 'active'
+
+    - name: Refuse unsafe first start when inactive auditd has runtime-only rules
+      ansible.builtin.assert:
+        that:
+          - ludus_linux_logging_runtime_rules.rc == 0
+          - ludus_linux_logging_initial_service_state.stdout == 'active' or ludus_linux_logging_runtime_rules.stdout | trim in ['', 'No rules']
+        fail_msg: >-
+          auditd is inactive while the kernel has runtime rules. Starting the
+          service can trigger its global merged-policy load. Preserve those
+          rules and perform an authorized operator transition before enabling it.
+
+    - name: Create protected role download cache
+      ansible.builtin.file:
+        path: "{{ ludus_linux_logging_cache_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Create the dedicated Laurel system identity
+      ansible.builtin.user:
+        name: "{{ ludus_linux_logging_laurel_user }}"
+        system: true
+        create_home: false
+        home: "{{ ludus_linux_logging_laurel_log_dir }}"
+        shell: /usr/sbin/nologin
+        state: present
+      when: ludus_linux_logging_laurel_account.rc != 0
+
+    - name: Download attributed upstream audit policy with computed transport checksum
+      ansible.builtin.get_url:
+        url: "{{ ludus_linux_logging_audit_rules_url }}"
+        dest: "{{ ludus_linux_logging_cache_dir }}/upstream-audit.rules"
+        checksum: "{{ ludus_linux_logging_audit_rules_checksum }}"
+        owner: root
+        group: root
+        mode: "0600"
+        validate_certs: true
+
+    - name: Download attributed upstream Laurel defaults with computed transport checksum
+      ansible.builtin.get_url:
+        url: "{{ ludus_linux_logging_laurel_config_url }}"
+        dest: "{{ ludus_linux_logging_cache_dir }}/upstream-config.toml"
+        checksum: "{{ ludus_linux_logging_laurel_config_checksum }}"
+        owner: root
+        group: root
+        mode: "0600"
+        validate_certs: true
+
+    - name: Download checksum-pinned Laurel release archive
+      ansible.builtin.get_url:
+        url: "{{ ludus_linux_logging_laurel_archive_url }}"
+        dest: "{{ ludus_linux_logging_cache_dir }}/laurel-v{{ ludus_linux_logging_laurel_version }}.tar.gz"
+        checksum: "{{ ludus_linux_logging_laurel_archive_checksum }}"
+        owner: root
+        group: root
+        mode: "0600"
+        validate_certs: true
+
+    - name: Create private Laurel extraction directory
+      ansible.builtin.file:
+        path: "{{ ludus_linux_logging_cache_dir }}/laurel-v{{ ludus_linux_logging_laurel_version }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Extract only the pinned Laurel executable
+      ansible.builtin.unarchive:
+        src: "{{ ludus_linux_logging_cache_dir }}/laurel-v{{ ludus_linux_logging_laurel_version }}.tar.gz"
+        dest: "{{ ludus_linux_logging_cache_dir }}/laurel-v{{ ludus_linux_logging_laurel_version }}"
+        remote_src: true
+        include: [laurel]
+        creates: "{{ ludus_linux_logging_cache_dir }}/laurel-v{{ ludus_linux_logging_laurel_version }}/laurel"
+
+    - name: Inspect extracted Laurel version
+      ansible.builtin.command:
+        argv: ["{{ ludus_linux_logging_cache_dir }}/laurel-v{{ ludus_linux_logging_laurel_version }}/laurel", --version]
+      register: ludus_linux_logging_downloaded_laurel_version
+      changed_when: false
+
+    - name: Require exact Laurel release version before installation
+      ansible.builtin.assert:
+        that:
+          - ludus_linux_logging_downloaded_laurel_version.rc == 0
+          - ludus_linux_logging_downloaded_laurel_version.stdout is search('0\\.6\\.3')
+        fail_msg: The checksum-pinned archive did not contain the expected Laurel 0.6.3 executable.
+
+    - name: Install the verified Laurel executable
+      ansible.builtin.copy:
+        src: "{{ ludus_linux_logging_cache_dir }}/laurel-v{{ ludus_linux_logging_laurel_version }}/laurel"
+        dest: /usr/local/sbin/laurel
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0755"
+      when: not ludus_linux_logging_targets.results[0].stat.get('exists', false)
+
+    - name: Create Laurel configuration directory
+      ansible.builtin.file:
+        path: /etc/laurel
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: not ludus_linux_logging_targets.results[1].stat.get('exists', false)
+
+    - name: Create audit plugin configuration directory
+      ansible.builtin.file:
+        path: /etc/audit/plugins.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: not ludus_linux_logging_targets.results[4].stat.get('exists', false)
+
+    - name: Read upstream audit rules for exact path extraction
+      ansible.builtin.slurp:
+        src: "{{ ludus_linux_logging_cache_dir }}/upstream-audit.rules"
+      register: ludus_linux_logging_upstream_rules
+
+    - name: Read pinned upstream Laurel configuration
+      ansible.builtin.slurp:
+        src: "{{ ludus_linux_logging_cache_dir }}/upstream-config.toml"
+      register: ludus_linux_logging_upstream_config
+
+    - name: Extract named identity operands from pinned audit policy
+      ansible.builtin.set_fact:
+        ludus_linux_logging_policy_identities: >-
+          {{ ludus_linux_logging_upstream_rules.content | b64decode
+          | ludus_linux_logging_extract_audit_identities }}
+        ludus_linux_logging_policy_selinux_predicates: >-
+          {{ ludus_linux_logging_upstream_rules.content | b64decode
+          | ludus_linux_logging_extract_selinux_predicates }}
+
+    - name: Preflight environment-dependent named audit uid and gid operands
+      ansible.builtin.command:
+        argv: [getent, "{{ item.database }}", "{{ item.name }}"]
+      loop: "{{ ludus_linux_logging_policy_identities }}"
+      register: ludus_linux_logging_policy_identity_results
+      changed_when: false
+      failed_when: false
+
+    - name: Reject unexpected named-identity lookup failures
+      ansible.builtin.assert:
+        that: item.rc in [0, 2]
+        fail_msg: "Could not determine whether {{ item.item.database }} identity {{ item.item.name }} exists."
+      loop: "{{ ludus_linux_logging_policy_identity_results.results | default([]) }}"
+
+    - name: Inspect SELinux enforcement interface before transforming rules
+      ansible.builtin.stat:
+        path: /sys/fs/selinux/enforce
+        follow: false
+      register: ludus_linux_logging_selinux_enforce
+
+    - name: Inspect every watch/path/dir target from the pinned policy
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      loop: "{{ ludus_linux_logging_upstream_rules.content | b64decode | ludus_linux_logging_extract_audit_paths }}"
+      register: ludus_linux_logging_rule_paths
+
+    - name: Transform policy by removing global controls and only missing-target rules
+      ansible.builtin.set_fact:
+        ludus_linux_logging_managed_rules: >-
+          {{ ludus_linux_logging_upstream_rules.content | b64decode
+          | ludus_linux_logging_transform_audit_rules(
+          ludus_linux_logging_rule_paths.results,
+          ludus_linux_logging_policy_identity_results.results | default([]),
+          ludus_linux_logging_selinux_enforce.stat.get('exists', false)) }}
+
+    - name: Read prior role fragment content for scoped active-policy comparison
+      ansible.builtin.set_fact:
+        ludus_linux_logging_prior_rules: >-
+          {{ (ludus_linux_logging_existing_targets.results
+          | selectattr('item', 'equalto', ludus_linux_logging_audit_rules_path)
+          | map(attribute='content') | first | default('')) | b64decode }}
+
+    - name: Decide whether managed audit rule content changed
+      ansible.builtin.set_fact:
+        ludus_linux_logging_rules_content_changed: >-
+          {{ ludus_linux_logging_prior_rules != ludus_linux_logging_managed_rules }}
+
+    - name: Render exact role-owned configuration and content digests
+      ansible.builtin.set_fact:
+        ludus_linux_logging_managed_config: >-
+          {{ ludus_linux_logging_upstream_config.content | b64decode
+          | ludus_linux_logging_transform_laurel_config(
+          ludus_linux_logging_laurel_log_dir, ludus_linux_logging_laurel_log_file,
+          ludus_linux_logging_laurel_user, ludus_linux_logging_read_users) }}
+        ludus_linux_logging_managed_plugin: "{{ lookup('ansible.builtin.template', 'laurel.conf.j2') }}"
+
+    - name: Calculate desired managed content digests
+      ansible.builtin.set_fact:
+        ludus_linux_logging_desired_digests:
+          rules: "{{ ludus_linux_logging_managed_rules | hash('sha256') }}"
+          config: "{{ ludus_linux_logging_managed_config | hash('sha256') }}"
+          plugin: "{{ lookup('ansible.builtin.template', 'laurel.conf.j2') | hash('sha256') }}"
+
+    - name: Read prior applied digest marker text
+      ansible.builtin.set_fact:
+        ludus_linux_logging_prior_applied_text: "{{ ludus_linux_logging_applied_marker.content | default('') | b64decode }}"
+
+    - name: Decide whether Laurel configuration requires reconfiguration
+      ansible.builtin.set_fact:
+        ludus_linux_logging_config_reload_required: >-
+          {{ ('config_sha256=' ~ ludus_linux_logging_desired_digests.config)
+             not in ludus_linux_logging_prior_applied_text.splitlines()
+             or ('plugin_sha256=' ~ ludus_linux_logging_desired_digests.plugin)
+             not in ludus_linux_logging_prior_applied_text.splitlines() }}
+
+    - name: Compute exact prior managed-file digests
+      ansible.builtin.set_fact:
+        ludus_linux_logging_prior_managed_file_digests:
+          rules: "{{ ludus_linux_logging_prior_rules | hash('sha256') }}"
+          config: >-
+            {{ (
+              ludus_linux_logging_existing_targets.results
+              | selectattr('item', 'equalto', ludus_linux_logging_laurel_config_path)
+              | map(attribute='content') | first | default('') | b64decode
+            ) | hash('sha256') }}
+          plugin: >-
+            {{ (
+              ludus_linux_logging_existing_targets.results
+              | selectattr('item', 'equalto', ludus_linux_logging_laurel_plugin_path)
+              | map(attribute='content') | first | default('') | b64decode
+            ) | hash('sha256') }}
+
+    - name: Decide whether a managed apply is actually required
+      ansible.builtin.set_fact:
+        ludus_linux_logging_needs_apply: >-
+          {{ ludus_linux_logging_initial_service_state.stdout != 'active'
+             or not ludus_linux_logging_state_paths.results[2].stat.get('exists', false)
+             or ('rules_sha256=' ~ ludus_linux_logging_desired_digests.rules) not in ludus_linux_logging_prior_applied_text.splitlines()
+             or ('config_sha256=' ~ ludus_linux_logging_desired_digests.config) not in ludus_linux_logging_prior_applied_text.splitlines()
+             or ('plugin_sha256=' ~ ludus_linux_logging_desired_digests.plugin) not in ludus_linux_logging_prior_applied_text.splitlines()
+             or not ludus_linux_logging_targets.results[2].stat.get('exists', false)
+             or not ludus_linux_logging_targets.results[3].stat.get('exists', false)
+             or not ludus_linux_logging_targets.results[5].stat.get('exists', false)
+             or ludus_linux_logging_targets.results[2].stat.get('pw_name', '') != 'root'
+             or ludus_linux_logging_targets.results[2].stat.get('gr_name', '') != 'root'
+             or ludus_linux_logging_targets.results[2].stat.get('mode', '') != '0644'
+             or ludus_linux_logging_targets.results[3].stat.get('pw_name', '') != 'root'
+             or ludus_linux_logging_targets.results[3].stat.get('gr_name', '') != 'root'
+             or ludus_linux_logging_targets.results[3].stat.get('mode', '') != '0640'
+             or ludus_linux_logging_targets.results[5].stat.get('pw_name', '') != 'root'
+             or ludus_linux_logging_targets.results[5].stat.get('gr_name', '') != 'root'
+             or ludus_linux_logging_targets.results[5].stat.get('mode', '') != '0644'
+             or not ludus_linux_logging_generated_rules_stat.stat.get('exists', false)
+             or ludus_linux_logging_prior_managed_file_digests.rules != ludus_linux_logging_desired_digests.rules
+             or ludus_linux_logging_prior_managed_file_digests.config != ludus_linux_logging_desired_digests.config
+             or ludus_linux_logging_prior_managed_file_digests.plugin != ludus_linux_logging_desired_digests.plugin }}
+
+    - name: Require disk and applied digests to agree before an active-policy transition
+      ansible.builtin.assert:
+        that:
+          - >-
+            ludus_linux_logging_initial_service_state.stdout != 'active'
+            or not ludus_linux_logging_targets.results[3].stat.get('exists', false)
+            or ('rules_sha256=' ~ (ludus_linux_logging_prior_rules | hash('sha256')))
+            in ludus_linux_logging_prior_applied_text
+          - >-
+            ludus_linux_logging_initial_service_state.stdout != 'active'
+            or not ludus_linux_logging_targets.results[3].stat.get('exists', false)
+            or ludus_linux_logging_desired_digests.rules
+            == (ludus_linux_logging_prior_rules | hash('sha256'))
+          - >-
+            ludus_linux_logging_initial_service_state.stdout != 'active'
+            or not (ludus_linux_logging_state_paths.results[2].stat.get('exists', false)
+            and not ludus_linux_logging_targets.results[3].stat.get('exists', false))
+        fail_msg: >-
+          Active auditd has no trustworthy matching applied digest or the desired
+          rules differ from the loaded role policy. Do not overwrite or replay
+          active rules; perform an authorized scoped transition.
+
+    - name: Refuse active rule-policy edits that would leave stale runtime rules
+      ansible.builtin.assert:
+        that:
+          - >-
+            ludus_linux_logging_initial_service_state.stdout != 'active'
+            or not ludus_linux_logging_targets.results[3].stat.get('exists', false)
+            or ludus_linux_logging_prior_rules == ludus_linux_logging_managed_rules
+        fail_msg: >-
+          The managed rules fragment differs from the currently loaded role
+          policy. This role will not append a changed ruleset over stale rules;
+          arrange an authorized scoped policy transition first.
+
+    - name: Create protected logging state directory before managed writes
+      ansible.builtin.file:
+        path: "{{ ludus_linux_logging_state_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Write pending apply marker before managed policy/configuration changes
+      ansible.builtin.copy:
+        dest: "{{ ludus_linux_logging_pending_path }}"
+        content: |
+          pending
+          rules_sha256={{ ludus_linux_logging_desired_digests.rules }}
+          config_sha256={{ ludus_linux_logging_desired_digests.config }}
+          plugin_sha256={{ ludus_linux_logging_desired_digests.plugin }}
+        owner: root
+        group: root
+        mode: "0600"
+      when: ludus_linux_logging_needs_apply | bool
+
+    - name: Preserve upstream Laurel defaults with explicit role identity and paths
+      ansible.builtin.copy:
+        content: "{{ ludus_linux_logging_managed_config }}"
+        dest: "{{ ludus_linux_logging_laurel_config_path }}"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Reload auditd configuration without restarting the service
+
+    - name: Install separate managed Linux audit rules fragment
+      ansible.builtin.copy:
+        content: "{{ ludus_linux_logging_managed_rules }}"
+        dest: "{{ ludus_linux_logging_audit_rules_path }}"
+        owner: root
+        group: root
+        mode: "0640"
+      register: ludus_linux_logging_rules_file
+
+    - name: Request scoped rule load for changed rule content
+      ansible.builtin.debug:
+        msg: Managed audit rule content changed; queueing the scoped rule load.
+      changed_when: ludus_linux_logging_rules_content_changed | bool
+      notify: Load only the managed audit rules fragment
+
+    - name: Generate persistent merged rules from rules.d without loading them
+      ansible.builtin.command:
+        argv: [/usr/sbin/augenrules]
+      changed_when: true
+      when: ludus_linux_logging_rules_content_changed | bool or not ludus_linux_logging_generated_rules_stat.stat.get('exists', false)
+
+    - name: Install Laurel audit plugin configuration
+      ansible.builtin.copy:
+        content: "{{ ludus_linux_logging_managed_plugin }}"
+        dest: "{{ ludus_linux_logging_laurel_plugin_path }}"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Reload auditd configuration without restarting the service
+
+    - name: Request auditd reconfiguration for unapplied Laurel digests
+      ansible.builtin.debug:
+        msg: Laurel configuration/plugin digests differ from the applied marker; queueing auditd reconfiguration.
+      changed_when: ludus_linux_logging_config_reload_required | bool
+      notify: Reload auditd configuration without restarting the service
+
+    - name: Inspect generated merged policy before service start
+      ansible.builtin.slurp:
+        src: /etc/audit/audit.rules
+      register: ludus_linux_logging_generated_rules
+
+    - name: Refuse ignored-error mode in generated merged policy
+      ansible.builtin.assert:
+        that:
+          - ludus_linux_logging_generated_rules.content | b64decode | regex_search('(?m)^\\s*-i(?:\\s|$)') is none
+        fail_msg: >-
+          The generated merged rules contain active -i, which could conceal
+          load errors. Preserve unrelated fragments and remove/reconcile that
+          operator rule before retrying.
+
+    - name: Enable and start auditd after persistent rules and Laurel plugin are ready
+      ansible.builtin.service:
+        name: auditd
+        enabled: true
+        state: started
+
+    - name: Apply notified auditd and Laurel configuration on first run and changes
+      ansible.builtin.meta: flush_handlers
+
+    - name: Inspect systemd's recorded separate rules-loader result after fresh start
+      ansible.builtin.command:
+        argv: [systemctl, show, audit-rules.service, --property=Result, --property=ExecMainCode, --property=ExecMainStatus]
+      register: ludus_linux_logging_rules_loader_result
+      changed_when: false
+      when:
+        - ludus_linux_logging_initial_service_state.stdout != 'active'
+        - ludus_linux_logging_auditd_loader.unit | default('') == 'audit-rules.service'
+
+    - name: Require successful separate merged-rules loader execution
+      ansible.builtin.assert:
+        that: ludus_linux_logging_rules_loader_result.stdout | ludus_linux_logging_auditd_rules_loader_succeeded
+        fail_msg: >-
+          systemd does not record a successful augenrules --load oneshot execution.
+          Pending state is
+          retained for explicit recovery.
+      when:
+        - ludus_linux_logging_initial_service_state.stdout != 'active'
+        - ludus_linux_logging_auditd_loader.unit | default('') == 'audit-rules.service'
+
+    - name: Inspect systemd's recorded legacy auditd startup hook result
+      ansible.builtin.command:
+        argv: [systemctl, show, auditd.service, --property=ExecStartPost]
+      register: ludus_linux_logging_startpost_result
+      changed_when: false
+      when:
+        - ludus_linux_logging_initial_service_state.stdout != 'active'
+        - ludus_linux_logging_auditd_loader.unit | default('') == 'auditd.service'
+
+    - name: Require successful legacy augenrules startup hook
+      ansible.builtin.assert:
+        that: ludus_linux_logging_startpost_result.stdout | ludus_linux_logging_auditd_startpost_succeeded
+        fail_msg: >-
+          systemd does not record successful execution of the legacy augenrules
+          --load startup hook; pending state is retained for explicit recovery.
+      when:
+        - ludus_linux_logging_initial_service_state.stdout != 'active'
+        - ludus_linux_logging_auditd_loader.unit | default('') == 'auditd.service'
+
+    - name: Read kernel audit status after rules application
+      ansible.builtin.command:
+        argv: [/usr/sbin/auditctl, -s]
+      register: ludus_linux_logging_final_audit_status
+      changed_when: false
+
+    - name: Require kernel auditing to be enabled without overriding state
+      ansible.builtin.assert:
+        that: ludus_linux_logging_final_audit_status.stdout is search('(?m)^enabled\\s+[12]\\s*$')
+        fail_msg: >-
+          Kernel auditing remains disabled after the authorized start/apply.
+          The role will not force auditctl -e 1; pending state is retained.
+
+    - name: Wait for Laurel plugin process after start or configuration reload
+      ansible.builtin.command:
+        argv: [pgrep, -x, laurel]
+      register: ludus_linux_logging_laurel_process
+      changed_when: false
+      retries: 30
+      delay: 1
+      until: ludus_linux_logging_laurel_process.rc == 0
+
+    - name: Read applied managed content for digest confirmation
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      loop:
+        - "{{ ludus_linux_logging_audit_rules_path }}"
+        - "{{ ludus_linux_logging_laurel_config_path }}"
+        - "{{ ludus_linux_logging_laurel_plugin_path }}"
+      register: ludus_linux_logging_applied_files
+
+    - name: Confirm applied digest inputs match the exact managed disk content
+      ansible.builtin.assert:
+        that:
+          - (ludus_linux_logging_applied_files.results[0].content | b64decode | hash('sha256')) == ludus_linux_logging_desired_digests.rules
+          - (ludus_linux_logging_applied_files.results[1].content | b64decode | hash('sha256')) == ludus_linux_logging_desired_digests.config
+          - (ludus_linux_logging_applied_files.results[2].content | b64decode | hash('sha256')) == ludus_linux_logging_desired_digests.plugin
+        fail_msg: >-
+          Managed on-disk content does not match the digest set being recorded;
+          pending state is retained for explicit recovery.
+
+    - name: Record content digests only after rules and plugin readiness gates pass
+      ansible.builtin.copy:
+        dest: "{{ ludus_linux_logging_applied_path }}"
+        content: |
+          rules_sha256={{ ludus_linux_logging_desired_digests.rules }}
+          config_sha256={{ ludus_linux_logging_desired_digests.config }}
+          plugin_sha256={{ ludus_linux_logging_desired_digests.plugin }}
+        owner: root
+        group: root
+        mode: "0600"
+      when: ludus_linux_logging_needs_apply | bool
+
+    - name: Clear pending marker only after successful apply gates and digest write
+      ansible.builtin.file:
+        path: "{{ ludus_linux_logging_pending_path }}"
+        state: absent
+      when: ludus_linux_logging_needs_apply | bool
+
+  rescue:
+    - name: Stop with an actionable native logging role failure
+      ansible.builtin.fail:
+        msg: >-
+          ludus_linux_logging task '{{ ansible_failed_task.name | default("unknown") }}'
+          failed: {{ ansible_failed_result.msg | default(ansible_failed_result | string) }}
+          The role does not globally reset or delete unrelated audit fragments/runtime rules.

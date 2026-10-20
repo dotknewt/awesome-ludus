@@ -6,3 +6,5 @@ ludus_splunk_server_version: "10.6.1.1"
 ludus_splunk_server_accept_license: false
 ludus_splunk_server_admin_username: admin
 ludus_splunk_server_admin_password: "SplunkLab-ChangeMe1!"
+ludus_splunk_server_receiver_enabled: false
+ludus_splunk_server_receiver_port: 9997

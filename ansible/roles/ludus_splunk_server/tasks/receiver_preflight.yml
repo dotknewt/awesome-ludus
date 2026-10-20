@@ -1,0 +1,140 @@
+---
+- name: Validate optional receiver input types and listener port
+  ansible.builtin.assert:
+    that:
+      - ludus_splunk_server_receiver_enabled is boolean
+      - ludus_splunk_server_receiver_port is integer
+      - ludus_splunk_server_receiver_port is not boolean
+      - ludus_splunk_server_receiver_port >= 1
+      - ludus_splunk_server_receiver_port <= 65535
+      - ludus_splunk_server_receiver_port not in [8000, 8089]
+    fail_msg: Receiver port must be an integer from 1 to 65535 and must not collide with Splunk web (8000) or management (8089).
+
+- name: Inspect receiver app hierarchy without following symlinks
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop:
+    - /opt/splunk/etc
+    - /opt/splunk/etc/apps
+    - /opt/splunk/etc/apps/ludus_receiver
+    - /opt/splunk/etc/apps/ludus_receiver/.ludus-splunk-server-owner
+    - /opt/splunk/etc/apps/ludus_receiver/local
+    - /opt/splunk/etc/apps/ludus_receiver/local/inputs.conf
+  register: ludus_splunk_server_receiver_path_stats
+
+- name: Record receiver filesystem state
+  ansible.builtin.set_fact:
+    ludus_splunk_server_receiver_etc: "{{ ludus_splunk_server_receiver_path_stats.results[0].stat }}"
+    ludus_splunk_server_receiver_apps: "{{ ludus_splunk_server_receiver_path_stats.results[1].stat }}"
+    ludus_splunk_server_receiver_app: "{{ ludus_splunk_server_receiver_path_stats.results[2].stat }}"
+    ludus_splunk_server_receiver_owner_marker: "{{ ludus_splunk_server_receiver_path_stats.results[3].stat }}"
+    ludus_splunk_server_receiver_local: "{{ ludus_splunk_server_receiver_path_stats.results[4].stat }}"
+    ludus_splunk_server_receiver_inputs: "{{ ludus_splunk_server_receiver_path_stats.results[5].stat }}"
+
+- name: Read a safe receiver ownership marker when present
+  ansible.builtin.slurp:
+    src: /opt/splunk/etc/apps/ludus_receiver/.ludus-splunk-server-owner
+  register: ludus_splunk_server_receiver_owner_contents
+  when:
+    - ludus_splunk_server_receiver_etc.get('isdir', false)
+    - not (ludus_splunk_server_receiver_etc.get('islnk', false) | bool)
+    - ludus_splunk_server_receiver_apps.get('isdir', false)
+    - not (ludus_splunk_server_receiver_apps.get('islnk', false) | bool)
+    - ludus_splunk_server_receiver_app.get('isdir', false)
+    - not (ludus_splunk_server_receiver_app.get('islnk', false) | bool)
+    - ludus_splunk_server_receiver_owner_marker.get('isreg', false)
+    - not (ludus_splunk_server_receiver_owner_marker.get('islnk', false) | bool)
+
+- name: Record authoritative receiver app ownership
+  ansible.builtin.set_fact:
+    ludus_splunk_server_receiver_owned: >-
+      {{ (ludus_splunk_server_receiver_owner_contents.content | default('') | b64decode | trim)
+         == 'ludus_splunk_server_receiver_v1' }}
+
+- name: Reject unsafe or unmanaged receiver app state when enabled
+  ansible.builtin.assert:
+    that:
+      - not (ludus_splunk_server_receiver_etc.get('islnk', false) | bool)
+      - not ludus_splunk_server_receiver_etc.get('exists', false) or ludus_splunk_server_receiver_etc.get('isdir', false)
+      - not (ludus_splunk_server_receiver_apps.get('islnk', false) | bool)
+      - not ludus_splunk_server_receiver_apps.get('exists', false) or ludus_splunk_server_receiver_apps.get('isdir', false)
+      - not (ludus_splunk_server_receiver_app.get('islnk', false) | bool)
+      - not ludus_splunk_server_receiver_app.get('exists', false) or ludus_splunk_server_receiver_app.get('isdir', false)
+      - not ludus_splunk_server_receiver_app.get('exists', false) or ludus_splunk_server_receiver_owned
+      - not (ludus_splunk_server_receiver_owner_marker.get('islnk', false) | bool)
+      - not (ludus_splunk_server_receiver_local.get('islnk', false) | bool)
+      - not ludus_splunk_server_receiver_local.get('exists', false) or ludus_splunk_server_receiver_local.get('isdir', false)
+      - not (ludus_splunk_server_receiver_inputs.get('islnk', false) | bool)
+      - not ludus_splunk_server_receiver_inputs.get('exists', false) or ludus_splunk_server_receiver_inputs.get('isreg', false)
+      - not ludus_splunk_server_receiver_inputs.get('exists', false) or ludus_splunk_server_receiver_owned
+    fail_msg: Refusing a symlinked, malformed, or unmanaged ludus_receiver app; reconcile it explicitly before enabling the receiver.
+  when: ludus_splunk_server_receiver_enabled
+
+- name: Validate a previously managed receiver before disabled cleanup
+  ansible.builtin.assert:
+    that:
+      - not (ludus_splunk_server_receiver_etc.get('islnk', false) | bool)
+      - not (ludus_splunk_server_receiver_apps.get('islnk', false) | bool)
+      - not (ludus_splunk_server_receiver_app.get('islnk', false) | bool)
+      - ludus_splunk_server_receiver_app.get('isdir', false)
+      - not (ludus_splunk_server_receiver_local.get('islnk', false) | bool)
+      - not ludus_splunk_server_receiver_local.get('exists', false) or ludus_splunk_server_receiver_local.get('isdir', false)
+      - not (ludus_splunk_server_receiver_inputs.get('islnk', false) | bool)
+      - not ludus_splunk_server_receiver_inputs.get('exists', false) or ludus_splunk_server_receiver_inputs.get('isreg', false)
+    fail_msg: Refusing unsafe state under the marked receiver app during disable cleanup.
+  when:
+    - not ludus_splunk_server_receiver_enabled
+    - ludus_splunk_server_receiver_owned
+
+- name: Find existing Splunk input configuration for listener collision checks
+  ansible.builtin.find:
+    paths: /opt/splunk/etc
+    patterns: inputs.conf
+    recurse: true
+    file_type: file
+    follow: false
+  register: ludus_splunk_server_receiver_existing_input_configs
+  when:
+    - ludus_splunk_server_receiver_enabled
+    - ludus_splunk_server_receiver_etc.get('isdir', false)
+    - not (ludus_splunk_server_receiver_etc.get('islnk', false) | bool)
+
+- name: Find symlinked Splunk input configuration files
+  ansible.builtin.find:
+    paths: /opt/splunk/etc
+    patterns: inputs.conf
+    recurse: true
+    file_type: link
+    follow: false
+  register: ludus_splunk_server_receiver_symlinked_input_configs
+  when:
+    - ludus_splunk_server_receiver_enabled
+    - ludus_splunk_server_receiver_etc.get('isdir', false)
+    - not (ludus_splunk_server_receiver_etc.get('islnk', false) | bool)
+
+- name: Reject symlinked Splunk input configuration files when enabled
+  ansible.builtin.assert:
+    that:
+      - ludus_splunk_server_receiver_symlinked_input_configs.files | default([]) | length == 0
+    fail_msg: Refusing symlinked inputs.conf files under the Splunk configuration tree.
+  when: ludus_splunk_server_receiver_enabled
+
+- name: Read existing input configurations without exposing their contents
+  ansible.builtin.slurp:
+    src: "{{ item.path }}"
+  loop: "{{ ludus_splunk_server_receiver_existing_input_configs.files | default([]) }}"
+  register: ludus_splunk_server_receiver_input_contents
+  when: ludus_splunk_server_receiver_enabled
+  no_log: true
+
+- name: Reject a receiver port already configured outside the owned app
+  ansible.builtin.assert:
+    that:
+      - (ludus_splunk_server_receiver_port | string) not in (item.content | b64decode | ludus_splunk_server_receiver_listener_ports)
+    fail_msg: The configured TCP receiver port already appears in an existing unmanaged Splunk listener stanza, including disabled stanzas.
+  loop: "{{ ludus_splunk_server_receiver_input_contents.results | default([]) }}"
+  when:
+    - ludus_splunk_server_receiver_enabled
+    - item.item.path != '/opt/splunk/etc/apps/ludus_receiver/local/inputs.conf'
+  no_log: true

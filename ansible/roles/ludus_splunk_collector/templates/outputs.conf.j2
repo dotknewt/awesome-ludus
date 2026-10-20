@@ -1,0 +1,6 @@
+# Managed by ludus_splunk_collector.
+[tcpout]
+defaultGroup = ludus_collector
+
+[tcpout:ludus_collector]
+server = {{ ludus_splunk_collector_receiver_host }}:{{ ludus_splunk_collector_receiver_port }}

@@ -1,0 +1,219 @@
+---
+- name: Read installed forwarder package status and version
+  ansible.builtin.command:
+    argv: [dpkg-query, -W, "-f=${db:Status-Status}\\t${Version}\\n", splunkforwarder]
+    expand_argument_vars: false
+  register: ludus_splunk_collector_installed
+  changed_when: false
+  failed_when: ludus_splunk_collector_installed.rc not in [0, 1]
+
+- name: Inspect existing home, generated unit, and owned app paths without following symlinks
+  ansible.builtin.stat:
+    path: "{{ item.path }}"
+    follow: false
+  loop:
+    - {key: home, path: /opt/splunkforwarder}
+    - {key: etc, path: /opt/splunkforwarder/etc}
+    - {key: apps, path: /opt/splunkforwarder/etc/apps}
+    - {key: system, path: /opt/splunkforwarder/etc/system}
+    - {key: unit, path: /etc/systemd/system/SplunkForwarder.service}
+    - {key: unit_dropin_dir, path: /etc/systemd/system/SplunkForwarder.service.d}
+    - {key: capability_dropin, path: /etc/systemd/system/SplunkForwarder.service.d/10-ludus-capabilities.conf}
+    - {key: app, path: /opt/splunkforwarder/etc/apps/ludus_collector}
+    - {key: app_local, path: /opt/splunkforwarder/etc/apps/ludus_collector/local}
+    - {key: marker, path: /opt/splunkforwarder/etc/apps/ludus_collector/local/ludus-managed.conf}
+    - {key: inputs, path: /opt/splunkforwarder/etc/apps/ludus_collector/local/inputs.conf}
+    - {key: outputs, path: /opt/splunkforwarder/etc/apps/ludus_collector/local/outputs.conf}
+    - {key: seed, path: /opt/splunkforwarder/etc/system/local/user-seed.conf}
+    - {key: passwd, path: /opt/splunkforwarder/etc/passwd}
+    - {key: system_local, path: /opt/splunkforwarder/etc/system/local}
+  register: ludus_splunk_collector_paths
+
+- name: Index inspected filesystem paths by key
+  ansible.builtin.set_fact:
+    ludus_splunk_collector_path_state: "{{ ludus_splunk_collector_path_state | default({}) | combine({item.item.key: item.stat}) }}"
+  loop: "{{ ludus_splunk_collector_paths.results }}"
+
+- name: Read existing splunkfwd account and group
+  ansible.builtin.command:
+    argv: [getent, passwd, splunkfwd]
+  register: ludus_splunk_collector_user_record
+  changed_when: false
+  failed_when: ludus_splunk_collector_user_record.rc not in [0, 2]
+
+- name: Read existing splunkfwd group
+  ansible.builtin.command:
+    argv: [getent, group, splunkfwd]
+  register: ludus_splunk_collector_group_record
+  changed_when: false
+  failed_when: ludus_splunk_collector_group_record.rc not in [0, 2]
+
+- name: Read the existing splunkfwd primary group name
+  ansible.builtin.command:
+    argv: [id, -gn, splunkfwd]
+  register: ludus_splunk_collector_primary_group
+  changed_when: false
+  failed_when: ludus_splunk_collector_primary_group.rc not in [0, 1]
+
+- name: Check systemd unit load state
+  ansible.builtin.command:
+    argv: [systemctl, show, SplunkForwarder.service, --property=LoadState, --value]
+  register: ludus_splunk_collector_unit_loadstate
+  changed_when: false
+
+- name: Refuse incompatible package, account, home, unit, seed, or unmanaged app state
+  ansible.builtin.assert:
+    that:
+      - >-
+        ludus_splunk_collector_installed.rc != 0
+        or (ludus_splunk_collector_installed.stdout.split('\t') | length == 2
+        and ludus_splunk_collector_installed.stdout.split('\t')[0] == 'installed'
+        and ludus_splunk_collector_installed.stdout.split('\t')[1] == ludus_splunk_collector_version)
+      - not (ludus_splunk_collector_path_state.home.get('islnk', false) | bool)
+      - not (ludus_splunk_collector_path_state.unit.get('islnk', false) | bool)
+      - ludus_splunk_collector_installed.rc == 0 or not ludus_splunk_collector_path_state.home.get('exists', false)
+      - ludus_splunk_collector_installed.rc == 0 or not ludus_splunk_collector_path_state.unit.get('exists', false)
+      - ludus_splunk_collector_installed.rc == 0 or ludus_splunk_collector_unit_loadstate.stdout == 'not-found'
+      - >-
+        ludus_splunk_collector_installed.rc != 0
+        or (ludus_splunk_collector_path_state.home.get('exists', false)
+        and ludus_splunk_collector_path_state.home.get('isdir', false))
+      - >-
+        ludus_splunk_collector_installed.rc != 0
+        or (ludus_splunk_collector_user_record.rc == 0
+        and ludus_splunk_collector_group_record.rc == 0)
+      - >-
+        ludus_splunk_collector_user_record.rc != 0
+        or ludus_splunk_collector_group_record.rc != 0
+        or (ludus_splunk_collector_user_record.stdout.split(':') | length == 7
+        and ludus_splunk_collector_user_record.stdout.split(':')[2] | int > 0
+        and ludus_splunk_collector_user_record.stdout.split(':')[5] == '/opt/splunkforwarder'
+        and ludus_splunk_collector_user_record.stdout.split(':')[6] == '/usr/sbin/nologin'
+        and ludus_splunk_collector_user_record.stdout.split(':')[3] | int
+        == ludus_splunk_collector_group_record.stdout.split(':')[2] | int)
+      - ludus_splunk_collector_user_record.rc != 0 or ludus_splunk_collector_group_record.rc == 0
+      - ludus_splunk_collector_user_record.rc != 0 or ludus_splunk_collector_primary_group.stdout == 'splunkfwd'
+      - ludus_splunk_collector_user_record.rc != 0 or ludus_splunk_collector_group_record.stdout.split(':')[3] == ''
+      - ludus_splunk_collector_installed.rc == 0 or ludus_splunk_collector_user_record.rc == 0 or ludus_splunk_collector_group_record.rc != 0
+      - ludus_splunk_collector_path_state.passwd.get('exists', false) or not ludus_splunk_collector_path_state.seed.get('exists', false)
+      - >-
+        not ludus_splunk_collector_path_state.passwd.get('exists', false)
+        or (ludus_splunk_collector_path_state.passwd.get('isreg', false)
+        and ludus_splunk_collector_path_state.passwd.get('size', 0) | int > 0)
+      - >-
+        not ludus_splunk_collector_path_state.etc.get('exists', false)
+        or (ludus_splunk_collector_path_state.etc.get('isdir', false)
+        and not (ludus_splunk_collector_path_state.etc.get('islnk', false) | bool))
+      - >-
+        not ludus_splunk_collector_path_state.apps.get('exists', false)
+        or (ludus_splunk_collector_path_state.apps.get('isdir', false)
+        and not (ludus_splunk_collector_path_state.apps.get('islnk', false) | bool))
+      - >-
+        not ludus_splunk_collector_path_state.system.get('exists', false)
+        or (ludus_splunk_collector_path_state.system.get('isdir', false)
+        and not (ludus_splunk_collector_path_state.system.get('islnk', false) | bool))
+      - >-
+        not ludus_splunk_collector_path_state.system_local.get('exists', false)
+        or (ludus_splunk_collector_path_state.system_local.get('isdir', false)
+        and not (ludus_splunk_collector_path_state.system_local.get('islnk', false) | bool))
+      - not (ludus_splunk_collector_path_state.passwd.get('exists', false) and (ludus_splunk_collector_path_state.passwd.get('islnk', false) | bool))
+      - not (ludus_splunk_collector_path_state.seed.get('exists', false) and (ludus_splunk_collector_path_state.seed.get('islnk', false) | bool))
+      - not ludus_splunk_collector_path_state.app.get('exists', false) or ludus_splunk_collector_path_state.marker.get('exists', false)
+      - not ludus_splunk_collector_path_state.app.get('exists', false) or not (ludus_splunk_collector_path_state.app.get('islnk', false) | bool)
+      - >-
+        not ludus_splunk_collector_path_state.app_local.get('exists', false)
+        or (ludus_splunk_collector_path_state.app_local.get('isdir', false)
+        and not (ludus_splunk_collector_path_state.app_local.get('islnk', false) | bool))
+      - >-
+        not ludus_splunk_collector_path_state.unit_dropin_dir.get('exists', false)
+        or (ludus_splunk_collector_path_state.unit_dropin_dir.get('isdir', false)
+        and not (ludus_splunk_collector_path_state.unit_dropin_dir.get('islnk', false) | bool))
+      - not (ludus_splunk_collector_path_state.marker.get('exists', false) and (ludus_splunk_collector_path_state.marker.get('islnk', false) | bool))
+      - not (ludus_splunk_collector_path_state.inputs.get('exists', false) and (ludus_splunk_collector_path_state.inputs.get('islnk', false) | bool))
+      - not (ludus_splunk_collector_path_state.outputs.get('exists', false) and (ludus_splunk_collector_path_state.outputs.get('islnk', false) | bool))
+      - not (ludus_splunk_collector_path_state.marker.get('exists', false) and not (ludus_splunk_collector_path_state.marker.get('isreg', false) | bool))
+      - not (ludus_splunk_collector_path_state.inputs.get('exists', false) and not (ludus_splunk_collector_path_state.inputs.get('isreg', false) | bool))
+      - not (ludus_splunk_collector_path_state.outputs.get('exists', false) and not (ludus_splunk_collector_path_state.outputs.get('isreg', false) | bool))
+      - >-
+        not (ludus_splunk_collector_path_state.capability_dropin.get('exists', false)
+        and (ludus_splunk_collector_path_state.capability_dropin.get('islnk', false) | bool))
+      - >-
+        not (ludus_splunk_collector_path_state.capability_dropin.get('exists', false)
+        and not (ludus_splunk_collector_path_state.capability_dropin.get('isreg', false) | bool))
+    fail_msg: Existing collector state is incompatible or unmanaged; refusing to replace package, identity, seed, unit, or app configuration.
+
+- name: Read existing ownership marker
+  ansible.builtin.slurp:
+    src: /opt/splunkforwarder/etc/apps/ludus_collector/local/ludus-managed.conf
+  register: ludus_splunk_collector_existing_marker
+  when: ludus_splunk_collector_path_state.marker.get('exists', false)
+  no_log: true
+
+- name: Require existing app marker to belong to this role
+  ansible.builtin.assert:
+    that:
+      - (ludus_splunk_collector_existing_marker.content | b64decode | trim) == '# Managed by ludus_splunk_collector; do not edit.'
+    fail_msg: Existing ludus_collector app marker is not owned by this role.
+  when: ludus_splunk_collector_path_state.marker.get('exists', false)
+
+- name: Inspect existing service identity, execution, drop-ins, and capability policy
+  when: ludus_splunk_collector_unit_loadstate.stdout != 'not-found'
+  block:
+    - name: Read existing effective service user and group
+      ansible.builtin.command:
+        argv: [systemctl, show, SplunkForwarder.service, "--property={{ item }}", --value]
+      loop: [User, Group, FragmentPath, DropInPaths, CapabilityBoundingSet, AmbientCapabilities]
+      register: ludus_splunk_collector_existing_service_properties
+      changed_when: false
+
+    - name: Inspect existing service unit file
+      ansible.builtin.stat:
+        path: "{{ (ludus_splunk_collector_existing_service_properties.results | selectattr('item', 'equalto', 'FragmentPath') | first).stdout }}"
+        follow: false
+      register: ludus_splunk_collector_existing_unit_stat
+
+    - name: Read existing service unit definition
+      ansible.builtin.slurp:
+        src: "{{ (ludus_splunk_collector_existing_service_properties.results | selectattr('item', 'equalto', 'FragmentPath') | first).stdout }}"
+      register: ludus_splunk_collector_existing_unit_content
+      no_log: true
+
+    - name: Reject unrelated service identity or executable
+      ansible.builtin.assert:
+        that:
+          - (ludus_splunk_collector_existing_service_properties.results | selectattr('item', 'equalto', 'User') | first).stdout == 'splunkfwd'
+          - (ludus_splunk_collector_existing_service_properties.results | selectattr('item', 'equalto', 'Group') | first).stdout == 'splunkfwd'
+          - not (ludus_splunk_collector_existing_unit_stat.stat.get('islnk', false) | bool)
+          - ludus_splunk_collector_existing_unit_content.content | b64decode | ludus_splunk_collector_validate_forwarder_unit_execs
+          - >-
+            (ludus_splunk_collector_existing_service_properties.results
+            | selectattr('item', 'equalto', 'DropInPaths') | first).stdout | trim
+            in ['', '/etc/systemd/system/SplunkForwarder.service.d/10-ludus-capabilities.conf']
+          - >-
+            (ludus_splunk_collector_existing_service_properties.results
+            | selectattr('item', 'equalto', 'DropInPaths') | first).stdout | trim
+            != '/etc/systemd/system/SplunkForwarder.service.d/10-ludus-capabilities.conf'
+            or ludus_splunk_collector_path_state.capability_dropin.get('exists', false)
+          - >-
+            not (ludus_splunk_collector_path_state.capability_dropin.get('exists', false))
+            or (ludus_splunk_collector_path_state.capability_dropin.get('isreg', false) | bool)
+        fail_msg: Existing SplunkForwarder.service is not the expected vendor service or contains an unmanaged drop-in.
+
+
+- name: Read existing role-owned capability drop-in
+  ansible.builtin.slurp:
+    src: /etc/systemd/system/SplunkForwarder.service.d/10-ludus-capabilities.conf
+  register: ludus_splunk_collector_existing_capability_dropin
+  when: ludus_splunk_collector_path_state.capability_dropin.get('exists', false)
+  no_log: true
+
+- name: Refuse a capability drop-in not previously owned by this role
+  ansible.builtin.assert:
+    that:
+      - >-
+        (ludus_splunk_collector_existing_capability_dropin.content | b64decode)
+        == ('# Managed by ludus_splunk_collector; CAP_* grants are intentionally cleared.\n'
+        ~ '[Service]\n' ~ 'CapabilityBoundingSet=\n'
+        ~ 'AmbientCapabilities=\n' ~ 'NoNewPrivileges=true\n')
+    fail_msg: Existing capability drop-in is not the role-owned restrictive policy.
+  when: ludus_splunk_collector_path_state.capability_dropin.get('exists', false)
