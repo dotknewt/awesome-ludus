@@ -48,6 +48,34 @@ def _task_sequence(role):
     return list(expand(_load_yaml(entry, []), entry))
 
 
+def _linux_task_sequence(role):
+    """Expand only the Linux-guarded branch, preserving inherited guards/order."""
+    entry = role / "tasks/main.yml"
+
+    def walk(tasks, origin, guards=()):
+        for task in tasks or []:
+            own = task.get("when", [])
+            own = [own] if isinstance(own, str) else own
+            effective = (*guards, *own)
+            if any("ansible_system == 'win32nt'" in str(guard).lower() for guard in effective):
+                continue
+            if not any("ansible_system == 'linux'" in str(guard).lower() for guard in effective):
+                if not guards:
+                    for section in ("block", "rescue", "always"):
+                        yield from walk(task.get(section, []), origin, effective)
+                continue
+            yield task
+            for section in ("block", "rescue", "always"):
+                yield from walk(task.get(section, []), origin, effective)
+            imported = task.get("ansible.builtin.import_tasks", task.get("import_tasks"))
+            if isinstance(imported, str) and "{{" not in imported:
+                path = (origin.parent / imported).resolve()
+                if path.is_file() and "windows" not in path.parts:
+                    yield from walk(_load_yaml(path, []), path, effective)
+
+    return list(walk(_load_yaml(entry, []), entry)) if entry.is_file() else []
+
+
 def _assertion_expressions(task):
     for module in ("ansible.builtin.assert", "assert"):
         if module in task:
@@ -68,6 +96,7 @@ class SplunkCollectorStaticContract(unittest.TestCase):
         cls.meta = _load_yaml(ROLE / "meta/main.yml", {})
         cls.syntax = _load_yaml(ROLE / "tests/syntax.yml", [])
         cls.ordered_tasks = _task_sequence(ROLE)
+        cls.linux_tasks = _linux_task_sequence(ROLE)
         # Also inspect all task/handler files, including conditionally included tasks.
         cls.flat_tasks = [task for folder in ("tasks", "handlers") if (ROLE / folder).exists()
                           for path in sorted((ROLE / folder).glob("**/*.y*ml"))
@@ -108,12 +137,13 @@ class SplunkCollectorStaticContract(unittest.TestCase):
         self.assertEqual(info.get("min_ansible_version"), "2.16")
         self.assertEqual(
             {(item.get("name"), tuple(item.get("versions", []))) for item in info.get("platforms", [])},
-            {("Debian", ("trixie",)), ("Ubuntu", ("noble", "resolute"))},
+            {("Debian", ("trixie",)), ("Ubuntu", ("noble", "resolute")),
+             ("Windows", ("11", "2019", "2022", "2025"))},
         )
         self.assertEqual(self.meta.get("dependencies"), [])
 
     def test_platform_license_and_injected_inputs_are_checked_before_mutation(self):
-        expressions = [expression for task in self.flat_tasks for expression in _assertion_expressions(task)]
+        expressions = [expression for task in self.linux_tasks for expression in _assertion_expressions(task)]
         joined = "\n".join(expressions)
         for expression in (
             'ansible_architecture == "x86_64"', 'ansible_service_mgr == "systemd"',
@@ -133,14 +163,14 @@ class SplunkCollectorStaticContract(unittest.TestCase):
             "ludus_splunk_collector_valid_username",
         ):
             self.assertIn(filter_name, joined)
-        guarded = [index for index, task in enumerate(self.ordered_tasks)
+        guarded = [index for index, task in enumerate(self.linux_tasks)
                    if any("ludus_splunk_collector_accept_license" in expr for expr in _assertion_expressions(task))]
-        mutations = [index for index, task in enumerate(self.ordered_tasks)
+        mutations = [index for index, task in enumerate(self.linux_tasks)
                      if any(_module(task, module) is not None for module in ("apt", "get_url", "user", "group", "file", "template"))]
         self.assertTrue(guarded, "missing license/input validation assertions")
         self.assertTrue(mutations, "missing package/identity mutation tasks")
         self.assertLess(min(guarded), min(mutations), "input/license guards must precede mutation")
-        credential_checks = [task for task in self.flat_tasks
+        credential_checks = [task for task in self.linux_tasks
                              if any("admin_username" in expr or "admin_password" in expr for expr in _assertion_expressions(task))]
         self.assertTrue(credential_checks, "missing credential assertion task")
         self.assertTrue(any(task.get("no_log") is True for task in credential_checks),
@@ -192,9 +222,9 @@ class SplunkCollectorStaticContract(unittest.TestCase):
         ordered_text = "\n".join(str(task) for task in self.ordered_tasks)
         self.assertIn("passwd", ordered_text)
         self.assertIn("seed_created.changed", ordered_text)
-        auth_indices = [index for index, task in enumerate(self.ordered_tasks)
+        auth_indices = [index for index, task in enumerate(self.linux_tasks)
                         if _module(task, "uri") is not None and "127.0.0.1" in str(_module(task, "uri"))]
-        cleanup_indices = [index for index, task in enumerate(self.ordered_tasks)
+        cleanup_indices = [index for index, task in enumerate(self.linux_tasks)
                            if _module(task, "file") is not None and _module(task, "file").get("state") == "absent"
                            and "user-seed.conf" in str(_module(task, "file"))]
         self.assertTrue(auth_indices, "missing authenticated loopback readiness check")
@@ -264,12 +294,13 @@ class SplunkCollectorStaticContract(unittest.TestCase):
             self.assertNotIn("{{", imported, "dynamic task inclusion is not statically orderable")
             self.assertTrue((ROLE / "tasks" / imported).is_file(), f"unresolved task import: {imported}")
 
-        flushes = [index for index, task in enumerate(self.ordered_tasks)
+        linux_sequence = self.linux_tasks
+        flushes = [index for index, task in enumerate(linux_sequence)
                    if _module(task, "meta") == "flush_handlers"]
-        starts = [index for index, task in enumerate(self.ordered_tasks)
+        starts = [index for index, task in enumerate(linux_sequence)
                   if _module(task, "systemd_service") is not None
                   and _module(task, "systemd_service").get("state") == "started"]
-        readiness = [index for index, task in enumerate(self.ordered_tasks)
+        readiness = [index for index, task in enumerate(linux_sequence)
                      if _module(task, "wait_for") is not None or _module(task, "uri") is not None]
         self.assertTrue(flushes, "missing handler flush before readiness")
         self.assertTrue(starts, "missing forwarder start")

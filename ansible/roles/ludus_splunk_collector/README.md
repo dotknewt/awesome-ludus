@@ -11,15 +11,14 @@ create indexes.
 
 ## Supported scope and evidence
 
-The declared targets are Debian 13 (trixie), Ubuntu 24.04 (noble), and Ubuntu
-26.04 (resolute), x86_64, with systemd and ansible-core >= 2.16. The pinned package
-is Universal Forwarder 10.6.1.1, downloaded from Splunk over HTTPS and checked
-against its published SHA-512 sidecar before Debian metadata is checked. This
-role's tests and source review are static evidence only. They do **not** establish
-that the selected 10.6.1.1 package runs on these OS releases: selected-version
-compatibility remains **not verified** until a separately authorized native
-installation and convergence test. The seed-file syntax and generated-unit
-details likewise require native verification against the selected package.
+Linux targets are Debian 13 (trixie), Ubuntu 24.04 (noble), and Ubuntu 26.04
+(resolute), x86_64 with systemd. Windows targets are Windows 11 x64 and Windows
+Server 2019/2022/2025 x64 with PowerShell 5.1. Both branches require ansible-core
+>= 2.16; Windows uses `ansible.windows` 3.8.0 and `community.windows` 3.3.0.
+Windows uses the separately pinned Universal Forwarder 10.6.1.1 x64 MSI and
+SHA-512 checksum. The selected Windows OS/version compatibility, MSI service
+identity, Event Log ACL behavior, seed authentication, and runtime convergence
+remain **not verified** until separately authorized native tests.
 
 Sources and evidence are summarized in
 [`docs/research/ludus-splunk-collector-linux-logging.md`](../../../docs/research/ludus-splunk-collector-linux-logging.md).
@@ -41,6 +40,15 @@ All inputs use the `ludus_splunk_collector_` prefix.
 | `receiver_host` | empty | Required DNS name or IPv4 host for the separate Splunk receiver |
 | `receiver_port` | `9997` | Receiver TCP port, range 1–65535 |
 | `monitors` | `/var/log/laurel/audit.log`, sourcetype `laurel:json`, index `main` | Explicit monitor entries; each has `path`, `sourcetype`, and `index` |
+
+Windows additionally exposes four `ludus_splunk_collector_windows_*` artifact
+inputs: `package_url`, `package_checksum`, `version`, and
+`msi_product_version`. They default to the verified Splunk Universal Forwarder
+10.6.1.1 Windows x64 MSI identity and checksum; changing them is not supported by
+the fixed validation contract. Three role-prefixed Windows index defaults route
+Security to `winlogs`, Sysmon to `sysmon`, and SilkService-Log to `etw`.
+`accept_license` must still be explicitly true. Shared receiver and disposable
+lab administrator inputs are used by both platforms.
 
 The role validates monitor mappings, normalized literal absolute file paths,
 unique paths, metadata names, receiver host/port, URL credentials, and license
@@ -93,6 +101,20 @@ not the selected 10.6.1.1 build. The documented fresh-tree recursive ownership
 is vendor-supported, but exact generated-unit and runtime compatibility remain
 unverified for the selected package.
 
+On Windows, the forwarder is installed at the fixed
+`C:\Program Files\SplunkUniversalForwarder` home as service
+`SplunkForwarder`, using the `NT SERVICE\SplunkForwarder` virtual account. The
+role records phase, artifact/service identity, and managed configuration hashes
+in an Administrators/SYSTEM-protected marker under
+`C:\ProgramData\Ludus\SplunkCollector`, outside the service-writable home.
+Unmanaged installations, unsafe reparse points, malformed ownership, and
+conflicting inherited event/output stanzas fail closed. The role adds only
+per-channel Event Log READ access for the local service SID; it does not use
+LocalSystem or alter Security/Sysmon producer policy. Security is XML-rendered,
+starts at `oldest`, uses `current_only=0`, and has no exclusions. Sysmon has no
+collector-owned filters. Missing SilkService-Log is rendered disabled with a
+warning and becomes enabled after the channel appears.
+
 The forwarder app is isolated at
 `/opt/splunkforwarder/etc/apps/ludus_collector/local/`. Its ownership marker
 protects `inputs.conf` and `outputs.conf`; configuration edits notify a service
@@ -129,3 +151,14 @@ selected-version capability policy, seed syntax, and actual listener behavior
 need authorized native tests; rotation and ingestion live verification remain
 absent. The unauthenticated-to-authenticated bootstrap path should be verified
 on the selected package before relying on it in a deployed lab.
+
+Windows MSI reboot-required results stop the owned service, disable automatic
+start, retain pending evidence, and fail without rebooting. Authentication
+failures retain the protected seed and pending phase; cleanup occurs only after
+authenticated loopback readiness and a nonempty `etc/passwd`. Ready convergence
+checks actual service/product identity and managed configuration hashes. Only
+changed managed input/output templates notify a guarded Windows restart.
+
+For Windows lab use, deploy the receiver first and the Sysmon producer before
+the collector; express role prerequisites using explicit `depends_on` VM and
+installed role identities. The collector does not install Sysmon or SilkService.

@@ -1,0 +1,21 @@
+# Managed by ludus_splunk_collector. Do not edit.
+[WinEventLog://Security]
+renderXml = 1
+start_from = oldest
+current_only = 0
+index = {{ ludus_splunk_collector_windows_security_index }}
+
+[WinEventLog://Microsoft-Windows-Sysmon/Operational]
+renderXml = 1
+source = XmlWinEventLog:Microsoft-Windows-Sysmon/Operational
+index = {{ ludus_splunk_collector_windows_sysmon_index }}
+
+[WinEventLog://SilkService-Log]
+{% if ludus_splunk_collector_windows_silk_channel_present | bool %}
+disabled = 0
+{% else %}
+# WARNING: SilkService-Log is absent; its collection stanza remains disabled.
+disabled = 1
+{% endif %}
+index = {{ ludus_splunk_collector_windows_silk_index }}
+sourcetype = json

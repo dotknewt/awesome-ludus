@@ -1,5 +1,14 @@
 ---
-- name: Install and configure Splunk Universal Forwarder as a protected system service
+- name: Reject unsupported collector operating systems before either platform branch
+  ansible.builtin.assert:
+    that: ansible_system in ['Win32NT', 'Linux']
+    fail_msg: This collector supports only its declared Linux and Windows target branches.
+
+- name: Validate and configure the Windows Universal Forwarder collector
+  ansible.builtin.import_tasks: windows/main.yml
+  when: ansible_system == 'Win32NT'
+
+- name: Validate and configure the Linux Universal Forwarder collector
   become: true
   block:
     - name: Validate platform and role inputs before mutation
@@ -13,3 +22,4 @@
 
     - name: Configure and bootstrap the collector
       ansible.builtin.import_tasks: configure.yml
+  when: ansible_system == 'Linux'
