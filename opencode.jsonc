@@ -5,18 +5,6 @@
   },
   "mcp": {
     "servers": {
-      "default": {
-        "type": "local",
-        "command": [
-          "docker",
-          "mcp",
-          "gateway",
-          "run",
-          "--profile",
-          "default"
-        ],
-        "disabled": false
-      },
       "ludus-mcp": {
         "type": "local",
         "command": [
@@ -33,18 +21,6 @@
       "firecrawl": {
         "type": "remote",
         "url": "https://mcp.firecrawl.dev/v2/mcp-oauth",
-        "disabled": false
-      },
-      "librarian": {
-        "type": "local",
-        "command": [
-          "docker",
-          "mcp",
-          "gateway",
-          "run",
-          "--profile",
-          "librarian"
-        ],
         "disabled": false
       },
       "hermes": {
