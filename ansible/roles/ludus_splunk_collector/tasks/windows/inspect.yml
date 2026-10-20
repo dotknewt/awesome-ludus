@@ -1,0 +1,229 @@
+---
+- name: Inspect protected Windows paths, service identity, marker, channels, and app conflicts
+  ansible.windows.win_powershell:
+    error_action: stop
+    script: |
+      $ErrorActionPreference = 'Stop'
+      $splunkHome = 'C:\Program Files\SplunkUniversalForwarder'
+      $etc = Join-Path $splunkHome 'etc'
+      $markerPath = 'C:\ProgramData\Ludus\SplunkCollector\ownership.json'
+      $stateRoot = 'C:\ProgramData\Ludus\SplunkCollector'
+      $stateParent = 'C:\ProgramData\Ludus'
+      $paths = @('C:\ProgramData', $stateParent, $stateRoot, 'C:\Program Files', $splunkHome)
+      $reparse = @()
+      foreach ($path in $paths) {
+        $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        if ($null -ne $item -and (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) { $reparse += $path }
+      }
+      if (Test-Path -LiteralPath $splunkHome -PathType Container) {
+        Get-ChildItem -LiteralPath $splunkHome -Force -Recurse -ErrorAction Stop | ForEach-Object {
+          if (($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { $reparse += $_.FullName }
+        }
+      }
+      if (Test-Path -LiteralPath $stateRoot -PathType Container) {
+        Get-ChildItem -LiteralPath $stateRoot -Force -Recurse -ErrorAction Stop | ForEach-Object {
+          if (($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { $reparse += $_.FullName }
+        }
+      }
+      $service = Get-CimInstance Win32_Service -Filter "Name='SplunkForwarder'" -ErrorAction SilentlyContinue
+      $products = @()
+      foreach ($root in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                          'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*')) {
+        $products += Get-ItemProperty -Path $root -ErrorAction SilentlyContinue |
+          Where-Object { $_.DisplayName -eq 'UniversalForwarder' }
+      }
+      $executableVersion = ''
+      if ($service -and (Test-Path -LiteralPath $home)) {
+        $exe = Get-Item -LiteralPath (Join-Path $home 'bin\splunkd.exe') -ErrorAction SilentlyContinue
+        if ($exe) { $executableVersion = $exe.VersionInfo.ProductVersion }
+      }
+      $marker = $null
+      $stateAcl = $null
+      $markerAcl = $null
+      if (Test-Path -LiteralPath $stateRoot -PathType Container) { $stateAcl = Get-Acl -LiteralPath $stateRoot }
+      if (Test-Path -LiteralPath $markerPath -PathType Leaf) {
+        try {
+          $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json -ErrorAction Stop
+          $markerAcl = Get-Acl -LiteralPath $markerPath
+        }
+        catch { $Ansible.Failed = $true; $Ansible.Result = 'Ownership marker is malformed; preserve it and recover manually.' }
+      }
+      $channelNames = @('Security', 'Microsoft-Windows-Sysmon/Operational')
+      $channels = @{}
+      foreach ($name in $channelNames) {
+        try {
+          $log = Get-WinEvent -ListLog $name -ErrorAction Stop
+          $channels[$name] = @{ exists = $true; descriptor = $log.SecurityDescriptor }
+        } catch { $channels[$name] = @{ exists = $false; descriptor = $null } }
+      }
+      try { $silk = Get-WinEvent -ListLog 'SilkService-Log' -ErrorAction Stop; $silkExists = $true }
+      catch { $silkExists = $false }
+      $conflicts = @()
+      if (Test-Path -LiteralPath $etc) {
+        $ownedLocal = Join-Path $etc 'apps\ludus_collector\local'
+        $roots = @(
+          @{ path = (Join-Path $etc 'apps'); kind = 'app' },
+          @{ path = (Join-Path $etc 'system\local'); kind = 'local' },
+          @{ path = (Join-Path $etc 'system\default'); kind = 'default' }
+        )
+        foreach ($rootSpec in $roots) {
+          $root = $rootSpec.path
+          if (-not (Test-Path -LiteralPath $root)) { continue }
+          Get-ChildItem -LiteralPath $root -Filter '*.conf' -File -Recurse -Force | ForEach-Object {
+            $full = [IO.Path]::GetFullPath($_.FullName)
+            $managedInputs = [IO.Path]::GetFullPath((Join-Path $ownedLocal 'inputs.conf'))
+            $managedOutputs = [IO.Path]::GetFullPath((Join-Path $ownedLocal 'outputs.conf'))
+            if ($marker -and ($full.Equals($managedInputs, [StringComparison]::OrdinalIgnoreCase) -or
+                              $full.Equals($managedOutputs, [StringComparison]::OrdinalIgnoreCase))) { return }
+            $text = [IO.File]::ReadAllText($_.FullName)
+            $stanza = ''
+            $activeOutput = $false
+            foreach ($line in ($text -split "`r?`n")) {
+              if ($line -match '^\s*\[([^\]]+)\]\s*$') {
+                $stanza = $Matches[1]
+                if ($stanza -match '^tcpout:.+') { $activeOutput = $true }
+              } elseif ($stanza -ieq 'tcpout' -and $line -match '^\s*defaultGroup\s*=\s*\S+') {
+                $activeOutput = $true
+              }
+              if ($stanza -match '^WinEventLog://(?:Security|Microsoft-Windows-Sysmon/Operational|SilkService-Log)$') {
+                $conflicts += $_.FullName; break
+              }
+            }
+            if ($activeOutput -and -not ($rootSpec.kind -eq 'default' -and
+                $text -match '(?im)^\s*\[tcpout\]\s*$' -and
+                $text -notmatch '(?im)^\s*\[tcpout:[^\]]+\]\s*$' -and
+                $text -notmatch '(?im)^\s*defaultGroup\s*=\s*\S+')) { $conflicts += $_.FullName }
+          }
+        }
+      }
+      $aclState = @{}
+      foreach ($entry in @(@{ name = 'state'; acl = $stateAcl }, @{ name = 'marker'; acl = $markerAcl })) {
+        if (-not $entry.acl) { $aclState[$entry.name] = @{ valid = $false; owner = '' }; continue }
+        $ownerSid = $entry.acl.Owner
+        try { $ownerSid = ([System.Security.Principal.NTAccount]$entry.acl.Owner).Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { }
+        $allowedOwners = @('S-1-5-18', 'S-1-5-32-544')
+        $valid = $ownerSid -in $allowedOwners
+        foreach ($rule in $entry.acl.Access) {
+          $ruleSid = $rule.IdentityReference.Value
+          try { $ruleSid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { }
+          if ($rule.IsInherited -or ($rule.AccessControlType -eq 'Allow' -and $ruleSid -notin $allowedOwners)) { $valid = $false }
+          if ($ruleSid -eq 'S-1-5-80-0' -and ($rule.FileSystemRights.ToString() -match 'Write|Modify|FullControl|Delete')) { $valid = $false }
+        }
+        $aclState[$entry.name] = @{ valid = $valid; owner = $ownerSid }
+      }
+      $Ansible.Result = @{
+        home_exists = Test-Path -LiteralPath $splunkHome
+        state_root_exists = Test-Path -LiteralPath $stateRoot -PathType Container
+        state_parent_exists = Test-Path -LiteralPath $stateParent -PathType Container
+        marker_exists = Test-Path -LiteralPath $markerPath -PathType Leaf
+        marker = $marker
+        acl = $aclState
+        service_exists = ($null -ne $service)
+        product_count = $products.Count
+        product_version = if ($products.Count -eq 1) { $products[0].DisplayVersion } else { '' }
+        service_path = if ($service) { $service.PathName } else { '' }
+        service_account = if ($service) { $service.StartName } else { '' }
+        service_state = if ($service) { $service.State } else { '' }
+        service_start_mode = if ($service) { $service.StartMode } else { '' }
+        executable_version = $executableVersion
+        reparse_paths = $reparse
+        channels = $channels
+        silk_exists = $silkExists
+        config_conflicts = $conflicts
+      }
+  register: ludus_splunk_collector_windows_inspection
+
+- name: Reject unsafe Windows paths, missing required channels, or conflicting app configuration
+  ansible.builtin.assert:
+    that:
+      - ludus_splunk_collector_windows_inspection.result.reparse_paths | length == 0
+      - ludus_splunk_collector_windows_inspection.result.channels['Security'].exists
+      - ludus_splunk_collector_windows_inspection.result.channels['Security'].descriptor is string
+      - ludus_splunk_collector_windows_inspection.result.channels['Microsoft-Windows-Sysmon/Operational'].exists
+      - ludus_splunk_collector_windows_inspection.result.channels['Microsoft-Windows-Sysmon/Operational'].descriptor is string
+      - ludus_splunk_collector_windows_inspection.result.config_conflicts | length == 0
+    fail_msg: Unsafe path, missing/uninspectable required Event Log channel, or conflicting inherited Splunk configuration; no installation was changed.
+
+- name: Refuse unmanaged or malformed existing Windows installation state
+  ansible.builtin.assert:
+    that:
+      - >-
+        not ludus_splunk_collector_windows_inspection.result.home_exists
+        and not ludus_splunk_collector_windows_inspection.result.service_exists
+        and not ludus_splunk_collector_windows_inspection.result.marker_exists
+        and ludus_splunk_collector_windows_inspection.result.product_count == 0
+        or ludus_splunk_collector_windows_inspection.result.marker_exists
+        and ludus_splunk_collector_windows_inspection.result.marker.schema_version | int == 1
+        and ludus_splunk_collector_windows_inspection.result.marker.phase in ['pending', 'bootstrapPending', 'ready']
+    fail_msg: Existing Windows forwarder state is unmanaged or has an unsupported ownership marker; preserve it for manual recovery.
+
+- name: Verify marker-backed service ownership before allowing convergence
+  ansible.builtin.assert:
+    that:
+      - ludus_splunk_collector_windows_inspection.result.service_exists
+      - ludus_splunk_collector_windows_inspection.result.home_exists
+      - ludus_splunk_collector_windows_inspection.result.service_path is string
+      - ludus_splunk_collector_windows_inspection.result.service_account == 'NT SERVICE\\SplunkForwarder'
+      - ludus_splunk_collector_windows_inspection.result.marker.service_name == 'SplunkForwarder'
+      - ludus_splunk_collector_windows_inspection.result.marker.service_account == 'NT SERVICE\\SplunkForwarder'
+      - ludus_splunk_collector_windows_inspection.result.marker.version == ludus_splunk_collector_windows_version
+      - ludus_splunk_collector_windows_inspection.result.marker.artifact_url == ludus_splunk_collector_windows_package_url
+      - ludus_splunk_collector_windows_inspection.result.marker.artifact_checksum == ludus_splunk_collector_windows_package_checksum
+      - ludus_splunk_collector_windows_inspection.result.acl.state.valid
+      - ludus_splunk_collector_windows_inspection.result.acl.marker.valid
+    fail_msg: Marker is insufficient to adopt the installation; actual service path, account, and version must match.
+  when: ludus_splunk_collector_windows_inspection.result.marker_exists
+
+- name: Record the inspected ownership phase without modifying marker state
+  ansible.builtin.set_fact:
+    ludus_splunk_collector_windows_phase: >-
+      {{ ludus_splunk_collector_windows_inspection.result.marker.phase
+         if ludus_splunk_collector_windows_inspection.result.marker_exists else 'absent' }}
+
+- name: Record observed SilkService channel availability for rendering
+  ansible.builtin.set_fact:
+    ludus_splunk_collector_windows_silk_channel_present: "{{ ludus_splunk_collector_windows_inspection.result.silk_exists | bool }}"
+
+- name: Refuse ambiguous pending MSI state on rerun
+  ansible.builtin.assert:
+    that:
+      - >-
+        ludus_splunk_collector_windows_phase in ['absent', 'bootstrapPending', 'ready']
+        or ludus_splunk_collector_windows_phase == 'pending'
+        and ludus_splunk_collector_windows_inspection.result.service_exists
+        and ludus_splunk_collector_windows_inspection.result.service_state == 'Stopped'
+        and ludus_splunk_collector_windows_inspection.result.service_start_mode == 'Disabled'
+        and ludus_splunk_collector_windows_inspection.result.service_account == 'NT SERVICE\\SplunkForwarder'
+        and ludus_splunk_collector_windows_inspection.result.product_version == ludus_splunk_collector_windows_version
+    fail_msg: MSI ownership is pending without a verified stopped/disabled owned service; preserve files and follow manual recovery evidence.
+
+- name: Verify marker-backed installed product version
+  ansible.builtin.assert:
+    that:
+      - ludus_splunk_collector_windows_inspection.result.product_count == 1
+      - ludus_splunk_collector_windows_inspection.result.product_version == ludus_splunk_collector_windows_version
+  when: ludus_splunk_collector_windows_inspection.result.marker_exists
+
+- name: Verify actual ready service version and managed file hashes before convergence
+  ansible.windows.win_powershell:
+    error_action: stop
+    script: |
+      $ErrorActionPreference = 'Stop'
+      $local = 'C:\Program Files\SplunkUniversalForwarder\etc\apps\ludus_collector\local'
+      $markerPath = 'C:\ProgramData\Ludus\SplunkCollector\ownership.json'
+      $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
+      $inputs = (Get-FileHash -LiteralPath (Join-Path $local 'inputs.conf') -Algorithm SHA256).Hash.ToLowerInvariant()
+      $outputs = (Get-FileHash -LiteralPath (Join-Path $local 'outputs.conf') -Algorithm SHA256).Hash.ToLowerInvariant()
+      if ($marker.phase -eq 'ready' -and ($marker.inputs_sha256 -ne $inputs -or $marker.outputs_sha256 -ne $outputs)) {
+        $Ansible.Failed = $true
+        $Ansible.Result = 'Managed configuration drift does not match the ownership marker; refusing implicit adoption.'
+      }
+      $Ansible.Result = @{ inputs_sha256 = $inputs; outputs_sha256 = $outputs }
+  when: ludus_splunk_collector_windows_phase == 'ready'
+
+- name: Require actual executable version to match marker-backed version
+  ansible.builtin.assert:
+    that:
+      - ludus_splunk_collector_windows_inspection.result.executable_version == ludus_splunk_collector_windows_version
+      - ludus_splunk_collector_windows_inspection.result.marker.artifact_version == ludus_splunk_collector_windows_version
+  when: ludus_splunk_collector_windows_phase == 'ready'

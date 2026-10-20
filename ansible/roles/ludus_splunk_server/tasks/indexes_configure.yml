@@ -1,0 +1,37 @@
+---
+- name: Create the separately owned index app directory
+  ansible.builtin.file:
+    path: /opt/splunk/etc/apps/ludus_indexes
+    state: directory
+    owner: splunk
+    group: splunk
+    mode: "0750"
+  when: ludus_splunk_server_indexes | length > 0
+
+- name: Create the index app local configuration directory
+  ansible.builtin.file:
+    path: /opt/splunk/etc/apps/ludus_indexes/local
+    state: directory
+    owner: splunk
+    group: splunk
+    mode: "0750"
+  when: ludus_splunk_server_indexes | length > 0
+
+- name: Write the exclusively owned Splunk index definitions
+  ansible.builtin.template:
+    src: indexes.conf.j2
+    dest: /opt/splunk/etc/apps/ludus_indexes/local/indexes.conf
+    owner: splunk
+    group: splunk
+    mode: "0640"
+  when: ludus_splunk_server_indexes | length > 0
+  notify: Restart Splunk for configuration change
+
+- name: Write authoritative schema-versioned index ownership marker
+  ansible.builtin.copy:
+    dest: /opt/splunk/etc/apps/ludus_indexes/.ludus-managed.json
+    content: "{{ {'schema_version': 1, 'indexes': ludus_splunk_server_indexes} | to_nice_json }}\n"
+    owner: splunk
+    group: splunk
+    mode: "0640"
+  when: ludus_splunk_server_indexes | length > 0

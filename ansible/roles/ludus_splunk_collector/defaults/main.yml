@@ -13,3 +13,13 @@ ludus_splunk_collector_monitors:
   - path: /var/log/laurel/audit.log
     sourcetype: "laurel:json"
     index: main
+
+ludus_splunk_collector_windows_package_url: >-
+  https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/windows/splunkforwarder-10.6.1.1-b2ae2962645c-windows-x64.msi
+ludus_splunk_collector_windows_package_checksum: >-
+  sha512:980658ef29a964e430ee7b601b170324185a2d93fcee83f55d992a522d20355dc784f2947839690b12265ba775f861810d610244c7cc978c65e20f588147f693
+ludus_splunk_collector_windows_version: "10.6.1.1"
+ludus_splunk_collector_windows_msi_product_version: "10.6.1.1"
+ludus_splunk_collector_windows_security_index: winlogs
+ludus_splunk_collector_windows_sysmon_index: sysmon
+ludus_splunk_collector_windows_silk_index: etw

@@ -1,0 +1,49 @@
+---
+- name: Validate Windows target matrix, collection runtime, artifact and indexes
+  ansible.builtin.assert:
+    that:
+      - ansible_system == 'Win32NT'
+      - ansible_architecture in ['64-bit', 'x86_64']
+      - >-
+        (ansible_distribution is search('Windows 11') and ansible_distribution_major_version | int >= 10)
+        or (ansible_distribution is search('Windows Server (2019|2022|2025)'))
+      - ansible_powershell_version is version('5.1', '>=')
+      - ludus_splunk_collector_accept_license is boolean
+      - ludus_splunk_collector_accept_license
+      - ludus_splunk_collector_windows_package_url is string
+      - ludus_splunk_collector_windows_package_url is match('^https://download\\.splunk\\.com/products/universalforwarder/releases/10\\.6\\.1\\.1/windows/splunkforwarder-10\\.6\\.1\\.1-b2ae2962645c-windows-x64\\.msi$')
+      - ludus_splunk_collector_windows_package_checksum == 'sha512:980658ef29a964e430ee7b601b170324185a2d93fcee83f55d992a522d20355dc784f2947839690b12265ba775f861810d610244c7cc978c65e20f588147f693'
+      - ludus_splunk_collector_windows_version == '10.6.1.1'
+      - ludus_splunk_collector_windows_msi_product_version == '10.6.1.1'
+      - ludus_splunk_collector_windows_security_index is match('^[a-z][a-z0-9_]{0,79}\Z')
+      - ludus_splunk_collector_windows_sysmon_index is match('^[a-z][a-z0-9_]{0,79}\Z')
+      - ludus_splunk_collector_windows_silk_index is match('^[a-z][a-z0-9_]{0,79}\Z')
+      - ludus_splunk_collector_receiver_host is string
+      - ludus_splunk_collector_receiver_host is match('^[A-Za-z0-9][A-Za-z0-9.-]{0,252}[A-Za-z0-9]$')
+      - ludus_splunk_collector_receiver_port is integer
+      - ludus_splunk_collector_receiver_port is not boolean
+      - ludus_splunk_collector_receiver_port | int >= 1
+      - ludus_splunk_collector_receiver_port | int <= 65535
+      - ludus_splunk_collector_admin_username is string
+      - ludus_splunk_collector_admin_username is match('^[A-Za-z0-9_.-]{1,64}\\Z')
+      - ludus_splunk_collector_admin_password is string
+      - ludus_splunk_collector_admin_password | length >= 8
+      - ludus_splunk_collector_admin_password is match('^[ -~]+\\Z')
+      - "'\\n' not in ludus_splunk_collector_admin_password"
+      - "'\\r' not in ludus_splunk_collector_admin_password"
+      - ludus_splunk_collector_admin_password == ludus_splunk_collector_admin_password.strip()
+      - "not ludus_splunk_collector_admin_password.endswith('\\\\')"
+      - ludus_splunk_collector_windows_security_index != ludus_splunk_collector_windows_sysmon_index
+      - ludus_splunk_collector_windows_security_index != ludus_splunk_collector_windows_silk_index
+      - ludus_splunk_collector_windows_sysmon_index != ludus_splunk_collector_windows_silk_index
+    fail_msg: Windows collector platform, artifact, license, receiver, indexes, or credentials are unsupported or unsafe.
+  no_log: true
+
+- name: Reject default and internal Windows index names
+  ansible.builtin.assert:
+    that:
+      - item not in ['main', 'history', 'summary', '_internal', '_audit', '_introspection', '_telemetry', '_metrics']
+  loop:
+    - "{{ ludus_splunk_collector_windows_security_index }}"
+    - "{{ ludus_splunk_collector_windows_sysmon_index }}"
+    - "{{ ludus_splunk_collector_windows_silk_index }}"

@@ -14,7 +14,7 @@
 
 - Target only Windows 11 x64 and Server 2019/2022/2025 x64; older platforms remain deferred.
 - Preserve Debian/Linux collector behavior; all Linux mutations remain platform-guarded.
-- Windows schema is explicit: `ludus_splunk_collector_windows_version` is the vendor release string; `ludus_splunk_collector_windows_msi_product_version` is separate MSI metadata; package URL/checksum remain mandatory until a verified pin exists.
+- Verified Windows pin: `ludus_splunk_collector_windows_version: 10.6.1.1` (vendor release), `ludus_splunk_collector_windows_msi_product_version: 10.6.1.1`, URL `https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/windows/splunkforwarder-10.6.1.1-b2ae2962645c-windows-x64.msi`, checksum `sha512:980658ef29a964e430ee7b601b170324185a2d93fcee83f55d992a522d20355dc784f2947839690b12265ba775f861810d610244c7cc978c65e20f588147f693`.
 - If Task 0 cannot verify those inputs, stop the Windows work; do not invent flags, product codes, hashes, or use a fallback LocalSystem path.
 - Prefix every collector variable with `ludus_splunk_collector_`; Windows package inputs must be explicit and must not change Debian defaults.
 - Security is an unfiltered XML baseline: `oldest`, `current_only=0`, index `winlogs`, with no inherited TA exclusions.
@@ -27,6 +27,7 @@
 - Fresh installation must use an ownership marker and crash-safe install transition; credential seed cleanup follows fresh authenticated readiness only.
 - Missing SilkService channel is a producer prerequisite: use documented nonblocking config plus warning if supported; otherwise stop for research without silently creating the channel or blocking Security.
 - Verification is static only in this plan; no deployment, guest probe, package install, simulated runtime, or live evaluation is authorized.
+- HEC is deferred and out of scope: preserve native TCP `9997`; do not implement port `8088`, token handling, TLS, or legacy secret-output behavior. Track future work as `SPLUNK-002` only.
 
 ## Review Focus
 
@@ -52,16 +53,16 @@
 ludus_splunk_collector_receiver_host: external-receiver-host
 ludus_splunk_collector_receiver_port: 9997
 ludus_splunk_collector_accept_license: true
-ludus_splunk_collector_windows_package_url: ""
-ludus_splunk_collector_windows_package_checksum: ""
-ludus_splunk_collector_windows_version: "" # vendor release string
-ludus_splunk_collector_windows_msi_product_version: ""
+ludus_splunk_collector_windows_package_url: "https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/windows/splunkforwarder-10.6.1.1-b2ae2962645c-windows-x64.msi"
+ludus_splunk_collector_windows_package_checksum: "sha512:980658ef29a964e430ee7b601b170324185a2d93fcee83f55d992a522d20355dc784f2947839690b12265ba775f861810d610244c7cc978c65e20f588147f693"
+ludus_splunk_collector_windows_version: "10.6.1.1" # vendor release string
+ludus_splunk_collector_windows_msi_product_version: "10.6.1.1"
 ludus_splunk_collector_windows_security_index: winlogs
 ludus_splunk_collector_windows_sysmon_index: sysmon
 ludus_splunk_collector_windows_silkservice_index: etw
 ```
 
-Empty Windows package inputs must block the Windows branch until Task 0 records verified values. The server receives `ludus_splunk_server_indexes: []` by default or `[winlogs, sysmon, etw]` in the explicit integration example. Fixed Windows home is `C:\Program Files\SplunkUniversalForwarder`; service is `SplunkForwarder`; neither is configurable.
+These package inputs are now a verified pin; ProductCode `{B253F87A-EEBB-46C4-AA25-D9FDB2542B63}` is evidence, not a default input because `win_package` derives identity from the local MSI. The server receives `ludus_splunk_server_indexes: []` by default or `[winlogs, sysmon, etw]` in the explicit integration example. Fixed Windows home is `C:\Program Files\SplunkUniversalForwarder`; service is `SplunkForwarder`; neither is configurable.
 
 **Role ordering interface:** examples must invoke the installed Sysmon role explicitly before `ludus_splunk_collector` on Windows and use verified installed role identities only. Do not infer an installed identity from a source directory; unresolved identity evidence remains a documented gap.
 
@@ -73,12 +74,12 @@ Empty Windows package inputs must block the Windows branch until Task 0 records 
 
 **Interfaces:** Produces a recorded artifact URL, checksum, version mapping, supported target matrix, installer/bootstrap behavior, virtual service account, start/reboot behavior, Security/Sysmon/Silk Event Log permissions, Windows collection pins, and verified role identities for later tasks.
 
-- [ ] Record publisher-verified Windows artifact URL and checksum, exact MSI ProductVersion, vendor release string, architecture, and supported Windows target set.
+- [x] Record publisher-verified Windows artifact URL/checksum, exact MSI ProductVersion, vendor release string, and architecture; Task 0 artifact identity is partially closed.
 - [ ] Confirm installer properties/bootstrap and service start control from primary sources; record no invented product codes or flags.
 - [ ] Confirm the documented virtual service account and required Security, Sysmon, and SilkService Event Log access; reject LocalSystem fallback.
 - [ ] Confirm supported `ansible.windows`/PowerShell pins and collection behavior for the selected artifact.
-- [ ] Use the verified Splunk page evidence for `LAUNCHSPLUNK`, `SERVICESTARTTYPE`, and the no-user seed route, but separately verify exact seed syntax, selected MSI, checksum, and DC-safe EventLogReaders access; metadata collection floors remain conditional on this gate.
-- [ ] **STOP** if any required input remains unknown; report the blocking evidence gap and do not implement the Windows branch.
+- [ ] Use verified Splunk page evidence for `LAUNCHSPLUNK`, `SERVICESTARTTYPE`, and the no-user seed route; separately verify exact seed syntax, permissions including DC-safe EventLogReaders access, collection documentation/pins, and selected-version compatibility. Do not claim Task 0 fully closed until parent advisory review.
+- [x] Documentary Task 0 prerequisites are recorded; native ACL, seed authentication, channel presence, source-version compatibility, and runtime validation remain separate gates and must not be claimed as verified.
 
 ## Task 1: Lock collector inputs and platform dispatch
 
@@ -96,7 +97,7 @@ Empty Windows package inputs must block the Windows branch until Task 0 records 
 - Preserve Debian defaults; expose only the four package inputs and three index inputs defined above.
 - Require pre-mutation assertions for supported OS/version/architecture, HTTPS URL, checksum format, ProductVersion mapping, receiver, license, bounded paths/indexes, and no command-line credentials.
 - Confine Linux tasks and `become` to the Linux branch; guard Windows tasks with the selected Windows matrix.
-- [ ] First write static assertions in `tests/test_windows_static.py` using `ROLE = Path(__file__).resolve().parents[1]`, `_load_yaml`, and `_task_sequence`: `test_windows_defaults_are_empty_and_named` includes `defaults=yaml.safe_load((ROLE/'defaults/main.yml').read_text()); self.assertEqual(defaults['ludus_splunk_collector_windows_security_index'],'winlogs'); self.assertEqual(defaults['ludus_splunk_collector_windows_package_url'],''); self.assertEqual(defaults['ludus_splunk_collector_windows_msi_product_version'],'')`; also assert prefix and validation-before-mutation; `test_linux_defaults_and_tasks_remain_immutable` asserts existing Debian package/checksum/monitor values.
+- [ ] First write static assertions in `tests/test_windows_static.py` using `ROLE = Path(__file__).resolve().parents[1]`, `_load_yaml`, and `_task_sequence`: `test_windows_defaults_are_verified_and_named` includes `defaults=yaml.safe_load((ROLE/'defaults/main.yml').read_text()); self.assertEqual(defaults['ludus_splunk_collector_windows_security_index'],'winlogs'); self.assertEqual(defaults['ludus_splunk_collector_windows_package_url'],'https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/windows/splunkforwarder-10.6.1.1-b2ae2962645c-windows-x64.msi'); self.assertEqual(defaults['ludus_splunk_collector_windows_msi_product_version'],'10.6.1.1')`; also assert exact checksum/pin and validation-before-mutation; `test_linux_defaults_and_tasks_remain_immutable` asserts existing Debian package/checksum/monitor values.
 - [ ] Ask fast-generic to run red: `python3 -m unittest discover -s ansible/roles/ludus_splunk_collector/tests -p 'test_windows_static.py' -v`; expected FAIL because the new contract is absent.
 - [ ] Add the defaults, guarded imports, and metadata; name `tasks/windows/main.yml` imports in order `validate.yml`, `inspect.yml`, `install.yml`, `configure.yml`, before service start/restart.
 - [ ] Ask fast-generic to rerun the same command and require PASS. Do not checkpoint yet: Tasks 1–3 share the collector writer and must finish as one atomic deliverable, followed by all collector tests, Windows syntax, and regression checks.
@@ -157,7 +158,7 @@ Empty Windows package inputs must block the Windows branch until Task 0 records 
 **Required behavior (implemented only after red tests):**
 
 - Use marker `/opt/splunk/etc/apps/ludus_indexes/.ludus-managed.json` with `{schema_version:1,indexes:[...]}` and config `/opt/splunk/etc/apps/ludus_indexes/local/indexes.conf`.
-- Use data paths `$SPLUNK_DB/<name>/{db,colddb,thaweddb}`; mutable index options are out of scope. Preflight precedes every mutation and imports precede service start/restart.
+- Parent ruling: use fixed data paths `/opt/splunk/var/lib/splunk/<name>/{db,colddb,thaweddb}` (custom roots are unsupported), so preflight and rendering inspect the same locations. Mutable index options are out of scope. Preflight precedes every mutation and imports precede service start/restart.
 
 - Keep default `ludus_splunk_server_indexes: []` a true no-op when never managed.
 - [ ] First write `test_server_indexes_are_append_only` with `ROLE=Path(__file__).resolve().parents[1]`, `defaults=yaml.safe_load((ROLE/'defaults/main.yml').read_text()); self.assertEqual(defaults['ludus_splunk_server_indexes'],[])`; inspect source tree with `_task_sequence()` and assert marker/config/data paths, duplicate-free `fullmatch` validation (no `$` newline weakness), reserved `main/history/summary` plus default/internal rejection, and `old-requested` removal failure including formerly-managed `[]`.

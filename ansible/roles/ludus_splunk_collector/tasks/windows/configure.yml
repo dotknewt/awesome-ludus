@@ -1,0 +1,260 @@
+---
+- name: Inspect fresh Windows service account and installation path before ownership transition
+  ansible.windows.win_powershell:
+    error_action: stop
+    parameters:
+      ExpectedVersion: "{{ ludus_splunk_collector_windows_version }}"
+    script: |
+      param([string]$ExpectedVersion)
+      $ErrorActionPreference = 'Stop'
+      $service = Get-CimInstance Win32_Service -Filter "Name='SplunkForwarder'"
+      if ($null -eq $service) { throw 'SplunkForwarder service was not installed.' }
+      if ($service.StartName -ne 'NT SERVICE\SplunkForwarder') { throw 'Service account is not the required virtual account.' }
+      if ($service.PathName -notmatch '(?i)^"?C:\Program Files\SplunkUniversalForwarder\bin\splunkd\.exe"?(?:\s|$)') {
+        throw 'Service executable path is unexpected.'
+      }
+      $exe = Get-Item -LiteralPath 'C:\Program Files\SplunkUniversalForwarder\bin\splunkd.exe'
+      if ($exe.VersionInfo.ProductVersion -ne $ExpectedVersion) { throw 'Installed executable version does not match the pinned version.' }
+      $Ansible.Result = @{ service_account = $service.StartName; service_path = $service.PathName; product_version = $exe.VersionInfo.ProductVersion }
+  register: ludus_splunk_collector_windows_verified_service
+  when: ludus_splunk_collector_windows_inspection.result.marker_exists or
+        ludus_splunk_collector_windows_package is defined
+
+- name: Advance the fresh verified installation from pending to bootstrapPending
+  ansible.windows.win_powershell:
+    error_action: stop
+    script: |
+      $ErrorActionPreference = 'Stop'
+      $path = 'C:\ProgramData\Ludus\SplunkCollector\ownership.json'
+      $marker = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+      if ($marker.phase -ne 'pending' -or $marker.schema_version -ne 1) { throw 'Unexpected ownership transition.' }
+      $marker.phase = 'bootstrapPending'
+      $marker | ConvertTo-Json -Compress | Set-Content -LiteralPath $path -Encoding UTF8
+  when: ludus_splunk_collector_windows_package is defined or ludus_splunk_collector_windows_phase == 'pending'
+
+- name: Record bootstrapPending phase after verified installation
+  ansible.builtin.set_fact:
+    ludus_splunk_collector_windows_phase: bootstrapPending
+  when: ludus_splunk_collector_windows_package is defined or ludus_splunk_collector_windows_phase == 'pending'
+
+- name: Ensure the verified service identity is recorded in the protected marker
+  ansible.windows.win_powershell:
+    error_action: stop
+    script: |
+      $ErrorActionPreference = 'Stop'
+      $path = 'C:\ProgramData\Ludus\SplunkCollector\ownership.json'
+      $marker = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+      if ($marker.service_account -ne 'NT SERVICE\SplunkForwarder') { throw 'Ownership service identity mismatch.' }
+      if ($marker.phase -notin @('bootstrapPending', 'ready')) { throw 'Installation is not at a configurable ownership phase.' }
+  when: ludus_splunk_collector_windows_inspection.result.marker_exists or
+        ludus_splunk_collector_windows_package is defined
+
+- name: Inspect newly installed application paths for reparse points before any guest ACL/configuration mutation
+  ansible.windows.win_powershell:
+    error_action: stop
+    script: |
+      $ErrorActionPreference = 'Stop'
+      $root = 'C:\Program Files\SplunkUniversalForwarder'
+      $bad = @()
+      Get-ChildItem -LiteralPath $root -Force -Recurse -ErrorAction Stop | ForEach-Object {
+        if (($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { $bad += $_.FullName }
+      }
+      if ($bad.Count) { throw "Reparse point in forwarder tree: $($bad[0])" }
+      $Ansible.Result = @{ checked = $true; reparse_paths = $bad }
+
+- name: Preflight and add only the local virtual account Event Log READ ACEs
+  ansible.windows.win_powershell:
+    error_action: stop
+    script: |
+      $ErrorActionPreference = 'Stop'
+      $sid = ([System.Security.Principal.NTAccount]'NT SERVICE\SplunkForwarder').Translate([System.Security.Principal.SecurityIdentifier])
+      $names = @('Security', 'Microsoft-Windows-Sysmon/Operational')
+      $silk = Get-WinEvent -ListLog 'SilkService-Log' -ErrorAction SilentlyContinue
+      if ($silk) { $names += 'SilkService-Log' }
+      $plans = @()
+      foreach ($name in $names) {
+        $log = Get-WinEvent -ListLog $name -ErrorAction Stop
+        $sddl = $log.SecurityDescriptor
+        if ([string]::IsNullOrWhiteSpace($sddl)) { throw "Cannot inspect channel descriptor: $name" }
+        $descriptor = New-Object System.Security.AccessControl.RawSecurityDescriptor($sddl)
+        foreach ($ace in $descriptor.DiscretionaryAcl) {
+          if ($ace -is [System.Security.AccessControl.QualifiedAce] -and $ace.SecurityIdentifier -eq $sid -and
+              $ace.AceQualifier -eq [System.Security.AccessControl.AceQualifier]::AccessDenied -and
+              ($ace.AccessMask -band 1) -ne 0) { throw "Explicit READ deny for service SID on channel: $name" }
+        }
+        $hasRead = $false
+        foreach ($ace in $descriptor.DiscretionaryAcl) {
+          if ($ace -is [System.Security.AccessControl.QualifiedAce] -and $ace.SecurityIdentifier -eq $sid -and
+              $ace.AceQualifier -eq [System.Security.AccessControl.AceQualifier]::AccessAllowed -and
+              ($ace.AccessMask -band 1) -ne 0) { $hasRead = $true }
+        }
+        $plans += @{ name = $name; log = $log; descriptor = $descriptor; sddl = $sddl; add = (-not $hasRead) }
+      }
+      foreach ($plan in $plans) {
+        if (-not $plan.add) { continue }
+        $ace = New-Object System.Security.AccessControl.CommonAce(
+          [System.Security.AccessControl.AceFlags]::None,
+          [System.Security.AccessControl.AceQualifier]::AccessAllowed,
+          1, $sid, $false, $null)
+        $plan.descriptor.DiscretionaryAcl.InsertAce($plan.descriptor.DiscretionaryAcl.Count, $ace)
+        $plan.log.SecurityDescriptor = $plan.descriptor.GetSddlForm([System.Security.AccessControl.AccessControlSections]::All)
+        $plan.log.SaveChanges()
+      }
+      $Ansible.Result = @{ changed_channels = @($plans | Where-Object { $_.add } | ForEach-Object { $_.name }); silk_present = [bool]$silk }
+  register: ludus_splunk_collector_windows_channel_acl
+
+- name: Confirm the forwarder passwd state before deciding whether to seed
+  ansible.windows.win_stat:
+    path: C:\Program Files\SplunkUniversalForwarder\etc\passwd
+    follow: false
+  register: ludus_splunk_collector_windows_passwd
+
+- name: Require an owned bootstrap phase before creating a fresh protected seed
+  ansible.builtin.assert:
+    that:
+      - ludus_splunk_collector_windows_inspection.result.marker_exists
+      - ludus_splunk_collector_windows_phase == 'bootstrapPending'
+      - not ludus_splunk_collector_windows_passwd.stat.exists
+    fail_msg: Existing initialized authentication or ambiguous ownership requires manual recovery; credentials were not changed.
+  when: not ludus_splunk_collector_windows_inspection.result.marker_exists or
+        ludus_splunk_collector_windows_phase != 'ready'
+
+- name: Create the protected seed parent before writing credentials
+  ansible.windows.win_file:
+    path: C:\Program Files\SplunkUniversalForwarder\etc\system\local
+    state: directory
+  when:
+    - ludus_splunk_collector_windows_phase == 'bootstrapPending'
+    - not ludus_splunk_collector_windows_passwd.stat.exists
+
+- name: Create empty seed file before applying restrictive ACLs
+  ansible.windows.win_file:
+    path: C:\Program Files\SplunkUniversalForwarder\etc\system\local\user-seed.conf
+    state: touch
+  when:
+    - ludus_splunk_collector_windows_phase == 'bootstrapPending'
+    - not ludus_splunk_collector_windows_passwd.stat.exists
+
+- name: Remove inherited seed-file access before secret content is written
+  ansible.windows.win_acl_inheritance:
+    path: C:\Program Files\SplunkUniversalForwarder\etc\system\local\user-seed.conf
+    state: absent
+    reorganize: true
+  when:
+    - ludus_splunk_collector_windows_phase == 'bootstrapPending'
+    - not ludus_splunk_collector_windows_passwd.stat.exists
+
+- name: Grant seed access only to SYSTEM, Administrators, and service-account read
+  ansible.windows.win_acl:
+    path: C:\Program Files\SplunkUniversalForwarder\etc\system\local\user-seed.conf
+    user: "{{ item.user }}"
+    rights: "{{ item.rights }}"
+    type: allow
+    state: present
+  loop:
+    - { user: SYSTEM, rights: FullControl }
+    - { user: 'BUILTIN\Administrators', rights: FullControl }
+    - { user: 'NT SERVICE\SplunkForwarder', rights: Read }
+  when:
+    - ludus_splunk_collector_windows_phase == 'bootstrapPending'
+    - not ludus_splunk_collector_windows_passwd.stat.exists
+
+- name: Write the fresh administrator seed without logging or diffs
+  ansible.windows.win_template:
+    src: windows-user-seed.conf.j2
+    dest: C:\Program Files\SplunkUniversalForwarder\etc\system\local\user-seed.conf
+  when:
+    - ludus_splunk_collector_windows_phase == 'bootstrapPending'
+    - not ludus_splunk_collector_windows_passwd.stat.exists
+  no_log: true
+  diff: false
+
+- name: Create the role-owned Windows app directory
+  ansible.windows.win_file:
+    path: C:\Program Files\SplunkUniversalForwarder\etc\apps\ludus_collector\local
+    state: directory
+
+- name: Render managed Windows event inputs
+  ansible.windows.win_template:
+    src: windows-inputs.conf.j2
+    dest: C:\Program Files\SplunkUniversalForwarder\etc\apps\ludus_collector\local\inputs.conf
+  register: ludus_splunk_collector_windows_inputs
+  notify: Restart Windows forwarder after managed configuration changes
+
+- name: Render managed Windows forwarding outputs
+  ansible.windows.win_template:
+    src: windows-outputs.conf.j2
+    dest: C:\Program Files\SplunkUniversalForwarder\etc\apps\ludus_collector\local\outputs.conf
+  register: ludus_splunk_collector_windows_outputs
+  notify: Restart Windows forwarder after managed configuration changes
+
+- name: Start and enable the forwarder only after managed configuration exists
+  ansible.windows.win_service:
+    name: SplunkForwarder
+    start_mode: auto
+    state: started
+
+- name: Verify fresh administrator authentication over loopback
+  ansible.windows.win_uri:
+    url: https://127.0.0.1:8089/services/server/info?output_mode=json
+    method: GET
+    url_username: "{{ ludus_splunk_collector_admin_username }}"
+    url_password: "{{ ludus_splunk_collector_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: 200
+    timeout: 15
+  register: ludus_splunk_collector_windows_auth
+  until: ludus_splunk_collector_windows_auth.status | default(0) == 200
+  retries: 30
+  delay: 10
+  when:
+    - ludus_splunk_collector_windows_phase == 'bootstrapPending'
+    - not ludus_splunk_collector_windows_passwd.stat.exists
+  no_log: true
+  diff: false
+
+- name: Require fresh authentication database to exist and be nonempty
+  ansible.windows.win_stat:
+    path: C:\Program Files\SplunkUniversalForwarder\etc\passwd
+    follow: false
+  register: ludus_splunk_collector_windows_passwd_ready
+  when:
+    - ludus_splunk_collector_windows_phase == 'bootstrapPending'
+    - not ludus_splunk_collector_windows_passwd.stat.exists
+
+- name: Assert initialized authentication database before seed removal
+  ansible.builtin.assert:
+    that:
+      - ludus_splunk_collector_windows_passwd_ready.stat.isreg
+      - ludus_splunk_collector_windows_passwd_ready.stat.size | int > 0
+    fail_msg: Authenticated bootstrap did not create a nonempty passwd database; protected seed and pending marker are retained.
+  when:
+    - ludus_splunk_collector_windows_phase == 'bootstrapPending'
+    - not ludus_splunk_collector_windows_passwd.stat.exists
+
+- name: Remove only the fresh seed after authenticated readiness
+  ansible.windows.win_file:
+    path: C:\Program Files\SplunkUniversalForwarder\etc\system\local\user-seed.conf
+    state: absent
+  when:
+    - ludus_splunk_collector_windows_phase == 'bootstrapPending'
+    - not ludus_splunk_collector_windows_passwd.stat.exists
+
+- name: Flush only hash-triggered Windows configuration restarts
+  ansible.builtin.meta: flush_handlers
+
+- name: Record ready marker and managed configuration hashes
+  ansible.windows.win_powershell:
+    error_action: stop
+    script: |
+      $ErrorActionPreference = 'Stop'
+      $root = 'C:\Program Files\SplunkUniversalForwarder\etc\apps\ludus_collector\local'
+      $markerPath = 'C:\ProgramData\Ludus\SplunkCollector\ownership.json'
+      $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
+      if ($marker.phase -notin @('bootstrapPending', 'ready')) { throw 'Ready transition is not permitted from this ownership phase.' }
+      $marker.inputs_sha256 = (Get-FileHash -LiteralPath (Join-Path $root 'inputs.conf') -Algorithm SHA256).Hash.ToLowerInvariant()
+      $marker.outputs_sha256 = (Get-FileHash -LiteralPath (Join-Path $root 'outputs.conf') -Algorithm SHA256).Hash.ToLowerInvariant()
+      $marker.phase = 'ready'
+      $marker | ConvertTo-Json -Compress | Set-Content -LiteralPath $markerPath -Encoding UTF8
+  when: ludus_splunk_collector_windows_phase in ['bootstrapPending', 'ready']

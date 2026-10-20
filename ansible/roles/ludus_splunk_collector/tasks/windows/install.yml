@@ -1,0 +1,110 @@
+---
+- name: Create protected staging and ownership directories
+  ansible.windows.win_file:
+    path: "{{ item }}"
+    state: directory
+  loop:
+    - C:\ProgramData\Ludus\SplunkCollector
+    - C:\ProgramData\Ludus\SplunkCollector\staging
+  when: not ludus_splunk_collector_windows_inspection.result.marker_exists
+
+- name: Remove inherited access from protected Windows collector state
+  ansible.windows.win_acl_inheritance:
+    path: C:\ProgramData\Ludus\SplunkCollector
+    state: absent
+    reorganize: false
+  when: not ludus_splunk_collector_windows_inspection.result.marker_exists
+
+- name: Protect Windows collector state from non-administrators and the service identity
+  ansible.windows.win_acl:
+    path: C:\ProgramData\Ludus\SplunkCollector
+    user: "{{ item }}"
+    rights: FullControl
+    type: allow
+    state: present
+    inherit: ContainerInherit, ObjectInherit
+    propagation: None
+  loop:
+    - SYSTEM
+    - BUILTIN\Administrators
+  when: not ludus_splunk_collector_windows_inspection.result.marker_exists
+
+- name: Write pending ownership marker before any MSI mutation
+  ansible.windows.win_copy:
+    dest: C:\ProgramData\Ludus\SplunkCollector\ownership.json
+    content: >-
+      {"schema_version":1,"artifact_version":"{{ ludus_splunk_collector_windows_version }}","version":"{{ ludus_splunk_collector_windows_version }}","service_name":"SplunkForwarder","service_account":"NT SERVICE\\SplunkForwarder","inputs_sha256":"","outputs_sha256":"","phase":"pending"}
+  when: not ludus_splunk_collector_windows_inspection.result.marker_exists
+
+- name: Download the pinned MSI to protected staging with SHA-512 verification
+  ansible.windows.win_get_url:
+    url: "{{ ludus_splunk_collector_windows_package_url }}"
+    dest: C:\ProgramData\Ludus\SplunkCollector\staging\splunkforwarder.msi
+    checksum: "{{ ludus_splunk_collector_windows_package_checksum }}"
+    force: false
+    validate_certs: true
+  when: not ludus_splunk_collector_windows_inspection.result.marker_exists
+
+- name: Verify downloaded MSI ProductVersion before installation
+  ansible.windows.win_powershell:
+    error_action: stop
+    parameters:
+      MsiPath: C:\ProgramData\Ludus\SplunkCollector\staging\splunkforwarder.msi
+      ExpectedVersion: "{{ ludus_splunk_collector_windows_msi_product_version }}"
+    script: |
+      param([string]$MsiPath, [string]$ExpectedVersion)
+      $ErrorActionPreference = 'Stop'
+      $installer = New-Object -ComObject WindowsInstaller.Installer
+      $database = $installer.OpenDatabase($MsiPath, 0)
+      $view = $database.OpenView("SELECT `Value` FROM `Property` WHERE `Property`='ProductVersion'")
+      $view.Execute()
+      $record = $view.Fetch()
+      $actual = if ($record) { $record.StringData(1) } else { '' }
+      if ($actual -cne $ExpectedVersion) { throw "MSI ProductVersion mismatch: expected $ExpectedVersion, found $actual" }
+      $Ansible.Result = @{ product_version = $actual }
+  register: ludus_splunk_collector_windows_msi_identity
+  when: not ludus_splunk_collector_windows_inspection.result.marker_exists
+
+- name: Install only the verified MSI with documented non-credential properties
+  ansible.windows.win_package:
+    path: C:\ProgramData\Ludus\SplunkCollector\staging\splunkforwarder.msi
+    state: present
+    arguments: >-
+      AGREETOLICENSE=Yes LAUNCHSPLUNK=0 GENRANDOMPASSWORD=0 USE_LOCAL_SYSTEM=0
+      PRIVILEGEBACKUP=0 PRIVILEGESECURITY=0 PRIVILEGEIMPERSONATE=0
+      GROUPPERFORMANCEMONITORUSERS=0
+  register: ludus_splunk_collector_windows_package
+  when: not ludus_splunk_collector_windows_inspection.result.marker_exists
+
+- name: Stop and disable the owned service when MSI requests a reboot
+  ansible.windows.win_service:
+    name: SplunkForwarder
+    state: stopped
+    start_mode: disabled
+  when:
+    - ludus_splunk_collector_windows_package.reboot_required | default(false)
+
+- name: Fail in pending state when MSI requires a reboot
+  ansible.builtin.assert:
+    that: not (ludus_splunk_collector_windows_package.reboot_required | default(false))
+    fail_msg: MSI requires a reboot. The owned service was stopped and disabled; reboot and rerun for preflight.
+  when: not ludus_splunk_collector_windows_inspection.result.marker_exists
+
+- name: Verify installed MSI product identity and version without invoking MSI repair
+  ansible.windows.win_powershell:
+    error_action: stop
+    script: |
+      $ErrorActionPreference = 'Stop'
+      $matches = @()
+      $roots = @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*')
+      foreach ($root in $roots) {
+        $matches += Get-ItemProperty -Path $root -ErrorAction SilentlyContinue |
+          Where-Object { $_.DisplayName -eq 'UniversalForwarder' }
+      }
+      if ($matches.Count -ne 1 -or $matches[0].DisplayVersion -ne '10.6.1.1') {
+        throw 'Installed UniversalForwarder ProductVersion is absent, ambiguous, or mismatched.'
+      }
+      $Ansible.Result = @{ product = $matches[0].DisplayName; product_version = $matches[0].DisplayVersion }
+  register: ludus_splunk_collector_windows_installed_msi
+  when: not ludus_splunk_collector_windows_inspection.result.marker_exists

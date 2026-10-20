@@ -5,6 +5,7 @@
 This design is approved by the user. Implementation planning and execution remain pending separate review and authorization; it is not deployment authorization.
 
 **Latest user decision:** collect Security logs without exclusions by default, keep optional exclusion keys distinct, and evaluate the logs before deciding whether to enable any exclusions. The later review is tracked as `SPLUNK-001` in [the backlog](../../TODO.md).
+HEC remains deferred and out of scope for this design; the native receiver path remains TCP `9997`. Optional HEC belongs to a later reusable-server-role decision and is not implementation authorization here.
 
 **User decisions:** add Windows collector support using the logging configured by `ludus_install_sysmon`; include Windows Security events and the legacy SilkService-Log input; use the legacy `role_splunk_collector_win11v` as a reference; prioritize modern Windows and defer legacy support; use separate `winlogs`, `sysmon`, and `etw` indexes and extend the server role to create configured indexes.
 
