@@ -1,23 +1,10 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "worktree": {
+    "directory": ".worktrees"
+  },
   "mcp": {
     "servers": {
-      "default": {
-        "type": "local",
-        "command": ["docker", "mcp", "gateway", "run", "--profile", "default"],
-        "disabled": false
-      },
-	  "hermes": {
-        "type": "local",
-        "command": [
-          "ssh",
-          "dotme@hermes",
-          "/home/dotme/.local/bin/hermes",
-          "mcp",
-          "serve"
-        ],
-      "disabled": true
-      },
       "ludus-mcp": {
         "type": "local",
         "command": [
@@ -30,6 +17,22 @@
           "{file:~/.secrets/ludus-mcp-key}"
         ],
         "disabled": false
+      },
+      "firecrawl": {
+        "type": "remote",
+        "url": "https://mcp.firecrawl.dev/v2/mcp-oauth",
+        "disabled": false
+      },
+      "hermes": {
+        "type": "local",
+        "command": [
+          "ssh",
+          "dotme@hermes",
+          "/home/dotme/.local/bin/hermes",
+          "mcp",
+          "serve"
+        ],
+      "disabled": true
       }
     }
   }
