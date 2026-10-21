@@ -4,4 +4,4 @@
   connection: local
   gather_facts: false
   roles:
-    - role: ./ansible/roles/ludus_configure_bridge
+    - role: ./ansible/roles/ludus_bridge_promisq
