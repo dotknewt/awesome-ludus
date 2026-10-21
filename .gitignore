@@ -56,4 +56,4 @@ Temporary Items
 # Local orchestration state
 .slim/deepwork/
 # worktrees
-.worktrees
+.worktrees/
