@@ -7,27 +7,44 @@
         or ansible_distribution == 'Ubuntu' and ansible_distribution_version in ['24.04', '26.04']
       - ansible_architecture == "x86_64"
       - ansible_service_mgr == "systemd"
-      - ludus_splunk_collector_package_url is string
-      - ludus_splunk_collector_package_url is match('^https://[^/@]+(?:/|$)')
-      - "'@' not in ludus_splunk_collector_package_url"
-      - ludus_splunk_collector_package_checksum is match('^sha512:[0-9a-fA-F]{128}$')
-      - ludus_splunk_collector_version is match('^[0-9][A-Za-z0-9.+:~_-]*$')
-      - ludus_splunk_collector_accept_license is boolean
-      - ludus_splunk_collector_accept_license
-      - ludus_splunk_collector_receiver_host is string
-      - ludus_splunk_collector_receiver_host | ludus_splunk_collector_valid_receiver_host
-      - ludus_splunk_collector_receiver_port is integer
-      - ludus_splunk_collector_receiver_port is not boolean
-      - ludus_splunk_collector_receiver_port | int >= 1
-      - ludus_splunk_collector_receiver_port | int <= 65535
-      - ludus_splunk_collector_monitors is sequence and ludus_splunk_collector_monitors is not string
+      - splunk_forwarder_package_url is string
+      - splunk_forwarder_package_url is match('^https://[^/@]+(?:/|$)')
+      - "'@' not in splunk_forwarder_package_url"
+      - splunk_forwarder_package_checksum is match('^sha512:[0-9a-fA-F]{128}$')
+      - splunk_version is match('^[0-9][A-Za-z0-9.+:~_-]*$')
+      - splunk_build is match('^[A-Za-z0-9]+$')
+      - splunk_accept_license is boolean
+      - splunk_accept_license
+      - splunk_receiver_ip is string
+      - splunk_receiver_ip | ludus_splunk_collector_valid_receiver_host
+      - splunk_forwarder_monitors is sequence and splunk_forwarder_monitors is not string
     fail_msg: Supply a supported systemd platform, explicitly accept the license, and provide valid artifact and receiver inputs.
+
+- name: Validate receiver port type and decimal-string format
+  ansible.builtin.assert:
+    that:
+      - >-
+        (splunk_receiver_port is integer and splunk_receiver_port is not boolean)
+        or
+        (splunk_receiver_port is string and splunk_receiver_port is match('^[0-9]+\\Z'))
+    fail_msg: Receiver port must be an integer or an ASCII decimal-digit string.
+
+- name: Validate receiver port range
+  ansible.builtin.assert:
+    that:
+      - splunk_receiver_port | int >= 1
+      - splunk_receiver_port | int <= 65535
+    fail_msg: Receiver port must be between 1 and 65535.
+
+- name: Normalize validated Linux receiver port
+  ansible.builtin.set_fact:
+    splunk_forwarder_receiver_port: "{{ splunk_receiver_port | int }}"
 
 - name: Require each monitor entry to be a mapping
   ansible.builtin.assert:
     that: item is mapping
     fail_msg: Every monitor entry must be a mapping.
-  loop: "{{ ludus_splunk_collector_monitors }}"
+  loop: "{{ splunk_forwarder_monitors }}"
   loop_control:
     label: monitor mapping validation
 
@@ -42,7 +59,7 @@
       - item.get('index', '') is string
       - item.get('index', '') | ludus_splunk_collector_valid_index
     fail_msg: Each monitor must provide a safe absolute path, sourcetype, and index.
-  loop: "{{ ludus_splunk_collector_monitors }}"
+  loop: "{{ splunk_forwarder_monitors }}"
   loop_control:
     label: monitor metadata validation
 
@@ -50,21 +67,21 @@
   ansible.builtin.assert:
     that:
       - >-
-        (ludus_splunk_collector_monitors | map(attribute='path') | list | length)
-        == (ludus_splunk_collector_monitors | map(attribute='path') | list | unique | length)
+        (splunk_forwarder_monitors | map(attribute='path') | list | length)
+        == (splunk_forwarder_monitors | map(attribute='path') | list | unique | length)
     fail_msg: Monitor paths must be unique.
 
 - name: Validate administrator credentials without logging operands
   ansible.builtin.assert:
     that:
-      - ludus_splunk_collector_admin_username is string
-      - ludus_splunk_collector_admin_username | ludus_splunk_collector_valid_username
-      - ludus_splunk_collector_admin_password is string
-      - ludus_splunk_collector_admin_password | length >= 8
-      - ludus_splunk_collector_admin_password is match('^[ -~]+$')
-      - "'\\n' not in ludus_splunk_collector_admin_password"
-      - "'\\r' not in ludus_splunk_collector_admin_password"
-      - ludus_splunk_collector_admin_password == ludus_splunk_collector_admin_password.strip()
-      - "not ludus_splunk_collector_admin_password.endswith('\\\\')"
+      - splunk_forwarder_admin_user is string
+      - splunk_forwarder_admin_user | ludus_splunk_collector_valid_username
+      - splunk_forwarder_linux_admin_password is string
+      - splunk_forwarder_linux_admin_password | length >= 8
+      - splunk_forwarder_linux_admin_password is match('^[ -~]+$')
+      - "'\\n' not in splunk_forwarder_linux_admin_password"
+      - "'\\r' not in splunk_forwarder_linux_admin_password"
+      - splunk_forwarder_linux_admin_password == splunk_forwarder_linux_admin_password.strip()
+      - "not splunk_forwarder_linux_admin_password.endswith('\\\\')"
     fail_msg: Credentials must be valid single-line ASCII, and the password must not have leading/trailing spaces or end in a backslash.
   no_log: true

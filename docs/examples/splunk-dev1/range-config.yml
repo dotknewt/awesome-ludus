@@ -1,9 +1,18 @@
 # yaml-language-server: $schema=https://docs.ludus.cloud/schemas/range-config.json
 ---
+# Example role IDs are retained, not verified as installed identities. Confirm
+# them on the target Ludus server and update matching roles/depends_on together.
 defaults:
   snapshot_with_RAM: true
   stale_hours: 0
   timezone: Europe/Oslo
+
+global_role_vars:
+  splunk_version: "10.6.1.1"
+  splunk_build: "b2ae2962645c"
+  splunk_accept_license: true
+  splunk_receiver_ip: "10.{{ range_second_octet }}.10.11"
+  splunk_receiver_port: 9997
 
 ludus:
   - vm_name: "{{ range_id }}-splunk"
@@ -17,10 +26,7 @@ ludus:
     roles:
       - ludus_splunk
     role_vars:
-      splunk_version: "10.6.1.1"
-      splunk_build: "b2ae2962645c"
-      splunk_accept_license: true
-      splunk_enable_boot_start: true
+      splunk_server_enable_boot_start: true
 
   - vm_name: "{{ range_id }}-win11"
     hostname: "{{ range_id }}-win11"
@@ -37,10 +43,7 @@ ludus:
           - vm_name: "{{ range_id }}-splunk"
             role: ludus_splunk
     role_vars:
-      splunk_uf_version: "10.6.1.1"
-      splunk_uf_build: "b2ae2962645c"
-      splunk_uf_indexer: "10.{{ range_second_octet }}.10.11"
-      splunk_uf_inputs:
+      splunk_forwarder_inputs:
         - name: "WinEventLog://Security"
           index: wineventlog
         - name: "WinEventLog://Microsoft-Windows-Sysmon/Operational"

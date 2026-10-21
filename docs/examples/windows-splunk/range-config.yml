@@ -2,6 +2,13 @@
 ---
 # Illustrative only. See README.md: template and installed-role identities
 # require confirmation on the target Ludus server before use.
+global_role_vars:
+  splunk_version: "10.6.1.1"
+  splunk_build: "b2ae2962645c"
+  splunk_accept_license: true
+  splunk_receiver_ip: REPLACE_WITH_RESOLVABLE_SPLUNK_SERVER_ADDRESS
+  splunk_receiver_port: 9997
+
 ludus:
   - vm_name: "{{ range_id }}-splunk"
     hostname: "{{ range_id }}-splunk"
@@ -13,11 +20,6 @@ ludus:
     linux: true
     roles:
       - ludus_splunk_server
-    role_vars:
-      ludus_splunk_server_accept_license: true
-      ludus_splunk_server_receiver_enabled: true
-      ludus_splunk_server_receiver_port: 9997
-      ludus_splunk_server_indexes: [winlogs, sysmon, etw]
 
   - vm_name: "{{ range_id }}-win11"
     hostname: "{{ range_id }}-WIN11"
@@ -36,10 +38,7 @@ ludus:
           - vm_name: "{{ range_id }}-win11"
             role: ludus_install_sysmon
     role_vars:
-      splunk_uf_accept_license: true
-      splunk_uf_indexer: REPLACE_WITH_RESOLVABLE_SPLUNK_SERVER_ADDRESS
-      splunk_uf_indexer_port: 9997
-      splunk_uf_inputs:
+      splunk_forwarder_inputs:
         - name: "WinEventLog://Security"
           index: winlogs
         - name: "WinEventLog://Microsoft-Windows-Sysmon/Operational"

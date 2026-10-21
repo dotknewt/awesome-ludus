@@ -1,0 +1,18 @@
+---
+# Syntax-check only. Ordinary execution must stop before server role execution.
+- name: Parse the native Splunk Enterprise server role entrypoint
+  hosts: localhost
+  gather_facts: false
+  pre_tasks:
+    - name: Prevent accidental Splunk server installation
+      ansible.builtin.fail:
+        msg: This fixture is for --syntax-check only; do not run it normally.
+  roles:
+    - role: linux_splunk_enterprise
+  vars:
+    splunk_version: "10.6.1.1"  # noqa: var-naming[no-role-prefix]
+    splunk_build: "b2ae2962645c"  # noqa: var-naming[no-role-prefix]
+    splunk_accept_license: true  # noqa: var-naming[no-role-prefix]
+    splunk_receiver_port: 9997  # noqa: var-naming[no-role-prefix]
+    splunk_server_admin_user: admin  # noqa: var-naming[no-role-prefix]
+    splunk_server_admin_password: "Syntax-Only-Password1!"  # noqa: var-naming[no-role-prefix]

@@ -10,6 +10,6 @@
   roles:
     - role: dotknewt.splunk_forwarder
   vars:
-    ludus_splunk_collector_accept_license: true
-    ludus_splunk_collector_receiver_host: "127.0.0.1"
-    ludus_splunk_collector_admin_password: "Syntax-Only-Password1!"
+    splunk_accept_license: true
+    splunk_receiver_ip: "127.0.0.1"
+    splunk_forwarder_linux_admin_password: "Syntax-Only-Password1!"

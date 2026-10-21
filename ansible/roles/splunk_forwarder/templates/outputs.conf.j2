@@ -3,4 +3,4 @@
 defaultGroup = ludus_collector
 
 [tcpout:ludus_collector]
-server = {{ ludus_splunk_collector_receiver_host }}:{{ ludus_splunk_collector_receiver_port }}
+server = {{ splunk_receiver_ip }}:{{ splunk_forwarder_receiver_port }}

@@ -2,6 +2,6 @@
 defaultGroup = default-autolb-group
 
 [tcpout:default-autolb-group]
-server = {{ splunk_uf_indexer }}:{{ splunk_uf_indexer_port }}
+server = {{ splunk_receiver_ip }}:{{ splunk_receiver_port }}
 
-[tcpout-server://{{ splunk_uf_indexer }}:{{ splunk_uf_indexer_port }}]
+[tcpout-server://{{ splunk_receiver_ip }}:{{ splunk_receiver_port }}]

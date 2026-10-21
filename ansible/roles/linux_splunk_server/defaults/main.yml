@@ -1,0 +1,20 @@
+---
+# Shared release and acceptance inputs are supplied by global_role_vars.
+# Shared and server-specific names are the approved public namespace, not the
+# source-directory prefix expected by the var-naming rule.
+splunk_version: "10.6.1.1"  # noqa: var-naming[no-role-prefix]
+splunk_build: "b2ae2962645c"  # noqa: var-naming[no-role-prefix]
+splunk_accept_license: false  # noqa: var-naming[no-role-prefix]
+splunk_receiver_port: 9997  # noqa: var-naming[no-role-prefix]
+
+# Splunk Enterprise server-specific settings.
+splunk_server_download_token: ""  # noqa: var-naming[no-role-prefix]
+splunk_server_install_dir: "/opt"  # noqa: var-naming[no-role-prefix]
+splunk_server_home: "/opt/splunk"  # noqa: var-naming[no-role-prefix]
+splunk_server_admin_user: "admin"  # noqa: var-naming[no-role-prefix]
+splunk_server_admin_password: "Changeme1!"  # noqa: var-naming[no-role-prefix]
+splunk_server_web_port: 8000  # noqa: var-naming[no-role-prefix]
+splunk_server_mgmt_port: 8089  # noqa: var-naming[no-role-prefix]
+splunk_server_license_file: ""  # noqa: var-naming[no-role-prefix]
+splunk_server_enable_boot_start: true  # noqa: var-naming[no-role-prefix]
+splunk_server_disable_popups: true  # noqa: var-naming[no-role-prefix]

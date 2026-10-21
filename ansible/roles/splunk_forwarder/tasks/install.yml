@@ -1,5 +1,4 @@
 ---
-# Keep established ludus_splunk_collector_* register names for Linux compatibility.
 - name: Create a protected package cache directory
   ansible.builtin.file:
     path: /var/cache/ludus-splunk-collector
@@ -7,19 +6,19 @@
     owner: root
     group: root
     mode: "0700"
-  when: ludus_splunk_collector_installed.rc != 0
+  when: splunk_forwarder_installed.rc != 0
 
 - name: Download Universal Forwarder with publisher checksum verification
   ansible.builtin.get_url:
-    url: "{{ ludus_splunk_collector_package_url }}"
+    url: "{{ splunk_forwarder_package_url }}"
     dest: /var/cache/ludus-splunk-collector/splunkforwarder.deb
-    checksum: "{{ ludus_splunk_collector_package_checksum }}"
+    checksum: "{{ splunk_forwarder_package_checksum }}"
     owner: root
     group: root
     mode: "0600"
     validate_certs: true
     force: false
-  when: ludus_splunk_collector_installed.rc != 0
+  when: splunk_forwarder_installed.rc != 0
 
 - name: Read Debian package identity using explicit metadata fields  # noqa: var-naming[no-role-prefix]
   ansible.builtin.command:
@@ -29,25 +28,25 @@
       - "--showformat=${Package}\\n${Version}\\n${Architecture}\\n"
       - /var/cache/ludus-splunk-collector/splunkforwarder.deb
     expand_argument_vars: false
-  register: ludus_splunk_collector_deb_metadata
+  register: splunk_forwarder_deb_metadata
   changed_when: false
-  when: ludus_splunk_collector_installed.rc != 0
+  when: splunk_forwarder_installed.rc != 0
 
 - name: Require exact Universal Forwarder package identity and version
   ansible.builtin.assert:
     that:
-      - ludus_splunk_collector_deb_metadata.stdout_lines | length == 3
-      - ludus_splunk_collector_deb_metadata.stdout_lines[0] == 'splunkforwarder' and ludus_splunk_collector_deb_metadata.stdout_lines[2] == 'amd64'
-      - ludus_splunk_collector_deb_metadata.stdout_lines[1] == ludus_splunk_collector_version
+      - splunk_forwarder_deb_metadata.stdout_lines | length == 3
+      - splunk_forwarder_deb_metadata.stdout_lines[0] == 'splunkforwarder' and splunk_forwarder_deb_metadata.stdout_lines[2] == 'amd64'
+      - splunk_forwarder_deb_metadata.stdout_lines[1] == splunk_version
     fail_msg: The checksum-verified artifact is not the requested splunkforwarder amd64 package/version.
-  when: ludus_splunk_collector_installed.rc != 0
+  when: splunk_forwarder_installed.rc != 0
 
 - name: Create dedicated Universal Forwarder service group
   ansible.builtin.group:
     name: splunkfwd
     system: true
     state: present
-  when: ludus_splunk_collector_installed.rc != 0
+  when: splunk_forwarder_installed.rc != 0
 
 - name: Create dedicated non-root Universal Forwarder service user
   ansible.builtin.user:
@@ -58,41 +57,41 @@
     system: true
     shell: /usr/sbin/nologin
     state: present
-  when: ludus_splunk_collector_installed.rc != 0
+  when: splunk_forwarder_installed.rc != 0
 
 - name: Install the verified local package without implicit upgrades or downgrades
   ansible.builtin.apt:
     deb: /var/cache/ludus-splunk-collector/splunkforwarder.deb
     state: present
     allow_downgrade: false
-  when: ludus_splunk_collector_installed.rc != 0
+  when: splunk_forwarder_installed.rc != 0
 
 - name: Confirm installed package status and exact version  # noqa: var-naming[no-role-prefix]
   ansible.builtin.command:
     argv: [dpkg-query, -W, "-f=${db:Status-Status}\\t${Version}\\n", splunkforwarder]
     expand_argument_vars: false
-  register: ludus_splunk_collector_final_package
+  register: splunk_forwarder_final_package
   changed_when: false
   failed_when: >-
-    ludus_splunk_collector_final_package.rc != 0
-    or ludus_splunk_collector_final_package.stdout.split('\t') | length != 2
-    or ludus_splunk_collector_final_package.stdout.split('\t')[0] != 'installed'
-    or ludus_splunk_collector_final_package.stdout.split('\t')[1] != ludus_splunk_collector_version
+    splunk_forwarder_final_package.rc != 0
+    or splunk_forwarder_final_package.stdout.split('\t') | length != 2
+    or splunk_forwarder_final_package.stdout.split('\t')[0] != 'installed'
+    or splunk_forwarder_final_package.stdout.split('\t')[1] != splunk_version
 
 - name: Inspect newly installed application home without following symlinks  # noqa: var-naming[no-role-prefix]
   ansible.builtin.stat:
     path: /opt/splunkforwarder
     follow: false
-  register: ludus_splunk_collector_fresh_home
-  when: ludus_splunk_collector_installed.rc != 0
+  register: splunk_forwarder_fresh_home
+  when: splunk_forwarder_installed.rc != 0
 
 - name: Require newly installed application home to be a real directory
   ansible.builtin.assert:
     that:
-      - ludus_splunk_collector_fresh_home.stat.get('exists', false)
-      - ludus_splunk_collector_fresh_home.stat.get('isdir', false)
-      - not (ludus_splunk_collector_fresh_home.stat.get('islnk', false) | bool)
-  when: ludus_splunk_collector_installed.rc != 0
+      - splunk_forwarder_fresh_home.stat.get('exists', false)
+      - splunk_forwarder_fresh_home.stat.get('isdir', false)
+      - not (splunk_forwarder_fresh_home.stat.get('islnk', false) | bool)
+  when: splunk_forwarder_installed.rc != 0
 
 - name: Set ownership of the newly installed application tree
   ansible.builtin.file:
@@ -101,4 +100,4 @@
     owner: splunkfwd
     group: splunkfwd
     recurse: true
-  when: ludus_splunk_collector_installed.rc != 0
+  when: splunk_forwarder_installed.rc != 0

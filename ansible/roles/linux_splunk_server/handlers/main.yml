@@ -1,0 +1,14 @@
+---
+- name: Restart Splunk
+  ansible.builtin.systemd:
+    name: Splunkd
+    state: restarted
+  when: splunk_server_enable_boot_start
+
+- name: Restart Splunk (manual)
+  ansible.builtin.command:
+    cmd: "{{ splunk_server_home }}/bin/splunk restart --run-as-root"
+  when: not splunk_server_enable_boot_start
+  # Keep the approved splunk_server_* namespace rather than directory-derived prefix.
+  register: splunk_server_restart  # noqa: var-naming[no-role-prefix]
+  changed_when: splunk_server_restart.rc == 0

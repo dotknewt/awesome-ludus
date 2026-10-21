@@ -1,0 +1,23 @@
+---
+galaxy_info:
+  author: dotknewt
+  role_name: linux_splunk_enterprise
+  description: "Installs Splunk Enterprise on Linux for Ludus ranges"
+  license: "MIT"
+  min_ansible_version: "2.10"
+  platforms:
+    - name: Debian
+      versions:
+        - bullseye
+        - bookworm
+    - name: Ubuntu
+      versions:
+        - focal
+        - jammy
+  galaxy_tags:
+    - splunk
+    - siem
+    - logging
+    - ludus
+
+dependencies: []

@@ -1,0 +1,189 @@
+---
+- name: Require explicit license acceptance before any server task
+  ansible.builtin.assert:
+    that:
+      - splunk_accept_license is boolean
+      - splunk_accept_license
+    fail_msg: Set splunk_accept_license to true to install or configure Splunk Enterprise.
+
+- name: Check if Splunk is already installed
+  ansible.builtin.stat:
+    path: "{{ splunk_server_home }}/bin/splunk"
+  # Keep the approved splunk_server_* namespace rather than directory-derived prefix.
+  register: splunk_server_binary  # noqa: var-naming[no-role-prefix]
+
+- name: Set Splunk package filename (tgz)
+  ansible.builtin.set_fact:
+    # Keep the approved splunk_server_* namespace rather than directory-derived prefix.
+    splunk_server_package: "splunk-{{ splunk_version }}-{{ splunk_build }}-linux-amd64.tgz"  # noqa: var-naming[no-role-prefix]
+
+- name: Set download URL (with or without token)  # noqa: var-naming[no-role-prefix] -- approved splunk_server_* API
+  ansible.builtin.set_fact:
+    # Keep the approved splunk_server_* namespace rather than directory-derived prefix.
+    splunk_server_download_url: >-  # noqa: var-naming[no-role-prefix]
+      {{ 'https://download.splunk.com/products/splunk/releases/' ~ splunk_version ~
+         '/linux/' ~ splunk_server_package ~
+         ('?token=' ~ splunk_server_download_token
+          if splunk_server_download_token | length > 0 else '') }}
+
+- name: Download Splunk from splunk.com
+  ansible.builtin.get_url:
+    url: "{{ splunk_server_download_url }}"
+    dest: "/tmp/{{ splunk_server_package }}"
+    mode: '0644'
+    validate_certs: false
+  when: not splunk_server_binary.stat.exists
+
+- name: Extract Splunk tarball
+  ansible.builtin.unarchive:
+    src: "/tmp/{{ splunk_server_package }}"
+    dest: "{{ splunk_server_install_dir }}"
+    remote_src: true
+  when: not splunk_server_binary.stat.exists
+
+- name: Create user-seed.conf for admin credentials
+  ansible.builtin.template:
+    src: user-seed.conf.j2
+    dest: "{{ splunk_server_home }}/etc/system/local/user-seed.conf"
+    mode: '0600'
+  when: not splunk_server_binary.stat.exists
+
+- name: Accept license and start Splunk for first time
+  ansible.builtin.command:
+    cmd: "{{ splunk_server_home }}/bin/splunk start --accept-license --answer-yes --no-prompt --run-as-root"
+  when: not splunk_server_binary.stat.exists
+  # Keep the approved splunk_server_* namespace rather than directory-derived prefix.
+  register: splunk_server_first_start  # noqa: var-naming[no-role-prefix]
+  changed_when: splunk_server_first_start.rc == 0
+
+- name: Stop Splunk before enabling boot-start
+  ansible.builtin.command:
+    cmd: "{{ splunk_server_home }}/bin/splunk stop --run-as-root"
+  when:
+    - not splunk_server_binary.stat.exists
+    - splunk_server_enable_boot_start
+  # Keep the approved splunk_server_* namespace rather than directory-derived prefix.
+  register: splunk_server_stop_for_boot  # noqa: var-naming[no-role-prefix]
+  changed_when: splunk_server_stop_for_boot.rc == 0
+  failed_when: false
+
+- name: Enable Splunk to start at boot with systemd
+  ansible.builtin.command:
+    cmd: "{{ splunk_server_home }}/bin/splunk enable boot-start -systemd-managed 1 -user root --accept-license --answer-yes"
+  when:
+    - not splunk_server_binary.stat.exists
+    - splunk_server_enable_boot_start
+  # Keep the approved splunk_server_* namespace rather than directory-derived prefix.
+  register: splunk_server_boot_start  # noqa: var-naming[no-role-prefix]
+  changed_when: splunk_server_boot_start.rc == 0
+
+- name: Reload systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when:
+    - not splunk_server_binary.stat.exists
+    - splunk_server_enable_boot_start
+
+- name: Enable and start Splunk systemd service
+  ansible.builtin.systemd:
+    name: Splunkd
+    enabled: true
+    state: started
+  when:
+    - not splunk_server_binary.stat.exists
+    - splunk_server_enable_boot_start
+
+- name: Check if receiving port is already configured
+  ansible.builtin.command:
+    argv:
+      - "{{ splunk_server_home }}/bin/splunk"
+      - btool
+      - inputs
+      - list
+  # Keep the approved splunk_server_* namespace rather than directory-derived prefix.
+  register: splunk_server_receiving_port_check  # noqa: var-naming[no-role-prefix]
+  changed_when: false
+  no_log: true
+
+- name: Enable receiving port for forwarders
+  ansible.builtin.command:
+    cmd: "{{ splunk_server_home }}/bin/splunk enable listen {{ splunk_receiver_port }} -auth {{ splunk_server_admin_user }}:{{ splunk_server_admin_password }}"
+  when: >-
+    ('[splunktcp://' ~ (splunk_receiver_port | string) ~ ']')
+    not in (splunk_server_receiving_port_check.stdout_lines | map('trim') | list)
+  # Keep the approved splunk_server_* namespace rather than directory-derived prefix.
+  register: splunk_server_receiving  # noqa: var-naming[no-role-prefix]
+  changed_when: splunk_server_receiving.rc == 0
+  no_log: true
+  notify: Restart Splunk
+
+- name: Create indexes for Windows logs
+  ansible.builtin.command:
+    cmd: "{{ splunk_server_home }}/bin/splunk add index wineventlog -auth {{ splunk_server_admin_user }}:{{ splunk_server_admin_password }}"
+  # Keep the approved splunk_server_* namespace rather than directory-derived prefix.
+  register: splunk_server_create_index  # noqa: var-naming[no-role-prefix]
+  changed_when: splunk_server_create_index.rc == 0
+  failed_when: false
+
+- name: Check whether the sysmon index exists
+  ansible.builtin.command:
+    cmd: "{{ splunk_server_home }}/bin/splunk list index -auth {{ splunk_server_admin_user }}:{{ splunk_server_admin_password }}"
+  # Keep the approved splunk_server_* namespace rather than directory-derived prefix.
+  register: splunk_server_index_list  # noqa: var-naming[no-role-prefix]
+  changed_when: false
+  no_log: true
+
+- name: Create the sysmon index
+  ansible.builtin.command:
+    cmd: "{{ splunk_server_home }}/bin/splunk add index sysmon -auth {{ splunk_server_admin_user }}:{{ splunk_server_admin_password }}"
+  when: "'sysmon' not in splunk_server_index_list.stdout_lines"
+  # Keep the approved splunk_server_* namespace rather than directory-derived prefix.
+  register: splunk_server_create_sysmon_index  # noqa: var-naming[no-role-prefix]
+  changed_when: splunk_server_create_sysmon_index.rc == 0
+  no_log: true
+
+- name: Copy license file if provided
+  ansible.builtin.copy:
+    src: "{{ splunk_server_license_file }}"
+    dest: "/tmp/splunk.lic"
+    mode: '0644'
+  when: splunk_server_license_file | length > 0
+
+- name: Install license file
+  ansible.builtin.command:
+    cmd: "{{ splunk_server_home }}/bin/splunk add licenses /tmp/splunk.lic -auth {{ splunk_server_admin_user }}:{{ splunk_server_admin_password }}"
+  when: splunk_server_license_file | length > 0
+  # Keep the approved splunk_server_* namespace rather than directory-derived prefix.
+  register: splunk_server_license_install  # noqa: var-naming[no-role-prefix]
+  changed_when: splunk_server_license_install.rc == 0
+  failed_when: false
+
+- name: Disable first-time login popups
+  ansible.builtin.template:
+    src: ui-tour.conf.j2
+    dest: "{{ splunk_server_home }}/etc/system/local/ui-tour.conf"
+    mode: '0644'
+  when: splunk_server_disable_popups
+  notify: Restart Splunk
+
+- name: Ensure Splunk service is running
+  ansible.builtin.systemd:
+    name: Splunkd
+    state: started
+  when: splunk_server_enable_boot_start
+
+- name: Wait for Splunk web interface to be available
+  ansible.builtin.wait_for:
+    port: "{{ splunk_server_web_port }}"
+    delay: 5
+    timeout: 60
+  when: splunk_server_enable_boot_start
+
+- name: Display Splunk access information
+  ansible.builtin.debug:
+    msg: |
+      Splunk Enterprise installed successfully!
+      Web UI: https://{{ ansible_host }}:{{ splunk_server_web_port }}
+      Username: {{ splunk_server_admin_user }}
+      Password: {{ splunk_server_admin_password }}
+      Receiving port: {{ splunk_receiver_port }}

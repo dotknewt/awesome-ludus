@@ -12,4 +12,9 @@ Sizing and VLAN/IP assignments follow the existing [constructing-defense range c
 
 The roles are in the source root: [`ludus_splunk_server`](../../ansible/roles/ludus_splunk_server), [`ludus_install_malcolm`](../../ansible/roles/ludus_install_malcolm), and [`ludus_gitlab_ce`](../../ansible/roles/ludus_gitlab_ce). The GitLab role's Debian 13 compatibility is assumed by the user and has not been independently established. Template availability and live installation behavior are unverified. Collection availability is managed by Ludus and is not treated here as a readiness blocker.
 
-The Splunk role default for `ludus_splunk_server_accept_license` remains `false`. The user has accepted the applicable terms for this blueprint, so the Splunk VM explicitly opts in with `role_vars.ludus_splunk_server_accept_license: true`; this does not change the reusable role default or claim that deployment/runtime checks have been performed. See the official [range configuration documentation](https://docs.ludus.cloud/docs/configuration) and [range-config schema](https://docs.ludus.cloud/schemas/range-config.json).
+The shared `splunk_accept_license` default remains `false`. This example explicitly opts in through top-level `global_role_vars` after accepting applicable terms; this does not change the reusable role default or claim deployment/runtime checks have been performed. The server role has no supported configurable index-list input: its existing tasks create hard-coded `wineventlog` and `sysmon` indexes, and forwarder input index names do not configure server indexes. See the official [range configuration documentation](https://docs.ludus.cloud/docs/configuration) and [range-config schema](https://docs.ludus.cloud/schemas/range-config.json).
+
+The server role's installed identity has not been verified. The example's role
+IDs must be checked against the target Ludus server; do not infer installed
+identity from the source directory or metadata. If changed, update matching
+`roles` and `depends_on.role` references consistently.

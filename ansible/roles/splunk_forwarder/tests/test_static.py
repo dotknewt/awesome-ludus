@@ -5,6 +5,7 @@ import importlib.util
 import re
 import unittest
 
+from jinja2.nativetypes import NativeEnvironment
 import yaml
 
 
@@ -110,26 +111,62 @@ class SplunkCollectorStaticContract(unittest.TestCase):
         )
 
     def test_defaults_pin_verified_artifact_and_safe_lab_inputs(self):
-        prefix = "ludus_splunk_collector_"
-        self.assertEqual(
-            self.defaults.get(prefix + "package_url"),
-            "https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/linux/splunkforwarder-10.6.1.1-b2ae2962645c-linux-amd64.deb",
-        )
-        self.assertEqual(
-            self.defaults.get(prefix + "package_checksum"),
-            # Verified against Splunk's published Linux package checksum sidecar.
-            "sha512:2172ed26173b4f29e3ffb051800dce3b21701f8fa202466063a535dd9e7c2cac03714e5db026c4a5dd37249a23be017661a80b4969a339e1d653a16622180c31",
-        )
-        self.assertEqual(self.defaults.get(prefix + "version"), "10.6.1.1")
-        self.assertIs(self.defaults.get(prefix + "accept_license"), False)
-        self.assertEqual(self.defaults.get(prefix + "receiver_host"), "")
-        self.assertEqual(self.defaults.get(prefix + "receiver_port"), 9997)
-        self.assertEqual(self.defaults.get(prefix + "admin_username"), "admin")
-        self.assertEqual(self.defaults.get(prefix + "admin_password"), "SplunkLab-ChangeMe1!")
+        prefix = "splunk_forwarder_"
+        package_url = self.defaults.get(prefix + "package_url", "")
+        self.assertIn("splunk_version ~ '/linux/splunkforwarder-' ~ splunk_version", package_url)
+        self.assertIn("splunk_build ~ '-linux-amd64.deb'", package_url)
+        checksum_default = self.defaults.get(prefix + "package_checksum", "")
+        self.assertIn("10.6.1.1", checksum_default)
+        self.assertIn("b2ae2962645c", checksum_default)
+        self.assertIn("else ''", checksum_default)
+        self.assertIn("sha512:2172ed26173b4f29e3ffb051800dce3b21701f8fa202466063a535dd9e7c2cac03714e5db026c4a5dd37249a23be017661a80b4969a339e1d653a16622180c31", checksum_default)
+        self.assertEqual(self.defaults.get("splunk_version"), "10.6.1.1")
+        self.assertIs(self.defaults.get("splunk_accept_license"), False)
+        self.assertEqual(self.defaults.get("splunk_receiver_ip"), "")
+        self.assertEqual(self.defaults.get("splunk_receiver_port"), 9997)
+        self.assertEqual(self.defaults.get(prefix + "admin_user"), "admin")
+        self.assertEqual(self.defaults.get("splunk_forwarder_linux_admin_password"), "SplunkLab-ChangeMe1!")
         self.assertEqual(
             self.defaults.get(prefix + "monitors"),
             [{"path": "/var/log/laurel/audit.log", "sourcetype": "laurel:json", "index": "main"}],
         )
+
+    def test_shared_inputs_and_linux_forwarder_namespace_contract(self):
+        self.assertEqual(self.defaults.get("splunk_version"), "10.6.1.1")
+        self.assertEqual(self.defaults.get("splunk_build"), "b2ae2962645c")
+        self.assertIs(self.defaults.get("splunk_accept_license"), False)
+        self.assertEqual(self.defaults.get("splunk_receiver_ip"), "")
+        self.assertEqual(self.defaults.get("splunk_receiver_port"), 9997)
+        self.assertEqual(self.defaults.get("splunk_forwarder_admin_user"), "admin")
+        self.assertEqual(
+            {value for key, value in self.defaults.items() if key.endswith("admin_password")},
+            {"SplunkLab-ChangeMe1!", "Changeme1!"},
+            "preserve the existing Linux and Windows password defaults",
+        )
+        self.assertFalse(any(key.startswith(("ludus_splunk_collector_", "splunk_uf_", "splunk_admin_"))
+                             for key in self.defaults), "legacy public input aliases must be removed")
+        self.assertTrue(any(key.startswith("splunk_forwarder_") for key in self.defaults))
+
+        validation = [index for index, task in enumerate(self.linux_tasks)
+                      if any("splunk_accept_license" in expression
+                             for expression in _assertion_expressions(task))]
+        mutation_modules = {"apt", "get_url", "user", "group", "file", "template", "copy",
+                            "systemd_service", "command"}
+        mutations = [index for index, task in enumerate(self.linux_tasks)
+                     if any(_module(task, module) is not None for module in mutation_modules)]
+        self.assertTrue(validation, "Linux branch must explicitly validate shared license acceptance")
+        self.assertTrue(mutations, "Linux branch mutation tasks missing")
+        self.assertLess(min(validation), min(mutations), "license gate must precede Linux mutation")
+
+        seed_template = (ROLE / "templates/user-seed.conf.j2").read_text()
+        outputs_template = (ROLE / "templates/outputs.conf.j2").read_text()
+        self.assertIn("splunk_forwarder_admin_user", seed_template)
+        self.assertIn("splunk_forwarder_", seed_template)
+        self.assertIn("splunk_receiver_ip", outputs_template)
+        self.assertIn("splunk_forwarder_receiver_port", outputs_template)
+        self.assertIn("ludus_collector", self.source, "persisted Linux app path/marker must remain unchanged")
+        self.assertIn("ludus-managed.conf", self.source)
+        self.assertIn("/opt/splunkforwarder/etc/apps/ludus_collector/local", self.source)
 
     def test_metadata_declares_consolidated_role_identity_and_supported_platforms(self):
         info = self.meta.get("galaxy_info", {})
@@ -152,8 +189,8 @@ class SplunkCollectorStaticContract(unittest.TestCase):
         joined = "\n".join(expressions)
         for expression in (
             'ansible_architecture == "x86_64"', 'ansible_service_mgr == "systemd"',
-            "ludus_splunk_collector_accept_license", "ludus_splunk_collector_receiver_host",
-            "ludus_splunk_collector_receiver_port", "ludus_splunk_collector_monitors",
+            "splunk_accept_license", "splunk_receiver_ip",
+            "splunk_receiver_port", "splunk_forwarder_monitors",
             "is boolean",
         ):
             self.assertIn(expression, joined)
@@ -169,17 +206,83 @@ class SplunkCollectorStaticContract(unittest.TestCase):
         ):
             self.assertIn(filter_name, joined)
         guarded = [index for index, task in enumerate(self.linux_tasks)
-                   if any("ludus_splunk_collector_accept_license" in expr for expr in _assertion_expressions(task))]
+                      if any("splunk_accept_license" in expr for expr in _assertion_expressions(task))]
         mutations = [index for index, task in enumerate(self.linux_tasks)
                      if any(_module(task, module) is not None for module in ("apt", "get_url", "user", "group", "file", "template"))]
         self.assertTrue(guarded, "missing license/input validation assertions")
         self.assertTrue(mutations, "missing package/identity mutation tasks")
         self.assertLess(min(guarded), min(mutations), "input/license guards must precede mutation")
         credential_checks = [task for task in self.linux_tasks
-                             if any("admin_username" in expr or "admin_password" in expr for expr in _assertion_expressions(task))]
+                             if any("splunk_forwarder_admin_user" in expr or "splunk_forwarder_linux_admin_password" in expr
+                                    for expr in _assertion_expressions(task))]
         self.assertTrue(credential_checks, "missing credential assertion task")
         self.assertTrue(any(task.get("no_log") is True for task in credential_checks),
                         "credential assertion task must set no_log: true")
+
+    def test_receiver_port_is_strictly_validated_normalized_and_used_by_linux_output(self):
+        type_gate = next(((index, task) for index, task in enumerate(self.linux_tasks)
+                          if task.get("name") == "Validate receiver port type and decimal-string format"), None)
+        range_gate = next(((index, task) for index, task in enumerate(self.linux_tasks)
+                           if task.get("name") == "Validate receiver port range"), None)
+        normalization = next(((index, task) for index, task in enumerate(self.linux_tasks)
+                              if task.get("name") == "Normalize validated Linux receiver port"), None)
+        self.assertIsNotNone(type_gate, "missing strict raw receiver-port type/format validation")
+        self.assertIsNotNone(range_gate, "missing receiver-port range validation")
+        self.assertIsNotNone(normalization, "missing normalized internal receiver port")
+        assert type_gate is not None and range_gate is not None and normalization is not None
+        type_expr = "\n".join(_assertion_expressions(type_gate[1]))
+        range_expr = "\n".join(_assertion_expressions(range_gate[1]))
+
+        self.assertIn("splunk_receiver_port is integer", type_expr)
+        self.assertIn("splunk_receiver_port is not boolean", type_expr)
+        self.assertIn("splunk_receiver_port is string", type_expr)
+        self.assertIn("[0-9]", type_expr)
+        self.assertIn(r"\Z", type_expr, "decimal strings must be fully matched, excluding final newlines")
+        self.assertNotIn("$", type_expr, "regex must not accept a final newline")
+        self.assertLess(type_gate[0], range_gate[0], "type/format rejection must precede numeric coercion")
+        self.assertIn("splunk_receiver_port | int", range_expr)
+        self.assertRegex(range_expr, r">=\s*1")
+        self.assertRegex(range_expr, r"<=\s*65535")
+        self.assertLess(range_gate[0], normalization[0], "normalize only after type and range validation")
+        normalize_set_fact = _module(normalization[1], "set_fact")
+        self.assertIsNotNone(normalize_set_fact)
+        self.assertIn("splunk_forwarder_receiver_port", normalize_set_fact)
+        output = (ROLE / "templates/outputs.conf.j2").read_text()
+        self.assertIn("splunk_forwarder_receiver_port", output)
+        self.assertNotIn("{{ splunk_receiver_port }}", output,
+                         "Linux outputs must consume only the validated integer")
+
+        self.assertEqual(len(_assertion_expressions(type_gate[1])), 1)
+        self.assertEqual(len(_assertion_expressions(range_gate[1])), 2)
+        expression_env = NativeEnvironment()
+        expression_env.tests["match"] = lambda value, pattern: re.match(pattern, value) is not None
+        type_check = expression_env.compile_expression(_assertion_expressions(type_gate[1])[0])
+        range_checks = [expression_env.compile_expression(expression)
+                        for expression in _assertion_expressions(range_gate[1])]
+        cases = (
+            (9997, True, True),
+            ("9997", True, True),
+            (0, True, False),
+            (65536, True, False),
+            ("0", True, False),
+            ("65536", True, False),
+            (True, False, None),
+            (False, False, None),
+            (9997.0, False, None),
+            ("9997.0", False, None),
+            (" 9997", False, None),
+            ("9997\n", False, None),
+            ("+9997", False, None),
+            ("", False, None),
+            (None, False, None),
+            ([9997], False, None),
+        )
+        for value, expected_type, expected_range in cases:
+            with self.subTest(receiver_port=value):
+                self.assertIs(type_check(splunk_receiver_port=value), expected_type)
+                if expected_range is not None:
+                    actual_range = all(check(splunk_receiver_port=value) for check in range_checks)
+                    self.assertIs(actual_range, expected_range)
 
     def test_package_metadata_and_existing_state_fail_closed(self):
         for value in (
@@ -212,11 +315,11 @@ class SplunkCollectorStaticContract(unittest.TestCase):
 
     def test_installed_identity_and_auth_database_are_preflighted(self):
         assertions = "\n".join(expr for task in self.flat_tasks for expr in _assertion_expressions(task))
-        self.assertIn("ludus_splunk_collector_installed.rc != 0 or (ludus_splunk_collector_user_record.rc == 0 and ludus_splunk_collector_group_record.rc == 0)", assertions)
-        self.assertIn("ludus_splunk_collector_path_state.passwd.get('isreg', false)", assertions)
-        self.assertIn("ludus_splunk_collector_path_state.passwd.get('size', 0) | int > 0", assertions)
+        self.assertIn("splunk_forwarder_installed.rc != 0 or (splunk_forwarder_user_record.rc == 0 and splunk_forwarder_group_record.rc == 0)", assertions)
+        self.assertIn("splunk_forwarder_path_state.passwd.get('isreg', false)", assertions)
+        self.assertIn("splunk_forwarder_path_state.passwd.get('size', 0) | int > 0", assertions)
         for ancestor in ("etc", "apps", "app_local", "system", "system_local"):
-            self.assertIn(f"ludus_splunk_collector_path_state.{ancestor}.get('islnk', false)", assertions)
+            self.assertIn(f"splunk_forwarder_path_state.{ancestor}.get('islnk', false)", assertions)
 
     def test_seed_is_fresh_only_protected_and_cleaned_after_auth_readiness(self):
         for value in (
@@ -233,8 +336,8 @@ class SplunkCollectorStaticContract(unittest.TestCase):
             and _module(task, "uri").get("url") == "http://localhost:8089/services/server/info?output_mode=json"
             and _module(task, "uri").get("unix_socket") == "/opt/splunkforwarder/var/run/splunk/cli.socket"
             and _module(task, "uri").get("status_code") == 200
-            and _module(task, "uri").get("user") == "{{ ludus_splunk_collector_admin_username }}"
-            and _module(task, "uri").get("password") == "{{ ludus_splunk_collector_admin_password }}"
+            and _module(task, "uri").get("user") == "{{ splunk_forwarder_admin_user }}"
+            and _module(task, "uri").get("password") == "{{ splunk_forwarder_linux_admin_password }}"
             and _module(task, "uri").get("force_basic_auth") is True
         ]
         cleanup_indices = [index for index, task in enumerate(self.linux_tasks)
@@ -243,7 +346,7 @@ class SplunkCollectorStaticContract(unittest.TestCase):
         self.assertTrue(authenticated_tasks, "missing authenticated Unix-socket readiness check")
         for auth_index, auth_task in authenticated_tasks:
             self.assertIs(auth_task.get("no_log"), True, "authenticated readiness must not log credentials")
-            self.assertIn("ludus_splunk_collector_seed_created.changed", str(auth_task.get("when", "")),
+            self.assertIn("splunk_forwarder_seed_created.changed", str(auth_task.get("when", "")),
                           "fresh authentication must be limited to a seed created by this invocation")
         self.assertTrue(cleanup_indices, "missing seed cleanup task")
         self.assertLess(min(index for index, _ in authenticated_tasks), min(cleanup_indices),
@@ -282,8 +385,8 @@ class SplunkCollectorStaticContract(unittest.TestCase):
         readme = re.sub(r"\s+", " ", readme_path.read_text()) if readme_path.exists() else ""
         for value in (
             "Debian 13", "Ubuntu 24.04", "Ubuntu 26.04", "x86_64", "systemd",
-            "ludus_splunk_collector_", "splunk_uf_", "not verified",
-            "input-driven", "SILK", "has not been verified",
+            "splunk_forwarder_", "splunk_server_", "splunk_accept_license",
+            "not verified", "input-driven", "SILK",
         ):
             self.assertIn(value, readme)
 
@@ -338,10 +441,10 @@ class SplunkCollectorStaticContract(unittest.TestCase):
         roles = play.get("roles", [])
         self.assertEqual([role.get("role") for role in roles], ["dotknewt.splunk_forwarder"])
         inputs = play.get("vars", {})
-        self.assertTrue(inputs.get("ludus_splunk_collector_accept_license"))
-        self.assertEqual(inputs.get("ludus_splunk_collector_receiver_host"), "127.0.0.1")
-        self.assertTrue(inputs.get("ludus_splunk_collector_admin_password"))
-        self.assertNotEqual(inputs.get("ludus_splunk_collector_admin_password"), "SplunkLab-ChangeMe1!")
+        self.assertTrue(inputs.get("splunk_accept_license"))
+        self.assertEqual(inputs.get("splunk_receiver_ip"), "127.0.0.1")
+        self.assertTrue(inputs.get("splunk_forwarder_linux_admin_password"))
+        self.assertNotEqual(inputs.get("splunk_forwarder_linux_admin_password"), "SplunkLab-ChangeMe1!")
 
     def test_exact_vendor_unit_and_monitor_lexical_contracts(self):
         parser_path = ROLE / "filter_plugins/collector_unit.py"

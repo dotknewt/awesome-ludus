@@ -9,10 +9,11 @@
       ansible.builtin.fail:
         msg: Use the authorized Ludus deployment, not this syntax-only playbook.
   vars:
-    splunk_uf_version: "10.6.1.1"
-    splunk_uf_build: b2ae2962645c
-    splunk_uf_indexer: "10.5.10.11"
-    splunk_uf_inputs:
+    splunk_version: "10.6.1.1"
+    splunk_build: b2ae2962645c
+    splunk_accept_license: true
+    splunk_receiver_ip: "10.5.10.11"
+    splunk_forwarder_inputs:
       - name: "WinEventLog://Security"
         index: wineventlog
       - name: "WinEventLog://Microsoft-Windows-Sysmon/Operational"

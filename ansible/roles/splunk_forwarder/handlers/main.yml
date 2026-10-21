@@ -5,12 +5,12 @@
     name: SplunkForwarder.service
     state: restarted
   when:
-    - ludus_splunk_collector_preflight_active.stdout | default('inactive') == 'active'
-    - not (ludus_splunk_collector_capability_policy.changed | default(false))
+    - splunk_forwarder_preflight_active.stdout | default('inactive') == 'active'
+    - not (splunk_forwarder_capability_policy.changed | default(false))
 
 - name: Restart SplunkForwarder
   ansible.windows.win_service:
     name: SplunkForwarder
     state: restarted
     force_dependent_services: true
-  when: splunk_uf_start_service
+  when: splunk_forwarder_start_service

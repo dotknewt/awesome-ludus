@@ -7,6 +7,10 @@ placeholders/unverified and **must be checked against the target server** before
 use. Do not infer an installed role's identity from a repository directory or
 role metadata alone. The selected target server's Ludus version, template
 catalog, installed-role catalog, and exact role identities remain unverified.
+For the server specifically, the source directory is `linux_splunk_server` and
+metadata declares `linux_splunk_enterprise`, while this example retains
+`ludus_splunk_server`; use the identity reported by the target server and update
+the server's `roles` and dependent `depends_on.role` reference together.
 
 Before use, replace both `REPLACE_WITH_AVAILABLE_*_TEMPLATE` values with
 templates confirmed present on the target server, and replace
@@ -29,7 +33,7 @@ baseline. Revalidate against the installed versions before claiming compatibilit
 The example explicitly accepts the server role's license input and enables its
 native receiver on TCP **9997**; both are opt-in role inputs. The receiver owns
 the `winlogs` and `sysmon` indexes. The consolidated Windows forwarder uses the
-standalone role's input-driven `splunk_uf_inputs` behavior; this example
+merged role's input-driven `splunk_forwarder_inputs` behavior; this example
 explicitly routes Security to `winlogs` and Sysmon to `sysmon`. No Security
 exclusion is enabled. Sysmon installation/filtering remains owned by
 `ludus_install_sysmon`; the forwarder does not invoke it implicitly. Optional

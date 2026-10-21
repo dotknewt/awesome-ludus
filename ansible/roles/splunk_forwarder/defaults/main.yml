@@ -1,33 +1,38 @@
 ---
-# These ludus_splunk_collector_* names are the established Linux public API.
-ludus_splunk_collector_package_url: >-  # noqa: var-naming[no-role-prefix]
-  https://download.splunk.com/products/universalforwarder/releases/10.6.1.1/linux/splunkforwarder-10.6.1.1-b2ae2962645c-linux-amd64.deb
-ludus_splunk_collector_package_checksum: >-  # noqa: var-naming[no-role-prefix]
-  sha512:2172ed26173b4f29e3ffb051800dce3b21701f8fa202466063a535dd9e7c2cac03714e5db026c4a5dd37249a23be017661a80b4969a339e1d653a16622180c31
-ludus_splunk_collector_version: "10.6.1.1"  # noqa: var-naming[no-role-prefix]
-ludus_splunk_collector_accept_license: false  # noqa: var-naming[no-role-prefix]
-ludus_splunk_collector_admin_username: admin  # noqa: var-naming[no-role-prefix]
-ludus_splunk_collector_admin_password: "SplunkLab-ChangeMe1!"  # noqa: var-naming[no-role-prefix]
-ludus_splunk_collector_receiver_host: ""  # noqa: var-naming[no-role-prefix]
-ludus_splunk_collector_receiver_port: 9997  # noqa: var-naming[no-role-prefix]
-ludus_splunk_collector_monitors:  # noqa: var-naming[no-role-prefix]
+# Shared Splunk artifact and receiver contract.
+# These unprefixed names are the approved shared range-level API.
+splunk_version: "10.6.1.1"  # noqa: var-naming[no-role-prefix]
+splunk_build: "b2ae2962645c"  # noqa: var-naming[no-role-prefix]
+splunk_accept_license: false  # noqa: var-naming[no-role-prefix]
+splunk_receiver_ip: ""  # noqa: var-naming[no-role-prefix]
+splunk_receiver_port: 9997  # noqa: var-naming[no-role-prefix]
+
+# Linux forwarder package; only the exact pinned artifact receives a default digest.
+splunk_forwarder_package_url: >-
+  {{ 'https://download.splunk.com/products/universalforwarder/releases/' ~
+     splunk_version ~ '/linux/splunkforwarder-' ~ splunk_version ~ '-' ~
+     splunk_build ~ '-linux-amd64.deb' }}
+splunk_forwarder_package_checksum: >-
+  {{ 'sha512:2172ed26173b4f29e3ffb051800dce3b21701f8fa202466063a535dd9e7c2cac03714e5db026c4a5dd37249a23be017661a80b4969a339e1d653a16622180c31'
+     if splunk_version == '10.6.1.1'
+     and splunk_build == 'b2ae2962645c'
+     and splunk_forwarder_package_url == ('https://download.splunk.com/products/universalforwarder/releases/' ~
+       '10.6.1.1/linux/splunkforwarder-10.6.1.1-b2ae2962645c-linux-amd64.deb')
+     else '' }}
+splunk_forwarder_admin_user: admin
+splunk_forwarder_linux_admin_password: "SplunkLab-ChangeMe1!"
+splunk_forwarder_monitors:
   - path: /var/log/laurel/audit.log
     sourcetype: "laurel:json"
     index: main
 
-# Preserve the standalone Windows role's splunk_uf_* public API/defaults.
-splunk_uf_version: "9.3.2"  # noqa: var-naming[no-role-prefix]
-splunk_uf_build: "d8bb32809498"  # noqa: var-naming[no-role-prefix]
-splunk_uf_download_token: ""  # noqa: var-naming[no-role-prefix]
-splunk_uf_install_dir: 'C:\Program Files\SplunkUniversalForwarder'  # noqa: var-naming[no-role-prefix]
-splunk_uf_deployment_server: ""  # noqa: var-naming[no-role-prefix]
-splunk_uf_indexer: ""  # noqa: var-naming[no-role-prefix]
-splunk_uf_indexer_port: 9997  # noqa: var-naming[no-role-prefix]
-splunk_uf_admin_user: "admin"  # noqa: var-naming[no-role-prefix]
-splunk_uf_admin_password: "Changeme1!"  # noqa: var-naming[no-role-prefix]
-splunk_uf_accept_license: true  # noqa: var-naming[no-role-prefix]
-splunk_uf_inputs:  # noqa: var-naming[no-role-prefix]
+# Windows forwarder settings. Preserve the standalone platform password default.
+splunk_forwarder_download_token: ""
+splunk_forwarder_install_dir: 'C:\Program Files\SplunkUniversalForwarder'
+splunk_forwarder_deployment_server: ""
+splunk_forwarder_windows_admin_password: "Changeme1!"
+splunk_forwarder_inputs:
   - name: "WinEventLog://Security"
   - name: "WinEventLog://System"
   - name: "WinEventLog://Application"
-splunk_uf_start_service: true  # noqa: var-naming[no-role-prefix]
+splunk_forwarder_start_service: true

@@ -1,5 +1,5 @@
 # Managed by ludus_splunk_collector.
-{% for monitor in ludus_splunk_collector_monitors %}
+{% for monitor in splunk_forwarder_monitors %}
 [monitor://{{ monitor.path }}]
 disabled = 0
 sourcetype = {{ monitor.sourcetype }}

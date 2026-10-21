@@ -1,5 +1,12 @@
 # yaml-language-server: $schema=https://docs.ludus.cloud/schemas/range-config.json
 ---
+global_role_vars:
+  splunk_version: "10.6.1.1"
+  splunk_build: "b2ae2962645c"
+  splunk_accept_license: true
+  splunk_receiver_ip: "10.{{ range_second_octet }}.10.11"
+  splunk_receiver_port: 9997
+
 ludus:
   - vm_name: "{{ range_id }}-splunk"
     hostname: "{{ range_id }}-splunk"
@@ -11,13 +18,6 @@ ludus:
     ip_last_octet: 11
     roles:
       - dotknewt.ludus_splunk_server
-    role_vars:
-      ludus_splunk_server_accept_license: true
-      ludus_splunk_server_receiver_enabled: true
-      ludus_splunk_server_indexes:
-        - winlogs
-        - sysmon
-        - etw
 
   - vm_name: "{{ range_id }}-malcolm"
     hostname: "{{ range_id }}-malcolm"
@@ -31,9 +31,6 @@ ludus:
       - dotknewt.ludus_install_malcolm
       - dotknewt.splunk_forwarder
       - dotknewt.ludus_linux_logging
-    role_vars:
-      ludus_splunk_collector_accept_license: true
-      ludus_splunk_collector_receiver_host: "10.{{ range_second_octet }}.10.11"
 
   - vm_name: "{{ range_id }}-gitlab"
     hostname: "{{ range_id }}-gitlab"
@@ -47,9 +44,6 @@ ludus:
       - dotknewt.ludus_gitlab_ce
       - dotknewt.ludus_linux_logging
       - dotknewt.splunk_forwarder
-    role_vars:
-      ludus_splunk_collector_accept_license: true
-      ludus_splunk_collector_receiver_host: "10.{{ range_second_octet }}.10.11"
 
   - vm_name: "{{ range_id }}-win11"
     hostname: "{{ range_id }}-win11"
@@ -63,9 +57,7 @@ ludus:
       - dotknewt.ludus_install_sysmon
       - dotknewt.splunk_forwarder
     role_vars:
-      splunk_uf_accept_license: true
-      splunk_uf_indexer: "10.{{ range_second_octet }}.10.11"
-      splunk_uf_inputs:
+      splunk_forwarder_inputs:
         - name: "WinEventLog://Security"
           index: winlogs
         - name: "WinEventLog://Microsoft-Windows-Sysmon/Operational"

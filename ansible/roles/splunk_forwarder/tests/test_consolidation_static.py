@@ -45,17 +45,17 @@ class ConsolidatedForwarderStaticContract(unittest.TestCase):
             for task in _flatten(_yaml(path, []))
         ] if (ROLE / "tasks").is_dir() else []
 
-    def test_role_identity_and_both_public_default_apis_are_retained(self):
+    def test_role_identity_and_shared_forwarder_defaults_have_clean_namespace(self):
         self.assertEqual(self.meta.get("galaxy_info", {}).get("role_name"), "splunk_forwarder")
         self.assertEqual(self.meta.get("galaxy_info", {}).get("author"), "dotknewt")
         self.assertFalse((ROLE.parent / "linux_splunk_forwarder").exists())
         self.assertFalse((ROLE.parent / "windows_splunk_forwarder").exists())
-        self.assertTrue(any(key.startswith("ludus_splunk_collector_")
-                            for key in self.defaults), "Linux collector defaults/API missing")
-        self.assertTrue(any(key.startswith("splunk_uf_")
-                            for key in self.defaults), "standalone Windows splunk_uf_* defaults/API missing")
-        self.assertFalse(any("windows" in key.lower() and key.startswith("ludus_splunk_collector_")
-                             for key in self.defaults), "unfinished collector-prefixed Windows API remains")
+        self.assertEqual(self.defaults.get("splunk_version"), "10.6.1.1")
+        self.assertEqual(self.defaults.get("splunk_build"), "b2ae2962645c")
+        self.assertIs(self.defaults.get("splunk_accept_license"), False)
+        self.assertTrue(any(key.startswith("splunk_forwarder_") for key in self.defaults))
+        self.assertFalse(any(key.startswith(("ludus_splunk_collector_", "splunk_uf_", "splunk_admin_"))
+                             for key in self.defaults), "legacy public aliases must be removed")
 
     def test_dispatch_guards_platform_and_scopes_windows_privilege(self):
         windows_import = next((task for task in self.entrypoint
@@ -97,8 +97,9 @@ class ConsolidatedForwarderStaticContract(unittest.TestCase):
         self.assertEqual(len(self.windows_syntax), 1)
         inputs = self.windows_syntax[0].get("vars", {})
         self.assertTrue(inputs)
-        self.assertTrue(all(name.startswith("splunk_uf_") for name in inputs),
-                        "Windows harness must supply only the splunk_uf_* API")
+        self.assertTrue(all(name.startswith(("splunk_",)) for name in inputs),
+                        "Windows harness must use the shared/forwarder namespaces")
+        self.assertFalse(any(name.startswith(("splunk_uf_", "ludus_splunk_collector_")) for name in inputs))
 
     def test_retained_windows_flow_uses_standalone_install_service_and_event_reader_tasks(self):
         windows_paths = [
@@ -108,11 +109,61 @@ class ConsolidatedForwarderStaticContract(unittest.TestCase):
             and (folder != "templates" or path.name.startswith("windows-"))
         ]
         source = "\n".join(path.read_text() for path in windows_paths)
-        for token in ("splunk_uf_", "win_get_url", "win_package", "win_service",
+        for token in ("splunk_forwarder_", "win_get_url", "win_package", "win_service",
                       "Event Log Readers", "inputs.conf", "outputs.conf"):
             self.assertIn(token.lower(), source.lower(), f"retained Windows flow missing {token}")
         for removed in ("bootstrapPending", "ownership.json", "ludus_splunk_collector_windows_"):
             self.assertNotIn(removed.lower(), source.lower(), f"unfinished Windows logic remains: {removed}")
+
+    def test_active_callers_use_global_shared_inputs_without_legacy_aliases(self):
+        repo = ROLE.parents[2]
+        expected_windows_inputs = {
+            repo / "blueprints/threat-hunting/range-config.yml": {
+                "WinEventLog://Security",
+                "WinEventLog://Microsoft-Windows-Sysmon/Operational",
+            },
+            repo / "docs/examples/splunk-dev1/range-config.yml": {
+                "WinEventLog://Security",
+                "WinEventLog://Microsoft-Windows-Sysmon/Operational",
+                "WinEventLog://Microsoft-Windows-PowerShell/Operational",
+            },
+            repo / "docs/examples/windows-splunk/range-config.yml": {
+                "WinEventLog://Security",
+                "WinEventLog://Microsoft-Windows-Sysmon/Operational",
+            },
+        }
+        legacy = {"ludus_splunk_server_indexes", "splunk_server_indexes"}
+        for path, expected_inputs in expected_windows_inputs.items():
+            with self.subTest(path=path):
+                config = _yaml(path, {})
+                shared = config.get("global_role_vars", {})
+                self.assertEqual(shared.get("splunk_version"), "10.6.1.1")
+                self.assertEqual(shared.get("splunk_build"), "b2ae2962645c")
+                self.assertIs(shared.get("splunk_accept_license"), True)
+                self.assertEqual(shared.get("splunk_receiver_port"), 9997)
+                self.assertTrue(shared.get("splunk_receiver_ip"))
+                windows_vm = next(vm for vm in config.get("ludus", []) if "windows" in vm)
+                windows_inputs = windows_vm.get("role_vars", {}).get("splunk_forwarder_inputs", [])
+                self.assertEqual({entry.get("name") for entry in windows_inputs}, expected_inputs)
+                for vm in config.get("ludus", []):
+                    role_vars = vm.get("role_vars", {})
+                    self.assertFalse(legacy & role_vars.keys(), "unsupported server index inputs remain")
+                    self.assertFalse(any(key.startswith(("ludus_splunk_collector_", "splunk_uf_"))
+                                         for key in role_vars),
+                                     "caller-specific legacy public aliases remain")
+
+    def test_both_forwarder_platforms_keep_existing_managed_paths(self):
+        linux = "\n".join(path.read_text() for folder in (ROLE / "tasks", ROLE / "templates")
+                           for path in folder.rglob("*") if path.is_file()
+                           and "windows" not in path.parts
+                           and not path.name.startswith("windows-"))
+        self.assertIn("/opt/splunkforwarder/etc/apps/ludus_collector/local", linux)
+        self.assertIn("ludus-managed.conf", linux)
+        windows = "\n".join(path.read_text() for folder in (ROLE / "tasks/windows", ROLE / "templates")
+                             for path in folder.rglob("*") if path.is_file()
+                             and (folder.name != "templates" or path.name.startswith("windows-")))
+        self.assertIn(r"\etc\system\local\inputs.conf", windows)
+        self.assertIn(r"\etc\system\local\outputs.conf", windows)
 
 
 if __name__ == "__main__":

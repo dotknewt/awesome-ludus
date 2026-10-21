@@ -1,11 +1,10 @@
 ---
-# Keep established ludus_splunk_collector_* register names for Linux compatibility.
 - name: Check current service active state before making policy changes  # noqa: var-naming[no-role-prefix]
   ansible.builtin.command:
     argv: [systemctl, show, SplunkForwarder.service, --property=ActiveState, --value]
-  register: ludus_splunk_collector_preflight_active
+  register: splunk_forwarder_preflight_active
   changed_when: false
-  when: ludus_splunk_collector_unit_loadstate.stdout != 'not-found'
+  when: splunk_forwarder_unit_loadstate.stdout != 'not-found'
 
 - name: Create Splunk local system configuration directory only when absent
   ansible.builtin.file:
@@ -14,7 +13,7 @@
     owner: splunkfwd
     group: splunkfwd
     mode: "0750"
-  when: not ludus_splunk_collector_path_state.system_local.get('exists', false)
+  when: not splunk_forwarder_path_state.system_local.get('exists', false)
 
 - name: Create the initial administrator seed only for an uninitialized instance  # noqa: var-naming[no-role-prefix]
   ansible.builtin.template:
@@ -23,8 +22,8 @@
     owner: splunkfwd
     group: splunkfwd
     mode: "0600"
-  when: not ludus_splunk_collector_path_state.passwd.get('exists', false)
-  register: ludus_splunk_collector_seed_created
+  when: not splunk_forwarder_path_state.passwd.get('exists', false)
+  register: splunk_forwarder_seed_created
   no_log: true
   diff: false
 
@@ -79,7 +78,7 @@
       - --accept-license
       - --answer-yes
       - --no-prompt
-  when: not ludus_splunk_collector_path_state.unit.get('exists', false) and ludus_splunk_collector_unit_loadstate.stdout == 'not-found'
+  when: not splunk_forwarder_path_state.unit.get('exists', false) and splunk_forwarder_unit_loadstate.stdout == 'not-found'
   changed_when: true
   no_log: true
   diff: false
@@ -99,7 +98,7 @@
     owner: root
     group: root
     mode: "0644"
-  register: ludus_splunk_collector_capability_policy
+  register: splunk_forwarder_capability_policy
   notify: Restart forwarder after owned configuration changes
 
 - name: Stop an active service before applying a changed capability policy
@@ -107,8 +106,8 @@
     name: SplunkForwarder.service
     state: stopped
   when:
-    - ludus_splunk_collector_capability_policy.changed
-    - ludus_splunk_collector_preflight_active.stdout | default('inactive') == 'active'
+    - splunk_forwarder_capability_policy.changed
+    - splunk_forwarder_preflight_active.stdout | default('inactive') == 'active'
 
 - name: Reload systemd definitions before effective unit checks
   ansible.builtin.systemd_service:
@@ -119,37 +118,37 @@
   ansible.builtin.command:
     argv: [systemctl, show, SplunkForwarder.service, "--property={{ item }}", --value]
   loop: [User, Group, FragmentPath, DropInPaths, CapabilityBoundingSet, AmbientCapabilities, NoNewPrivileges]
-  register: ludus_splunk_collector_effective_properties
+  register: splunk_forwarder_effective_properties
   changed_when: false
 
 - name: Inspect effective unit fragment without following symlinks  # noqa: var-naming[no-role-prefix]
   ansible.builtin.stat:
-    path: "{{ (ludus_splunk_collector_effective_properties.results | selectattr('item', 'equalto', 'FragmentPath') | first).stdout }}"
+    path: "{{ (splunk_forwarder_effective_properties.results | selectattr('item', 'equalto', 'FragmentPath') | first).stdout }}"
     follow: false
-  register: ludus_splunk_collector_effective_fragment_stat
+  register: splunk_forwarder_effective_fragment_stat
 
 - name: Read effective vendor-generated unit file  # noqa: var-naming[no-role-prefix]
   ansible.builtin.slurp:
-    src: "{{ (ludus_splunk_collector_effective_properties.results | selectattr('item', 'equalto', 'FragmentPath') | first).stdout }}"
-  register: ludus_splunk_collector_effective_unit_content
+    src: "{{ (splunk_forwarder_effective_properties.results | selectattr('item', 'equalto', 'FragmentPath') | first).stdout }}"
+  register: splunk_forwarder_effective_unit_content
   no_log: true
 
 - name: Fail closed unless the effective service is non-root and capability-restricted
   ansible.builtin.assert:
     that:
-      - (ludus_splunk_collector_effective_properties.results | selectattr('item', 'equalto', 'User') | first).stdout == 'splunkfwd'
-      - (ludus_splunk_collector_effective_properties.results | selectattr('item', 'equalto', 'Group') | first).stdout == 'splunkfwd'
-      - (ludus_splunk_collector_effective_properties.results | selectattr('item', 'equalto', 'FragmentPath') | first).stdout | length > 0
-      - ludus_splunk_collector_effective_fragment_stat.stat.get('isreg', false)
-      - not (ludus_splunk_collector_effective_fragment_stat.stat.get('islnk', false) | bool)
+      - (splunk_forwarder_effective_properties.results | selectattr('item', 'equalto', 'User') | first).stdout == 'splunkfwd'
+      - (splunk_forwarder_effective_properties.results | selectattr('item', 'equalto', 'Group') | first).stdout == 'splunkfwd'
+      - (splunk_forwarder_effective_properties.results | selectattr('item', 'equalto', 'FragmentPath') | first).stdout | length > 0
+      - splunk_forwarder_effective_fragment_stat.stat.get('isreg', false)
+      - not (splunk_forwarder_effective_fragment_stat.stat.get('islnk', false) | bool)
       - >-
-        (ludus_splunk_collector_effective_properties.results
+        (splunk_forwarder_effective_properties.results
         | selectattr('item', 'equalto', 'DropInPaths') | first).stdout | trim
         == '/etc/systemd/system/SplunkForwarder.service.d/10-ludus-capabilities.conf'
-      - (ludus_splunk_collector_effective_properties.results | selectattr('item', 'equalto', 'CapabilityBoundingSet') | first).stdout | trim == ''
-      - (ludus_splunk_collector_effective_properties.results | selectattr('item', 'equalto', 'AmbientCapabilities') | first).stdout | trim == ''
-      - (ludus_splunk_collector_effective_properties.results | selectattr('item', 'equalto', 'NoNewPrivileges') | first).stdout | trim == 'yes'
-      - ludus_splunk_collector_effective_unit_content.content | b64decode | ludus_splunk_collector_validate_forwarder_unit_execs
+      - (splunk_forwarder_effective_properties.results | selectattr('item', 'equalto', 'CapabilityBoundingSet') | first).stdout | trim == ''
+      - (splunk_forwarder_effective_properties.results | selectattr('item', 'equalto', 'AmbientCapabilities') | first).stdout | trim == ''
+      - (splunk_forwarder_effective_properties.results | selectattr('item', 'equalto', 'NoNewPrivileges') | first).stdout | trim == 'yes'
+      - splunk_forwarder_effective_unit_content.content | b64decode | ludus_splunk_collector_validate_forwarder_unit_execs
     fail_msg: Refusing to start an unexpected, root-run, or capability-enabled forwarder unit.
 
 - name: Enable and start the verified forwarder service  # noqa: var-naming[no-role-prefix]
@@ -157,7 +156,7 @@
     name: SplunkForwarder.service
     enabled: true
     state: started
-  register: ludus_splunk_collector_service_start
+  register: splunk_forwarder_service_start
 
 - name: Apply queued forwarder restarts before readiness checks
   ansible.builtin.meta: flush_handlers
@@ -173,8 +172,8 @@
     use_netrc: false
     follow_redirects: none
     return_content: false
-  register: ludus_splunk_collector_unauthenticated_readiness
-  until: ludus_splunk_collector_unauthenticated_readiness.status | default(0) == 401
+  register: splunk_forwarder_unauthenticated_readiness
+  until: splunk_forwarder_unauthenticated_readiness.status | default(0) == 401
   retries: 60
   delay: 10
 
@@ -183,8 +182,8 @@
     url: http://localhost:8089/services/server/info?output_mode=json
     method: GET
     unix_socket: /opt/splunkforwarder/var/run/splunk/cli.socket
-    user: "{{ ludus_splunk_collector_admin_username }}"
-    password: "{{ ludus_splunk_collector_admin_password }}"
+    user: "{{ splunk_forwarder_admin_user }}"
+    password: "{{ splunk_forwarder_linux_admin_password }}"
     force_basic_auth: true
     status_code: 200
     timeout: 15
@@ -193,29 +192,29 @@
     follow_redirects: none
     unredirected_headers: [Authorization]
     return_content: false
-  register: ludus_splunk_collector_auth_check
-  until: ludus_splunk_collector_auth_check.status | default(0) == 200
+  register: splunk_forwarder_auth_check
+  until: splunk_forwarder_auth_check.status | default(0) == 200
   retries: 30
   delay: 10
-  when: ludus_splunk_collector_seed_created is defined and ludus_splunk_collector_seed_created.changed
+  when: splunk_forwarder_seed_created is defined and splunk_forwarder_seed_created.changed
   no_log: true
   diff: false
 
 - name: Confirm initialized authentication database after fresh authentication  # noqa: var-naming[no-role-prefix]
   ansible.builtin.stat:
     path: /opt/splunkforwarder/etc/passwd
-  register: ludus_splunk_collector_passwd_after_bootstrap
-  when: ludus_splunk_collector_seed_created is defined and ludus_splunk_collector_seed_created.changed
+  register: splunk_forwarder_passwd_after_bootstrap
+  when: splunk_forwarder_seed_created is defined and splunk_forwarder_seed_created.changed
 
 - name: Require a nonempty initialized authentication database
   ansible.builtin.assert:
     that:
-      - ludus_splunk_collector_passwd_after_bootstrap.stat.get('exists', false)
-      - ludus_splunk_collector_passwd_after_bootstrap.stat.get('size', 0) | int > 0
-  when: ludus_splunk_collector_seed_created is defined and ludus_splunk_collector_seed_created.changed
+      - splunk_forwarder_passwd_after_bootstrap.stat.get('exists', false)
+      - splunk_forwarder_passwd_after_bootstrap.stat.get('size', 0) | int > 0
+  when: splunk_forwarder_seed_created is defined and splunk_forwarder_seed_created.changed
 
 - name: Remove only the fresh seed created by this successful invocation
   ansible.builtin.file:
     path: /opt/splunkforwarder/etc/system/local/user-seed.conf
     state: absent
-  when: ludus_splunk_collector_seed_created is defined and ludus_splunk_collector_seed_created.changed
+  when: splunk_forwarder_seed_created is defined and splunk_forwarder_seed_created.changed

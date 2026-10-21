@@ -1,7 +1,7 @@
 [default]
 host = {{ ansible_hostname }}
 
-{% for input in splunk_uf_inputs %}
+{% for input in splunk_forwarder_inputs %}
 [{{ input.name }}]
 disabled = false
 {% if input.index is defined %}

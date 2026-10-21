@@ -7,6 +7,3 @@
 [submodule "ansible/collections/ludus_windows_utils"]
 	path = ansible/collections/ludus_windows_utils
 	url = https://github.com/badsectorlabs/ludus_windows_utils.git
-[submodule "ansible/roles/ludus_splunk"]
-	path = ansible/roles/ludus_splunk
-	url = https://github.com/curi0usJack/ludus_splunk.git
