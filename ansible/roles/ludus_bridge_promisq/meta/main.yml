@@ -1,6 +1,6 @@
 ---
 galaxy_info:
-  role_name: ludus_configure_bridge
+  role_name: ludus_bridge_promisq
   author: dotknewt
   description: Configure a single-node Ludus range bridge on its Proxmox host
   license: AGPL-3.0-only

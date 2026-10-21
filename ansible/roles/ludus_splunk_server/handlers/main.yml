@@ -1,8 +1,0 @@
----
-- name: Restart Splunk for receiver configuration change
-  listen: Restart Splunk for configuration change
-  ansible.builtin.systemd_service:
-    name: Splunkd.service
-    state: restarted
-  become: true
-  when: ludus_splunk_server_receiver_service_state.stdout == 'active'
