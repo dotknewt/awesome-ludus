@@ -12,7 +12,7 @@ When authoring or reviewing Ludus sources, blueprints, range configs, or roles, 
 
 ## Live deployment debugging and retries
 
-- For live Ludus deployment failures or retries, follow [`docs/instructions/live-debugging.md`](docs/instructions/live-debugging.md); each operator approval authorizes only one fix-upload-deploy-monitor cycle.
+- For live Ludus deployment debugging or retries, read and follow [`docs/instructions/live-debugging.md`](docs/instructions/live-debugging.md).
 
 ## Router state and recovery
 

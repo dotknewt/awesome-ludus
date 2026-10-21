@@ -1,5 +1,13 @@
 # Windows Splunk example: pre-live closeout
 
+**Supersession update: 2026-10-20.** The filesystem ACL review and ACL-hardening
+claims recorded in this historical static closeout are superseded: user
+direction confirmed no stricter Windows filesystem ACL requirement. The role now
+retains normal installer/inherited filesystem permissions and does not require
+or claim ACL-backed marker ownership. The separate Event Log channel READ ACE
+behavior remains. The test and validator results below predate this update and
+are not validation evidence for the resulting tree.
+
 **Prior static closeout: recorded — 2026-10-20.** The evidence below was
 collected with `ansible.windows` 3.8.0 and `community.windows` 3.3.0. The
 example now pins the currently Ludus-installed baseline (`ansible.windows`
@@ -44,12 +52,11 @@ installation, deployment, guest probes, API calls, or live evaluation.
   or service readiness. Sources: <https://docs.ludus.cloud/docs/configuration/>
   and <https://docs.ludus.cloud/schemas/range-config.json>. Comparison notes:
   `/tmp/opencode/splunk-prelive-dependency-docs.md`.
-- Final scoped ACL review: Oracle **ACCEPT**. Service-account filesystem
-  masks include .NET's `Synchronize` bit; inspection calls execute directly
-  under the Ansible `when` gate. ACL management remains bounded and fail-closed:
-  unfamiliar policy is refused rather than reconciled. It may refuse the actual
-  MSI-created ACL until separately reviewed. This review and all checks are
-  static only.
+- Historical ACL review: Oracle **ACCEPT** was recorded for the now-superseded
+  custom filesystem ACL policy. That policy was agent-invented and has been
+  removed at the user's direction; this review is not a current requirement or
+  validation result. The current role does not inspect or modify Windows
+  filesystem ACLs. Event Log READ ACE management remains separate.
 - `git diff --check`: PASS. Validator cleanup restored tracked bytecode and
   removed generated untracked bytecode; see the closeout validation record.
 
@@ -57,10 +64,11 @@ installation, deployment, guest probes, API calls, or live evaluation.
 
 - Target Ludus version, installed role IDs, template catalog names, and a
   receiver address resolvable from Windows remain placeholders/unverified.
-- UF 10.6.1.1 OS support, actual MSI-created ACL compatibility, effective
-  service-account Event Log/file access, seed authentication, and runtime
-  lifecycle behavior remain unverified. A fail-closed ACL refusal may require
-  a separately reviewed change after authorized target evidence.
+- UF 10.6.1.1 OS support, effective service-account Event Log/file access, seed
+  authentication, and runtime lifecycle behavior remain unverified. Windows
+  filesystem permissions are retained from the installer/inherited environment;
+  the role does not certify effective file access or impose a filesystem ACL
+  policy.
 - Fresh install, convergence/restart, reboot and recovery paths, credential
   failure/cleanup, and actual three-index ingestion were not exercised; each
   requires separate authorization.

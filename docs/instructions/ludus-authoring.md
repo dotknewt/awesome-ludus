@@ -9,6 +9,16 @@ Use this policy when creating or reviewing Ludus source content, blueprints, ran
 - Use the documented files: source metadata in root `source.yml`; each source blueprint has `blueprint.yml` metadata and `range-config.yml` topology, with `requirements.yml` for Galaxy roles, collections, or subscription roles. Declare dependencies there with appropriate version pins, or provide source-local roles under `ansible/roles/` and collections under `ansible/collections/`. Do not copy large schemas into examples; link to the official schema and check it for valid fields and types.
 - Treat source content as executable code on the Ludus host; review it before installation and prefer an immutable source ref when appropriate.
 
+## Range creation defaults
+
+Every range configuration created in this repository must include all three of the following in the range-level `defaults:` block, unless the user explicitly asks to change or exclude one or more of them:
+
+- `snapshot_with_RAM: true`
+- `stale_hours: 0`
+- `timezone: Europe/Oslo`
+
+This is repository policy, not a claim about official Ludus defaults; the official schema's documented default timezone is `America/New_York` ([range-config schema](https://docs.ludus.cloud/schemas/range-config.json)). Apply explicit change/exclusion instructions as given and record the deviation. Only an explicit user instruction may omit the whole `defaults:` block; never drop these defaults silently.
+
 ## Reusable role design
 
 - Make each role independently reusable, namespaced, and usable without a particular blueprint. Own the installation and configuration of the component the role represents.
@@ -31,7 +41,7 @@ Use this policy when creating or reviewing Ludus source content, blueprints, ran
 ## Verification and evidence
 
 - Verification is static and live only; do not add or rely on simulations, stateful fakes, or mocked behavior as verification evidence. Static checks may validate structure, syntax, manifests, schema conformance, and code patterns, but do not prove runtime behavior. Follow [AGENTS.md's behavioral verification requirements](../../AGENTS.md#behavioral-verification) for actual-entrypoint evidence, lifecycle and sanitization checks, evidence reporting/reuse, and authorization.
-- For Ansible/YAML checks, use the repository's `ansible-validation` skill and `.opencode/skills/ansible-validation/scripts/validate.py`. Inventory every role and declared dependency in the selected artifact while excluding unrelated roles. Actual check failures and coverage errors block a live-authorization request, except for the missing optional Galaxy metadata defined above; `PASS WITH WARNINGS — NOT VERIFIED` may proceed only when every unavailable check and unverified target remains prominent. Static output never proves runtime readiness or grants deployment authorization.
+- When finishing role work, validate changed files only, using file-scoped checks supported by the available tools; do not expand completion checks to unchanged files or whole-role directories. If available tools cannot check the changed files without widening scope, report those checks as unavailable. Reuse results only while the changed files remain unchanged. This check is tied to finishing role work, not a prerequisite for live deployment or retries. Actual failures and coverage errors block claiming the role work is complete, except for the missing optional Galaxy metadata defined above. Carry forward `PASS WITH WARNINGS — NOT VERIFIED` with every unavailable check and unverified target. Static output never establishes runtime behavior or grants deployment authorization. See [`live-debugging.md`](live-debugging.md) for the separate live cycle.
 
 ## Official references
 

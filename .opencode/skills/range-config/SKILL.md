@@ -14,32 +14,42 @@ Use this skill to build safe, valid Ludus YAML configurations and explain tradeo
    # yaml-language-server: $schema=https://docs.ludus.cloud/schemas/range-config.json
    ```
 
-2. **Use `{{ range_id }}` template strings** in vm_name and hostname fields. This resolves to the user's range ID (e.g., "JS").
+2. **Range creation defaults (repository policy, not official Ludus defaults).** Unless explicitly told to change or exclude one or more of them, every range config created here must include all three of these settings in the range-level `defaults:` block:
+   ```yaml
+   defaults:
+     snapshot_with_RAM: true
+     stale_hours: 0
+     timezone: Europe/Oslo
+   ```
+   The official schema default timezone is `America/New_York`; `Europe/Oslo` is this repository's mandated default. When a user explicitly asks to change or exclude a setting, apply the explicit instruction and note the deviation. If the whole `defaults:` block is unwanted, that too must be an explicit instruction — never drop these defaults silently.
 
-3. **Windows hostnames are limited to 15 characters** due to NETBIOS.
+3. **Use `{{ range_id }}` template strings** in vm_name and hostname fields. This resolves to the user's range ID (e.g., "JS").
 
-4. **VLANs must be 2-255** and become the third octet of the VM's IP (e.g., vlan 10 = 10.X.10.Y).
+4. **Windows hostnames are limited to 15 characters** due to NETBIOS.
 
-5. **ip_last_octet must be unique within a VLAN**.
+5. **VLANs must be 2-255** and become the third octet of the VM's IP (e.g., vlan 10 = 10.X.10.Y).
 
-6. **Set `linux: true`** for Linux VMs, **`windows:` key** for Windows VMs, **`macOS: true`** for macOS VMs.
+6. **ip_last_octet must be unique within a VLAN**.
 
-7. **Domain roles** are: `primary-dc`, `alt-dc`, or `member`.
+7. **Set `linux: true`** for Linux VMs, **`windows:` key** for Windows VMs, **`macOS: true`** for macOS VMs.
 
-8. **role_vars must be a dictionary** - do not use hyphens to prefix variables.
+8. **Domain roles** are: `primary-dc`, `alt-dc`, or `member`.
 
-9. **Roles must exist on the server** before deploy — verify installed roles and add any that are missing.
+9. **role_vars must be a dictionary** - do not use hyphens to prefix variables.
+
+10. **Roles must exist on the server** before deploy — verify installed roles and add any that are missing.
 
 ## Workflow
 
 1. Clarify the target environment and intended use case.
 2. Define required VMs and roles.
-3. Verify that required templates are available on the server.
-4. Build or revise YAML in small, valid increments.
-5. Propose network rules and testing behavior appropriate for the scenario.
-6. Verify that required Ansible roles/collections are installed; recommend any that need to be added.
-7. Validate structure and values against the schema reference.
-8. Before requesting live authorization, use `ansible-validation` to inventory the range YAML as data plus every VM/router role, `depends_on` role, and declared dependency that can be resolved locally. Exclude unrelated roles and record every unresolved path or truthful harness as a coverage error. Actual failures and coverage errors block the request; carry forward `PASS WITH WARNINGS — NOT VERIFIED` with every unavailable check and target. Static results do not authorize deployment.
+3. Apply the mandatory range creation defaults (Key Principle 2) to the `defaults:` block unless the user explicitly changed or excluded one or more of them.
+4. Verify that required templates are available on the server.
+5. Build or revise YAML in small, valid increments.
+6. Propose network rules and testing behavior appropriate for the scenario.
+7. Verify that required Ansible roles/collections are installed; recommend any that need to be added.
+8. Validate structure and values against the schema reference.
+9. When finishing role work, validate changed files only with file-scoped checks supported by available tools; do not expand completion checks to unchanged files or whole-role directories. If available tools cannot check the changed files without widening scope, report those checks as unavailable. Record unresolved paths or unsuitable harnesses as coverage gaps without validating unchanged targets. This role check is tied to finishing role work, not a prerequisite for live deployment or retries. Actual failures and coverage errors block claiming role work is complete; carry forward `PASS WITH WARNINGS — NOT VERIFIED` with every unavailable check and target. Static results do not establish runtime behavior or authorize deployment.
 
 ## References
 

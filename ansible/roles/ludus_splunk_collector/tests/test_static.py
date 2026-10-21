@@ -117,7 +117,8 @@ class SplunkCollectorStaticContract(unittest.TestCase):
         )
         self.assertEqual(
             self.defaults.get(prefix + "package_checksum"),
-            "sha512:2172ed26173b4f29e3ffb051800dce3b21701f8fa202466063a5355dd9e7c2cac03714e5db026c4a5dd37249a23be017661a80b4969a339e1d653a16622180c31",
+            # Verified against Splunk's published Linux package checksum sidecar.
+            "sha512:2172ed26173b4f29e3ffb051800dce3b21701f8fa202466063a535dd9e7c2cac03714e5db026c4a5dd37249a23be017661a80b4969a339e1d653a16622180c31",
         )
         self.assertEqual(self.defaults.get(prefix + "version"), "10.6.1.1")
         self.assertIs(self.defaults.get(prefix + "accept_license"), False)
@@ -220,20 +221,33 @@ class SplunkCollectorStaticContract(unittest.TestCase):
     def test_seed_is_fresh_only_protected_and_cleaned_after_auth_readiness(self):
         for value in (
             "user-seed.conf", "passwd", "mode: \"0600\"", "no_log: true", "diff: false",
-            "use_proxy: false", "follow_redirects: none", "127.0.0.1",
+            "use_proxy: false", "follow_redirects: none",
         ):
             self.assertIn(value, self.source)
         ordered_text = "\n".join(str(task) for task in self.ordered_tasks)
         self.assertIn("passwd", ordered_text)
         self.assertIn("seed_created.changed", ordered_text)
-        auth_indices = [index for index, task in enumerate(self.linux_tasks)
-                        if _module(task, "uri") is not None and "127.0.0.1" in str(_module(task, "uri"))]
+        authenticated_tasks = [
+            (index, task) for index, task in enumerate(self.linux_tasks)
+            if _module(task, "uri") is not None
+            and _module(task, "uri").get("url") == "http://localhost:8089/services/server/info?output_mode=json"
+            and _module(task, "uri").get("unix_socket") == "/opt/splunkforwarder/var/run/splunk/cli.socket"
+            and _module(task, "uri").get("status_code") == 200
+            and _module(task, "uri").get("user") == "{{ ludus_splunk_collector_admin_username }}"
+            and _module(task, "uri").get("password") == "{{ ludus_splunk_collector_admin_password }}"
+            and _module(task, "uri").get("force_basic_auth") is True
+        ]
         cleanup_indices = [index for index, task in enumerate(self.linux_tasks)
                            if _module(task, "file") is not None and _module(task, "file").get("state") == "absent"
                            and "user-seed.conf" in str(_module(task, "file"))]
-        self.assertTrue(auth_indices, "missing authenticated loopback readiness check")
+        self.assertTrue(authenticated_tasks, "missing authenticated Unix-socket readiness check")
+        for auth_index, auth_task in authenticated_tasks:
+            self.assertIs(auth_task.get("no_log"), True, "authenticated readiness must not log credentials")
+            self.assertIn("ludus_splunk_collector_seed_created.changed", str(auth_task.get("when", "")),
+                          "fresh authentication must be limited to a seed created by this invocation")
         self.assertTrue(cleanup_indices, "missing seed cleanup task")
-        self.assertLess(min(auth_indices), min(cleanup_indices), "seed cleanup must follow authenticated readiness")
+        self.assertLess(min(index for index, _ in authenticated_tasks), min(cleanup_indices),
+                        "seed cleanup must follow authenticated readiness")
 
     def test_owned_forwarding_config_is_validated_and_convergent(self):
         for value in ("ludus_collector", "[tcpout]", "[monitor://", "sourcetype", "index"):

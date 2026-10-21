@@ -230,9 +230,9 @@ class WindowsCollectorStaticContract(unittest.TestCase):
             self.assertIn(required_property.lower() + "=0", joined)
             self.assertNotIn(required_property.lower().replace("privilege", "privilege_"), joined)
 
-    def test_seed_acl_readiness_and_reboot_failure_order(self):
+    def test_seed_preservation_and_initialization_metadata_order(self):
         source = self.source.lower()
-        for token in ("user-seed.conf", "no_log", "diff", "127.0.0.1", "passwd",
+        for token in ("user-seed.conf", "no_log", "diff", "passwd",
                       "nt service\\splunkforwarder", "securitydescriptor",
                       "savechanges", "deny", "sid"):
             self.assertIn(token.lower(), source)
@@ -241,20 +241,32 @@ class WindowsCollectorStaticContract(unittest.TestCase):
         tasks = self.tasks
         seed_writes = [i for i, task in enumerate(tasks) if _module(task, "template") is not None
                        and "user-seed.conf" in str(_module(task, "template"))]
-        protected = [i for i, task in enumerate(tasks)
-                     if "Set-Acl" in _script(task) and "user-seed.conf" in _script(task)]
-        auth = [i for i, task in enumerate(tasks) if _module(task, "uri") is not None
-                and "127.0.0.1" in str(_module(task, "uri"))]
-        readiness = [i for i, task in enumerate(tasks)
-                     if _module(task, "assert") is not None and "passwd" in str(_module(task, "assert"))]
+        service_start = [i for i, task in enumerate(tasks) if _module(task, "service") is not None
+                         and _module(task, "service").get("state") == "started"]
+        readiness_wait = [i for i, task in enumerate(tasks)
+                          if _module(task, "stat") is not None
+                          and "etc/passwd" in _module(task, "stat").get("path", "").replace("\\", "/").lower()
+                          and task.get("retries", 0) >= 2 and task.get("until")]
+        readiness_assert = [i for i, task in enumerate(tasks)
+                            if _module(task, "assert") is not None
+                            and "passwd" in str(_module(task, "assert"))
+                            and "size" in str(_module(task, "assert"))]
         cleanup = [i for i, task in enumerate(tasks) if _module(task, "file") is not None
                    and _module(task, "file").get("state") == "absent"
                    and "user-seed.conf" in str(_module(task, "file"))]
-        self.assertTrue(seed_writes, "missing protected fresh-install seed write")
-        self.assertTrue(protected, "seed file ACL protection must be explicit before writing secret content")
-        self.assertLess(max(protected), min(seed_writes))
-        self.assertTrue(auth and readiness and cleanup, "missing authentication, passwd readiness, or cleanup task")
-        self.assertLess(max(max(auth), max(readiness)), min(cleanup))
+        ready_marker = [i for i, task in enumerate(tasks) if "ownership.json" in _script(task)
+                        and "Set-Content" in _script(task) and "phase = 'ready'" in _script(task)]
+        self.assertTrue(seed_writes, "missing fresh-install seed write")
+        self.assertFalse([task for task in tasks if _module(task, "uri") is not None],
+                         "Windows readiness must not require an administrator API login")
+        self.assertTrue(service_start and readiness_wait and readiness_assert and cleanup and ready_marker,
+                        "missing service start, bounded passwd initialization wait, cleanup, or ready marker")
+        self.assertLess(max(service_start), min(readiness_wait))
+        self.assertLess(max(readiness_wait), min(readiness_assert))
+        self.assertLess(max(readiness_assert), min(cleanup))
+        self.assertLess(max(cleanup), min(ready_marker))
+        self.assertGreaterEqual(tasks[readiness_wait[0]].get("retries", 0), 2)
+        self.assertGreater(tasks[readiness_wait[0]].get("delay", 0), 0)
         self.assertTrue(any(task.get("no_log") is True and task.get("diff") is False for task in tasks
                             if _module(task, "template") is not None and "user-seed.conf" in str(task)),
                         "seed rendering must disable logs and diffs")
@@ -323,31 +335,64 @@ class WindowsCollectorStaticContract(unittest.TestCase):
         self.assertTrue("\\n" in lower or "\\r" in lower or "control" in lower,
                         "production input validation must explicitly reject newline/control characters")
 
-    def test_powershell_inspection_avoids_readonly_home_and_exactly_checks_service_path(self):
-        inspect_task = next((task for task in self.tasks if "inspect.yml" in str(
-            task.get("ansible.builtin.import_tasks", task.get("import_tasks")))), None)
-        self.assertIsNotNone(inspect_task, "missing Windows inspect phase import")
-        inspect_scripts = [_script(task) for task in self.tasks if _script(task)]
-        inspection_script = next((script for script in inspect_scripts if "Get-WinEvent" in script and "markerPath" in script), "")
-        self.assertTrue(inspection_script, "missing production PowerShell inspection script")
-        self.assertNotRegex(inspection_script, r"(?im)^\s*\$home\s*=")
-        self.assertRegex(inspection_script, r"(?i)\$splunkhome\s*=")
-        # Path acceptance must compare canonical executable paths, not substring or regex matches.
-        path_checks = "\n".join(script for script in inspect_scripts if "PathName" in script)
-        self.assertRegex(path_checks, r"(?i)GetFullPath")
-        self.assertRegex(path_checks, r"(?i)-ieq")
-        self.assertIn(r"C:\Program Files\SplunkUniversalForwarder\bin\splunkd.exe", path_checks)
-        self.assertNotRegex(path_checks, r"(?i)PathName\s+-match|service_path\s+is\s+search")
+    def test_windows_service_path_is_escaped_anchored_and_version_normalized(self):
+        fresh_service_script = next(
+            (_script(task) for task in self.tasks
+             if "Get-CimInstance Win32_Service" in _script(task)
+             and "ExpectedVersion" in _script(task)),
+            "",
+        )
+        self.assertTrue(fresh_service_script, "missing fresh service identity/version check")
+        self.assertIn("[regex]::Escape(", fresh_service_script)
+        self.assertIn(r'^(?:"{0}"|{0})(?:\s|$)', fresh_service_script,
+                      "service path must be an anchored executable path with paired quote alternatives and an argument boundary")
+        self.assertIn("$service.PathName", fresh_service_script)
+        self.assertIn(r"C:\Program Files\SplunkUniversalForwarder\bin\splunkd.exe", fresh_service_script)
+        self.assertIn(".VersionInfo.ProductVersion", fresh_service_script)
 
-    def test_executable_version_lookup_uses_established_splunk_home(self):
-        inspect_script = next((_script(task) for task in self.tasks
-                               if "Get-CimInstance Win32_Service" in _script(task)), "")
-        self.assertTrue(inspect_script, "missing service inspection script")
+        inspect_script = next(
+            (_script(task) for task in self.tasks
+             if "Get-CimInstance Win32_Service" in _script(task)
+             and "executableVersion" in _script(task)),
+            "",
+        )
+        self.assertTrue(inspect_script, "missing ready-state executable version inspection")
+        # Exclude CR/LF from the optional build suffix so the anchored pattern
+        # cannot accept an additional line after the version.
+        version_pattern = r"^(\d+\.\d+\.\d+\.\d+)(?:\s+\(Build\s+[^)\r\n]+\))?$"
+        for script in (fresh_service_script, inspect_script):
+            with self.subTest(script="fresh" if script is fresh_service_script else "ready"):
+                self.assertIn(version_pattern, script,
+                              "both paths must use the same anchored four-component ProductVersion contract")
+                self.assertIn(".VersionInfo.ProductVersion", script)
+                self.assertRegex(script, r"\$Matches\[1\]")
+        captured_version = re.search(r"\$(\w+)\s*=\s*\$Matches\[1\]", fresh_service_script)
+        self.assertIsNotNone(captured_version, "fresh install must compare the captured normalized version")
+        self.assertEqual(captured_version.group(1), "executableVersion")
+        self.assertIn(
+            "[string]::Equals($executableVersion, $ExpectedVersion, [StringComparison]::Ordinal)",
+            fresh_service_script,
+            "the normalized captured ProductVersion must be compared ordinally to the pin",
+        )
+        self.assertIn(r"Join-Path $splunkHome 'bin\splunkd.exe'", inspect_script)
+        self.assertNotRegex(inspect_script, r"(?im)^\s*\$home\s*=")
         self.assertRegex(inspect_script, r"(?im)^\s*\$splunkHome\s*=")
-        self.assertRegex(inspect_script, r"(?i)Test-Path\s+-LiteralPath\s+\$splunkHome\b")
-        self.assertRegex(inspect_script,
-                         r"(?i)Join-Path\s+\$splunkHome\s+'bin\\splunkd\.exe'")
-        self.assertNotRegex(inspect_script, r"(?i)\$home\b")
+
+    def test_executable_version_lookup_compares_normalized_ready_version_to_pin(self):
+        inspect_script = next((_script(task) for task in self.tasks
+                               if "Get-CimInstance Win32_Service" in _script(task)
+                               and "executableVersion" in _script(task)), "")
+        self.assertTrue(inspect_script, "missing ready-state executable version inspection")
+        ready_checks = "\n".join(
+            str(_module(task, "assert").get("that", ""))
+            for task in self.tasks
+            if _module(task, "assert") is not None
+            and "executable_version" in str(_module(task, "assert"))
+        )
+        self.assertIn("$executableVersion = $Matches[1]", inspect_script,
+                      "the inspected executable version must use the normalized capture")
+        self.assertRegex(ready_checks,
+                         r"executable_version\s*==\s*ludus_splunk_collector_windows_version")
 
     def test_pending_transition_is_result_gated_and_fresh_marker_is_reinspected(self):
         transition = next((task for task in self.tasks if "phase -ne 'pending'" in _script(task)), None)
@@ -364,14 +409,193 @@ class WindowsCollectorStaticContract(unittest.TestCase):
                             and "schema_version" in _script(task) for task in self.tasks),
                         "ownership state must be re-read from the authoritative marker after install")
 
-    def test_win_uri_retries_on_actual_status_code(self):
-        auth_tasks = [task for task in self.tasks if _module(task, "uri") is not None
-                      and "127.0.0.1" in str(_module(task, "uri"))]
-        self.assertTrue(auth_tasks, "missing fresh loopback authentication")
-        for task in auth_tasks:
-            self.assertEqual(_module(task, "uri").get("status_code"), 200)
-            self.assertIn("status_code", str(task.get("until", "")))
-            self.assertNotRegex(str(task.get("until", "")), r"\.status\b")
+    def test_marker_bootstrap_is_revalidated_and_existing_interruption_requires_recovery(self):
+        marker_writers = [
+            _module(task, "copy") for task in self.tasks
+            if _module(task, "copy") is not None
+            and "ownership.json" in str(_module(task, "copy"))
+        ]
+        self.assertTrue(marker_writers, "missing fresh ownership marker writer")
+        marker_content = str(marker_writers[0].get("content", ""))
+        for field in (
+            "schema_version", "phase", "version", "artifact_version", "artifact_url",
+            "artifact_checksum", "service_name", "service_account", "inputs_sha256", "outputs_sha256",
+        ):
+            self.assertIn(f'"{field}"', marker_content,
+                          "fresh marker JSON must emit every value required for later validation")
+        self.assertIn("{{ ludus_splunk_collector_windows_package_url }}", marker_content)
+        self.assertIn("{{ ludus_splunk_collector_windows_package_checksum }}", marker_content)
+
+        marker_checks = [
+            task for task in self.tasks
+            if "Get-Content" in _script(task)
+            and "ownership.json" in _script(task)
+            and "$marker.service_account" in _script(task)
+        ]
+        self.assertTrue(marker_checks, "missing configure-time marker re-read and validation")
+        marker_check = marker_checks[0]
+        marker_script = _script(marker_check)
+        refresh_var = marker_check.get("register")
+        self.assertTrue(refresh_var, "validated current marker must be registered for downstream decisions")
+        for field in (
+            "schema_version", "phase", "version", "artifact_version", "artifact_url",
+            "artifact_checksum", "service_name", "service_account", "inputs_sha256", "outputs_sha256",
+        ):
+            self.assertIn(f"$marker.{field}", marker_script,
+                          f"configure must validate current marker field {field}")
+        self.assertNotIn("Set-Content", marker_script,
+                         "existing marker validation must not fill missing provenance")
+        self.assertNotRegex(marker_script,
+                            r"(?i)\$marker\.(?:artifact_url|artifact_checksum|version|artifact_version)\s*=")
+
+        inspection_script = next(
+            (_script(task) for task in self.tasks
+             if "Get-WinEvent" in _script(task) and "markerPath" in _script(task)),
+            "",
+        )
+        self.assertTrue(inspection_script, "missing initial read-only inspection")
+        self.assertNotIn("Set-Content", inspection_script,
+                         "initial inspection must remain an immutable snapshot")
+        self.assertTrue(any(task.get("changed_when") is False for task in self.tasks
+                            if "Get-WinEvent" in _script(task) and "markerPath" in _script(task)))
+
+        current_phase_tasks = [
+            task for task in self.tasks
+            if _module(task, "set_fact") is not None
+            and "ludus_splunk_collector_windows_phase" in str(_module(task, "set_fact"))
+        ]
+        self.assertTrue(current_phase_tasks, "missing current ownership phase derivation")
+        phase_task = next((task for task in current_phase_tasks
+                           if refresh_var in str(_module(task, "set_fact"))), None)
+        self.assertIsNotNone(phase_task, "phase must derive from the freshly validated marker")
+        self.assertIn("result.marker.phase", str(_module(phase_task, "set_fact")))
+
+        bootstrap_asserts = [
+            task for task in self.tasks
+            if _module(task, "assert") is not None
+            and task.get("name") == "Require an owned bootstrap phase before creating a fresh seed"
+        ]
+        self.assertTrue(bootstrap_asserts, "missing fresh-bootstrap credential gate")
+        self.assertIn(refresh_var, str(_module(bootstrap_asserts[0], "assert")),
+                      "bootstrap must use the refreshed marker, not stale inspection state")
+        self.assertNotIn("ludus_splunk_collector_windows_inspection.result.marker_exists",
+                         str(_module(bootstrap_asserts[0], "assert")))
+
+        pending_index, pending_refusal = next(
+            ((index, task) for index, task in enumerate(self.tasks)
+             if task.get("name") == "Refuse interrupted MSI state pending explicit manual recovery"),
+            (-1, None),
+        )
+        self.assertIsNotNone(pending_refusal,
+                             "missing dedicated entry pending-marker recovery refusal")
+        pending_assertions = str(_module(pending_refusal, "assert").get("that", ""))
+        self.assertRegex(pending_assertions,
+                         r"(?i)phase\s*(?:!=|is not)\s*['\"]pending['\"]",
+                         "pending state must be rejected rather than automatically adopted")
+        corroboration_index = next(
+            index for index, task in enumerate(self.tasks)
+            if task.get("name") == "Corroborate ownership marker against the live service before convergence"
+        )
+        self.assertLess(pending_index, corroboration_index,
+                        "pending refusal must run before provenance-dependent corroboration")
+
+        entry_preflight_index, entry_preflight = next(
+            ((index, task) for index, task in enumerate(self.tasks)
+             if task.get("name") == "Preflight entry-time bootstrap credentials before installation"),
+            (-1, None),
+        )
+        self.assertIsNotNone(entry_preflight,
+                             "missing read-only entry-time seed/passwd preflight")
+        entry_script = _script(entry_preflight)
+        self.assertIn("Test-ExistingSeedPath", entry_script)
+        self.assertIn("$seedExists", entry_script)
+        self.assertIn("$passwdExists", entry_script)
+        entry_refusal_index, entry_refusal = next(
+            ((index, task) for index, task in enumerate(self.tasks)
+             if task.get("name") == "Refuse entry bootstrap credentials pending explicit manual recovery"),
+            (-1, None),
+        )
+        self.assertIsNotNone(entry_refusal,
+                             "existing entry-time seed/passwd must be refused for manual recovery")
+        self.assertIn("entry_bootstrap_paths.result.seed_exists",
+                      str(_module(entry_refusal, "assert")))
+        self.assertIn("entry_bootstrap_paths.result.passwd_exists",
+                      str(_module(entry_refusal, "assert")))
+        install_import_index = next(
+            index for index, task in enumerate(self.tasks)
+            if task.get("ansible.builtin.import_tasks", task.get("import_tasks")) == "install.yml"
+        )
+        event_log_mutation_index = next(
+            index for index, task in enumerate(self.tasks)
+            if task.get("name") == "Preflight and add only the local virtual account Event Log READ ACEs"
+        )
+        self.assertLess(entry_preflight_index, entry_refusal_index)
+        self.assertLess(entry_refusal_index, install_import_index,
+                        "existing credentials must be refused before install tasks")
+        self.assertLess(entry_refusal_index, event_log_mutation_index,
+                        "entry seed/passwd refusal must precede Event Log mutation")
+        seed_mutations = [
+            index for index, task in enumerate(self.tasks)
+            if "user-seed.conf" in str(task)
+            and (_module(task, "template") is not None
+                 or (_module(task, "file") is not None
+                     and _module(task, "file").get("state") in ("touch", "absent")))
+        ]
+        self.assertTrue(seed_mutations, "missing seed lifecycle mutations")
+        self.assertLess(entry_refusal_index, min(seed_mutations),
+                        "existing entry state must be refused before seed creation/render/removal")
+
+    def test_windows_readiness_has_no_mandatory_api_login_or_socket_client(self):
+        self.assertFalse([task for task in self.tasks if _module(task, "uri") is not None],
+                         "the Windows role must not require management API authentication")
+        windows_sources = self.source
+        for forbidden in ("127.0.0.1:8089", "win_uri", "curl.exe", "UnixSockets",
+                          "FindFirstFileW", "Invoke-LudusSocketHttp", "management-support.ps1"):
+            self.assertNotIn(forbidden.lower(), windows_sources.lower(),
+                             "the socket-client plan was abandoned; no new client is permitted")
+
+    def test_windows_managed_path_guards_replace_recursive_installation_scans(self):
+        inspect_script = next((_script(task) for task in self.tasks
+                               if "Get-WinEvent" in _script(task) and "markerPath" in _script(task)), "")
+        configure_scripts = [_script(task) for task in self.tasks
+                             if _script(task) and "SplunkUniversalForwarder" in _script(task)]
+        self.assertTrue(inspect_script and configure_scripts, "missing Windows inspect/configure path guards")
+        combined = "\n".join([inspect_script, *configure_scripts])
+        self.assertNotRegex(combined, r"(?i)Get-ChildItem[^\r\n]*-Recurse|Get-ChildItem[\s\S]{0,100}-Recurse",
+                            "the whole forwarder/state trees must not be recursively scanned")
+
+        guard_tasks = [task for task in self.tasks
+                       if task.get("name") in {
+                           "Guard managed Windows paths before inspection",
+                           "Guard managed Windows paths after MSI installation",
+                       }]
+        self.assertEqual(len(guard_tasks), 2,
+                         "inspect-time and post-install targeted path guards must bracket mutation phases")
+        guard_source = "\n".join(_script(task) for task in guard_tasks)
+        for path_token in ("ownership.json", "staging", "splunkd.exe", "etc\\passwd",
+                           "user-seed.conf", "inputs.conf", "outputs.conf"):
+            self.assertIn(path_token.lower(), guard_source.lower(),
+                          f"targeted managed-path guard omitted {path_token}")
+        self.assertIn("Get-Item", guard_source)
+        self.assertIn("Test-Path", guard_source)
+        self.assertRegex(guard_source, r"(?i)(?:ReparsePoint|is_reparse)")
+        self.assertRegex(guard_source, r"(?i)(?:PSIsContainer|is_directory)")
+        inspect_guard_index = next(i for i, task in enumerate(self.tasks)
+                                   if task.get("name") == "Guard managed Windows paths before inspection")
+        inspect_index = next(i for i, task in enumerate(self.tasks)
+                             if "Get-WinEvent" in _script(task) and "markerPath" in _script(task))
+        install_index = next(i for i, task in enumerate(self.tasks)
+                             if task.get("ansible.builtin.import_tasks", task.get("import_tasks")) == "install.yml")
+        postinstall_guard_index = next(i for i, task in enumerate(self.tasks)
+                                       if task.get("name") == "Guard managed Windows paths after MSI installation")
+        first_configure_path_read = next(i for i, task in enumerate(self.tasks)
+                                         if task.get("name") == "Preflight newly installed seed path types before marker or Event Log changes")
+        self.assertLess(inspect_guard_index, inspect_index,
+                        "managed ancestors must be validated before marker/config reads")
+        self.assertLess(inspect_index, install_index)
+        self.assertLess(install_index, postinstall_guard_index)
+        self.assertLess(postinstall_guard_index, first_configure_path_read,
+                        "new MSI-created managed ancestors must be checked before configure reads or writes")
 
     def test_checksum_contract_and_product_version_precede_install(self):
         downloads = [(i, task, _module(task, "get_url")) for i, task in enumerate(self.tasks)
@@ -397,16 +621,11 @@ class WindowsCollectorStaticContract(unittest.TestCase):
         self.assertLess(min(product_checks), min(i for i, _, _ in installs),
                         "MSI ProductVersion must be verified before win_package mutation")
 
-    def test_marker_schema_artifact_acl_hashes_and_readonly_reporting(self):
+    def test_marker_schema_artifact_hashes_and_readonly_reporting(self):
         source = self.source
         for field in ("schema_version", "artifact_url", "artifact_checksum", "artifact_version",
                       "service_name", "service_account", "inputs_sha256", "outputs_sha256", "phase"):
             self.assertIn(field, source)
-        self.assertRegex(source, r"(?i)Get-Acl")
-        self.assertRegex(source, r"(?i)Owner")
-        self.assertRegex(source, r"(?i)\$entry\.acl\.Access\b")
-        self.assertRegex(source, r"(?i)NT SERVICE\\SplunkForwarder")
-        self.assertRegex(source, r"(?i)(?:remove|deny|not.*(?:write|modify)).{0,100}(?:service|SplunkForwarder)|(?:service|SplunkForwarder).{0,100}(?:write|modify).{0,100}(?:false|deny|absent)")
         inspect_tasks = [task for task in self.tasks if "Get-WinEvent" in _script(task) and "markerPath" in _script(task)]
         self.assertTrue(inspect_tasks)
         inspection_script = _script(inspect_tasks[0])
@@ -417,14 +636,6 @@ class WindowsCollectorStaticContract(unittest.TestCase):
             self.assertIn("marker." + field, all_source + assertion_text,
                           "preflight/convergence must validate every authoritative marker field")
         self.assertIn("$Ansible.Failed", inspection_script)
-        self.assertRegex(inspection_script,
-                         r"(?i)\$markerAcl\s*=\s*Get-Acl\s+-LiteralPath\s+\$markerPath")
-        self.assertRegex(inspection_script, r"(?i)IsInherited")
-        self.assertRegex(inspection_script, r"(?i)FileSystemRights")
-        self.assertRegex(inspection_script,
-                         r"(?is)AccessControlType\s+-ne\s+'Allow'.{0,100}\$valid\s*=\s*\$false")
-        self.assertRegex(inspection_script,
-                         r"(?is)ruleSid\s+-notin\s+\$allowedOwners.{0,80}\$valid\s*=\s*\$false")
         self.assertTrue(any(task.get("changed_when") is False or "$Ansible.Changed = $false" in _script(task)
                             for task in inspect_tasks), "read-only inspection must report unchanged")
         ready_writers = [task for task in self.tasks if "inputs_sha256" in _script(task)
@@ -438,99 +649,60 @@ class WindowsCollectorStaticContract(unittest.TestCase):
             self.assertRegex(script, r"(?is)if\s*\(.*(?:inputs_sha256|outputs_sha256).*?Set-Content")
             self.assertRegex(script, r"(?i)\$Ansible\.Changed\s*=\s*\$changed")
 
-    def test_seed_acl_is_exclusive_and_protects_parent_before_secret_write(self):
-        named = {task.get("name", ""): (i, task) for i, task in enumerate(self.tasks)}
-        parent_acl_name = "Protect the seed parent using its inspected supported ACL"
-        seed_acl_name = "Protect the seed file using its inspected supported ACL"
-        self.assertIn(parent_acl_name, named)
-        self.assertIn(seed_acl_name, named)
-        _, parent_acl = named[parent_acl_name]
-        _, seed_acl = named[seed_acl_name]
-        template = next((i for i, task in enumerate(self.tasks)
-                         if _module(task, "template") is not None
-                         and "user-seed.conf" in str(_module(task, "template"))), None)
-        self.assertIsNotNone(template)
-        self.assertLess(named[parent_acl_name][0], named[seed_acl_name][0])
-        self.assertLess(named[seed_acl_name][0], template)
-        for task, expected_kind in ((parent_acl, "Directory"), (seed_acl, "File")):
-            script = _script(task)
-            for token in ("Get-Acl", "GetSecurityDescriptorSddlForm", "RawSecurityDescriptor",
-                          "DiscretionaryAcl", "CommonAce", "IsCallback", "AccessDenied",
-                          "Inherited", "AccessMask", "AceFlags", "SetAccessRuleProtection",
-                          "Set-Acl", "FileSystemRights", "SecurityIdentifier", "ReparsePoint"):
-                self.assertIn(token.lower(), script.lower(), f"{expected_kind} ACL lacks {token} validation")
-            self.assertRegex(script, r"(?i)AceQualifier\s+-ne\s+.*AccessAllowed")
-            self.assertRegex(script, r"(?i)if\s*\(.*IsCallback.*\).*throw")
-            self.assertRegex(script, r"(?i)if\s*\(.*AccessDenied.*\).*throw")
-            self.assertRegex(script, r"(?i)SetAccessRuleProtection\(\$true,\s*\$false\)")
-            self.assertIn("Get-Acl -LiteralPath $Path" if expected_kind == "Directory"
-                          else "Get-Acl -LiteralPath $path", script)
-            self.assertNotIn("New-Object System.Security.AccessControl.DirectorySecurity", script)
-            self.assertNotIn("New-Object System.Security.AccessControl.FileSecurity", script)
-        parent_script = _script(parent_acl)
-        seed_script = _script(seed_acl)
-        self.assertIn("Get-SeedAclPlan $path 'Directory'", parent_script)
-        self.assertIn("Get-SeedAclPlan $seed 'File'", parent_script,
-                      "validate any existing seed before mutating the parent")
-        self.assertIn("ReadAndExecute", parent_script)
-        self.assertIn("$flags = if ($ExpectedKind -eq 'Directory') { 3 } else { 0 }", parent_script)
-        self.assertIn("flags = $flags", parent_script)
-        self.assertIn("FileSystemRights]::Read", seed_script)
-        self.assertIn("FileSystemRights]::ReadAndExecute", parent_script)
-        for script in (parent_script, seed_script):
-            self.assertIn("FileSystemRights]::Synchronize", script,
-                          "expected ACE masks must include .NET's implicit Synchronize right")
-        self.assertIn("[int]$ace.AceFlags -ne 0", seed_script)
-        self.assertIn("$parentExpected[$serviceSid] = [int]([System.Security.AccessControl.FileSystemRights]::ReadAndExecute -bor", seed_script)
-        self.assertIn("$parentSeen.Count -ne 3", seed_script)
+    def test_windows_filesystem_acl_enforcement_is_absent_but_eventlog_read_acl_remains(self):
+        windows_task_source = "\n".join(
+            path.read_text()
+            for path in WINDOWS.rglob("*.y*ml")
+            if path.is_file()
+        )
+        self.assertNotRegex(
+            windows_task_source,
+            r"(?i)\b(?:Get-Acl|Set-Acl|FileSystemAccessRule|SetAccessRuleProtection|"
+            r"win_acl|win_acl_inheritance)\b|\bresult\.acl\b",
+            "Windows role tasks must not impose custom filesystem ACL policy",
+        )
+        self.assertNotRegex(
+            windows_task_source,
+            r"(?i)unrelated.{0,160}system[\\/]+local|system[\\/]+local.{0,160}unrelated",
+            "ordinary system/local children must not be rejected solely for being unrelated",
+        )
 
-        # Existing resumable state is inspected before the install phase mutates MSI state.
-        inspect_preflight = next((i, task) for i, task in enumerate(self.tasks)
-                                 if task.get("name") == "Preflight existing bootstrap seed ACLs before installation")
-        install = next(i for i, task in enumerate(self.tasks)
-                       if task.get("ansible.builtin.import_tasks", task.get("import_tasks")) == "install.yml")
-        self.assertLess(inspect_preflight[0], install)
-        self.assertIn("bootstrapPending", str(inspect_preflight[1].get("when", "")))
-        inspect_acl_script = _script(inspect_preflight[1])
-        self.assertNotIn("$ludus_splunk_collector_windows_inspection", inspect_acl_script,
-                         "Ansible register variables are not PowerShell variables")
-        self.assertIn("Test-ExistingSeedAcl $parent 'Directory'", inspect_acl_script)
-        self.assertIn("Test-ExistingSeedAcl $seed 'File'", inspect_acl_script)
-        self.assertIn("FileSystemRights]::Synchronize", inspect_acl_script)
-        for token in ("DiscretionaryAcl", "AccessDenied", "IsCallback", "CommonAce",
-                      "SecurityIdentifier", "FileSystemRights", "ReparsePoint", "$unrelated.Count"):
-            self.assertIn(token.lower(), _script(inspect_preflight[1]).lower())
+        eventlog_script = next(
+            (_script(task) for task in self.tasks
+             if "Get-WinEvent -ListLog" in _script(task) and "CommonAce" in _script(task)),
+            "",
+        )
+        self.assertTrue(eventlog_script, "missing Event Log ACL planning script")
+        self.assertIn("RawSecurityDescriptor", eventlog_script)
+        self.assertRegex(eventlog_script, r"(?i)AccessMask\s+-band\s+1")
+        self.assertRegex(eventlog_script, r"(?i)CommonAce\([\s\S]{0,200},\s*1,\s*\$sid")
+        self.assertIn("SaveChanges", eventlog_script,
+                      "Event Log channel read access must remain independently managed")
 
-        # A post-MSI preflight runs at configure entry before marker/Event Log mutation.
-        configure_preflight = next((i, task) for i, task in enumerate(self.tasks)
-                                   if task.get("name") == "Preflight newly installed seed paths before marker or Event Log changes")
-        first_eventlog = next(i for i, task in enumerate(self.tasks) if "Get-WinEvent" in _script(task)
-                              and "SaveChanges" in _script(task))
-        marker_transition = next(i for i, task in enumerate(self.tasks)
-                                 if "Fresh-install ownership transition" in _script(task))
-        self.assertLess(configure_preflight[0], marker_transition)
-        self.assertLess(configure_preflight[0], first_eventlog)
-        for token in ("DiscretionaryAcl", "AccessDenied", "IsCallback", "CommonAce",
-                      "SecurityIdentifier", "FileSystemRights", "ReparsePoint", "$unrelated.Count"):
-            self.assertIn(token.lower(), _script(configure_preflight[1]).lower())
-        self.assertIn("FileSystemRights]::Synchronize", _script(configure_preflight[1]))
-        self.assertIn("ludus_splunk_collector_windows_package.skipped", str(configure_preflight[1].get("when", "")))
+    def test_seed_path_type_and_reparse_guards_precede_secret_rendering(self):
+        path_guard_scripts = [
+            (index, _script(task)) for index, task in enumerate(self.tasks)
+            if "user-seed.conf" in _script(task)
+            and "Test-Path" in _script(task)
+            and "Get-Item" in _script(task)
+            and "ReparsePoint" in _script(task)
+            and "PSIsContainer" in _script(task)
+        ]
+        self.assertTrue(path_guard_scripts, "seed path existence/type/reparse guards are missing")
+        template_indices = [index for index, task in enumerate(self.tasks)
+                            if _module(task, "template") is not None
+                            and "user-seed.conf" in str(_module(task, "template"))]
+        self.assertTrue(template_indices, "missing fresh seed rendering task")
+        self.assertLess(min(index for index, _ in path_guard_scripts), min(template_indices),
+                        "seed path guards must precede secret rendering")
 
-        # Both paths are rechecked before the secret-bearing template operation.
-        final_check = next((i, task) for i, task in enumerate(self.tasks)
-                           if task.get("name") == "Recheck seed parent and file ACLs immediately before secret rendering")
-        self.assertLess(final_check[0], template)
-        self.assertIn("Get-Acl", _script(final_check[1]))
-        self.assertIn("user-seed.conf", _script(final_check[1]))
-        self.assertIn("system\\local", _script(final_check[1]))
-        self.assertIn("$unrelated.Count", _script(final_check[1]))
-        final_script = _script(final_check[1])
-        self.assertIn("Assert-ProtectedSeedAcl $parent 'Directory'", final_script)
-        self.assertIn("Assert-ProtectedSeedAcl $seed 'File'", final_script)
-        self.assertIn("FileSystemRights]::Synchronize", final_script)
-        self.assertIn("SetAccessRuleProtection($true, $false)", parent_script)
-        self.assertIn("$acl.SetAccessRule($rule)", parent_script)
-        self.assertIn("$acl.SetAccessRule($rule)", seed_script)
+        install_index = next(index for index, task in enumerate(self.tasks)
+                             if task.get("ansible.builtin.import_tasks", task.get("import_tasks")) == "install.yml")
+        inspect_guard_indices = [index for index, script in path_guard_scripts
+                                 if "bootstrapPending" in str(self.tasks[index].get("when", ""))]
+        self.assertTrue(inspect_guard_indices, "existing bootstrap state must retain a guarded seed path preflight")
+        self.assertLess(min(inspect_guard_indices), install_index,
+                        "existing seed paths must be checked before installation mutation")
 
     def test_collision_scan_is_boundary_aware_and_preserves_vendor_defaults(self):
         inspect_script = next((_script(task) for task in self.tasks

@@ -42,7 +42,7 @@ ludus range logs -f                    # Watch progress
 ludus range status                     # Check status
 ```
 
-Before proposing or running an authorized deploy for a local range, blueprint, or source, use `ansible-validation` to inventory all artifact YAML, referenced roles, and declared dependencies that can be inspected locally; exclude unrelated roles and preserve unresolved targets as coverage errors. Actual static failures and coverage errors block the authorization request. `PASS WITH WARNINGS — NOT VERIFIED` may proceed only with every unavailable check and target carried forward prominently. Static validation does not authorize deployment; report live evidence separately.
+For changed role work, run `ansible-validation` when finishing the work, scoped to changed role files and changed declared dependencies only, as specified in [Ludus authoring policy](../../../docs/instructions/ludus-authoring.md#verification-and-evidence). This check is not a prerequisite for live deployment or retries. An explicit live/deploy request with a range and scope, or `/live` with both arguments, authorizes that requested cycle; do not ask for duplicate approval. Follow [live-debugging.md](../../../docs/instructions/live-debugging.md) for the cycle and its scope boundaries. Report any static validation separately from live evidence; static results do not establish runtime behavior or authorize actions outside the requested scope.
 
 **Testing Mode:**
 ```bash

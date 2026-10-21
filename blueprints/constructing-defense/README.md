@@ -34,9 +34,9 @@ graph TB
 | CERTER  | win2022-server-x64-template           | .12  | ADCS CA, vulnerable to ESC1                    |
 | WIN11V  | win11-22h2-x64-enterprise-template    | .13  | Domain member, Splunk UF                       |
 | WIN11A  | win11-22h2-x64-enterprise-template    | .14  | Domain member / attacker workstation          |
-| linuxa  | debian-13.5-x64-server-no-template         | .15  | General-purpose Linux host                     |
-| linuxv  | debian-13.5-x64-server-no-template         | .16  | minikube cluster + K8s→Splunk telemetry        |
-| pcap    | debian-13.5-x64-server-no-template         | .17  | Malcolm network monitoring (64 GB RAM)         |
+| linuxa  | no-debian-13.5-x64-server-template         | .15  | General-purpose Linux host                     |
+| linuxv  | no-debian-13.5-x64-server-template         | .16  | minikube cluster + K8s→Splunk telemetry        |
+| pcap    | no-debian-13.5-x64-server-template         | .17  | Malcolm network monitoring (64 GB RAM)         |
 | gitlab  | debian-12-x64-server-template             | .18  | GitLab CE (8 GB RAM, 4 CPUs)                   |
 
 All templates are stock Ludus built-ins — this source ships no Packer templates.

@@ -8,5 +8,5 @@
 - name: Install the checksum-verified Windows Universal Forwarder
   ansible.builtin.import_tasks: install.yml
 
-- name: Configure protected seed, channel ACLs, and managed forwarding state
+- name: Configure bootstrap seed, channel ACLs, and managed forwarding state
   ansible.builtin.import_tasks: configure.yml

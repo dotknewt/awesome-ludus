@@ -1,5 +1,16 @@
 # Windows Splunk logging extension Implementation Plan
 
+> **Supersession notice — 2026-10-20:** This historical plan's custom Windows
+> filesystem ACL clauses (including protected marker/state-root/seed ACLs,
+> exact ACL compatibility gates, and unrelated-child rejection) were
+> assistant-added rather than an independently established user requirement.
+> The user has since directed that no stricter filesystem ACL requirement
+> exists. The implementation now retains normal installer/inherited Windows
+> filesystem permissions and makes no ACL-backed marker ownership claim. The
+> separate Event Log READ ACE and Linux root/mode-0600 behavior remain in scope.
+> This notice supersedes those ACL clauses only; it does not rewrite the other
+> historical design decisions or grant live/deployment authorization.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Extend `ludus_splunk_collector` to collect Windows Security, Sysmon, and SilkService-Log data while preserving Linux behavior and safely managing only owned configuration.

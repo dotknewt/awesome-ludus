@@ -1,4 +1,14 @@
 ---
+- name: Read the full Windows PowerShell version without changing the target
+  ansible.windows.win_powershell:
+    error_action: stop
+    script: |
+      $Ansible.Result = $PSVersionTable.PSVersion.ToString()
+      $Ansible.Changed = $false
+  check_mode: false
+  changed_when: false
+  register: ludus_splunk_collector_windows_powershell_version
+
 - name: Validate Windows target matrix, collection runtime, artifact and indexes
   ansible.builtin.assert:
     that:
@@ -7,7 +17,7 @@
       - >-
         (ansible_distribution is search('Windows 11') and ansible_distribution_major_version | int >= 10)
         or (ansible_distribution is search('Windows Server (2019|2022|2025)'))
-      - ansible_powershell_version is version('5.1', '>=')
+      - ludus_splunk_collector_windows_powershell_version.result is version('5.1', '>=')
       - ludus_splunk_collector_accept_license is boolean
       - ludus_splunk_collector_accept_license
       - ludus_splunk_collector_windows_package_url is string
@@ -31,6 +41,14 @@
       - ludus_splunk_collector_receiver_port is not boolean
       - ludus_splunk_collector_receiver_port | int >= 1
       - ludus_splunk_collector_receiver_port | int <= 65535
+      - ludus_splunk_collector_windows_security_index != ludus_splunk_collector_windows_sysmon_index
+      - ludus_splunk_collector_windows_security_index != ludus_splunk_collector_windows_silk_index
+      - ludus_splunk_collector_windows_sysmon_index != ludus_splunk_collector_windows_silk_index
+    fail_msg: Windows collector platform, PowerShell version, artifact, license, receiver, or indexes are unsupported or unsafe.
+
+- name: Validate Windows collector credentials
+  ansible.builtin.assert:
+    that:
       - ludus_splunk_collector_admin_username is string
       - ludus_splunk_collector_admin_username is match('^[A-Za-z0-9_.-]{1,64}\\Z')
       - ludus_splunk_collector_admin_password is string
@@ -40,10 +58,7 @@
       - "'\\r' not in ludus_splunk_collector_admin_password"
       - ludus_splunk_collector_admin_password == ludus_splunk_collector_admin_password.strip()
       - "not ludus_splunk_collector_admin_password.endswith('\\\\')"
-      - ludus_splunk_collector_windows_security_index != ludus_splunk_collector_windows_sysmon_index
-      - ludus_splunk_collector_windows_security_index != ludus_splunk_collector_windows_silk_index
-      - ludus_splunk_collector_windows_sysmon_index != ludus_splunk_collector_windows_silk_index
-    fail_msg: Windows collector platform, artifact, license, receiver, indexes, or credentials are unsupported or unsafe.
+    fail_msg: Windows collector credentials are unsupported or unsafe.
   no_log: true
 
 - name: Reject default and internal Windows index names

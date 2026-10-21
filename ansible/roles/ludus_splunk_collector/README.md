@@ -17,7 +17,7 @@ Server 2019/2022/2025 x64 with PowerShell 5.1. Both branches require ansible-cor
 >= 2.16; Windows uses `ansible.windows` 3.8.0 and `community.windows` 3.3.0.
 Windows uses the separately pinned Universal Forwarder 10.6.1.1 x64 MSI and
 SHA-512 checksum. The selected Windows OS/version compatibility, MSI service
-identity, Event Log ACL behavior, seed authentication, and runtime convergence
+identity, Event Log ACL behavior, bootstrap behavior, and runtime convergence
 remain **not verified** until separately authorized native tests.
 
 Sources and evidence are summarized in
@@ -105,12 +105,16 @@ On Windows, the forwarder is installed at the fixed
 `C:\Program Files\SplunkUniversalForwarder` home as service
 `SplunkForwarder`, using the `NT SERVICE\SplunkForwarder` virtual account. The
 role records phase, artifact/service identity, and managed configuration hashes
-in an Administrators/SYSTEM-protected marker under
-`C:\ProgramData\Ludus\SplunkCollector`, outside the service-writable home.
-Unmanaged installations, unsafe reparse points, malformed ownership, and
-conflicting inherited event/output stanzas fail closed. The role adds only
-per-channel Event Log READ access for the local service SID; it does not use
-LocalSystem or alter Security/Sysmon producer policy. Security is XML-rendered,
+in a marker under `C:\ProgramData\Ludus\SplunkCollector`, outside the
+service-writable home. Marker state is corroborated against live service,
+product, and managed-file metadata; it is not ACL-backed ownership proof. The
+role retains normal installer and inherited Windows filesystem permissions: it
+does not inspect, reset, or impose a role-specific filesystem ACL policy, and
+no separate ACL-hardening approval or prerequisite is required. Unmanaged
+installations, reparse points on managed paths or their ancestors, malformed ownership, and conflicting
+inherited event/output stanzas fail closed. The role adds only per-channel Event
+Log READ access for the local service SID; it does not use LocalSystem or alter
+Security/Sysmon producer policy. Security is XML-rendered,
 starts at `oldest`, uses `current_only=0`, and has no exclusions. Sysmon has no
 collector-owned filters. Missing SilkService-Log is rendered disabled with a
 warning and becomes enabled after the channel appears.
@@ -134,12 +138,17 @@ VM as a `depends_on` prerequisite of the collector role in the range config,
 using the installed role identity. Do not co-locate the two roles by assuming
 this collector configures a receiver.
 
-## Fresh authentication and limitations
+## Bootstrap metadata and limitations
 
-The seed is created only when the forwarder's `etc/passwd` is absent. It is
-mode `0600`, hidden from task logs and diffs, retained after any bootstrap or
-authentication failure, and removed only after fresh authenticated readiness
-and a nonempty initialized passwd database. On Linux, management API readiness
+The seed is created only when the forwarder's `etc/passwd` is absent. On Linux,
+it is mode `0600`; Windows uses the normal installer/inherited filesystem
+permissions without role-specific ACL changes or an ACL-hardening prerequisite.
+On both platforms it is hidden from task logs and diffs, retained after bootstrap
+failure, and removed only after service start and a nonempty initialized passwd
+database. Windows readiness does not perform administrator API authentication;
+the ready marker records managed installation/configuration/service/bootstrap
+metadata, not valid login, successful event ingestion, or event arrival. On Linux,
+management API readiness
 and fresh administrator authentication use Splunk's local
 `/opt/splunkforwarder/var/run/splunk/cli.socket` Unix socket; readiness requires
 an unauthenticated HTTP 401 response, rather than merely an open TCP port.
@@ -150,18 +159,25 @@ production credential management strategy.
 No live verification of package compatibility, boot persistence, Laurel
 rotation/readability, forwarder ingestion, or server interoperability has been
 performed. Static checks cannot prove those behaviors. In particular, the
-selected-version capability policy, seed syntax, and actual listener behavior
-need authorized native tests; rotation and ingestion live verification remain
-absent. The unauthenticated-to-authenticated bootstrap path, including Unix
-socket readiness and authentication on the selected package, remains
-unverified until authorized native testing.
+selected-version startup/bootstrap behavior, seed syntax, and actual listener
+behavior need authorized native tests; rotation and ingestion live verification
+remain absent. Windows administrator login and end-to-end event arrival must be
+separately verified if required; removing the role's API-authentication gate is
+not evidence of either.
 
 Windows MSI reboot-required results stop the owned service, disable automatic
-start, retain pending evidence, and fail without rebooting. Authentication
-failures retain the protected seed and pending phase; cleanup occurs only after
-authenticated loopback readiness and a nonempty `etc/passwd`. Ready convergence
-checks actual service/product identity and managed configuration hashes. Only
-changed managed input/output templates notify a guarded Windows restart.
+start, retain pending evidence, and fail without rebooting. Existing `pending`
+markers require explicit manual recovery; the role does not resume interrupted
+MSI installation. At entry, an existing `bootstrapPending` marker with a seed
+or `etc/passwd` also requires manual recovery; the role will not replace or
+adopt those credentials. A fresh bootstrap retains its seed on startup or
+initialization failure and removes it only after service startup and a nonempty regular
+`etc/passwd` database. This is initialization metadata, not proof that the
+administrator can log in. Ready convergence checks actual service/product identity
+and managed configuration hashes. Only changed managed input/output templates
+notify a guarded Windows restart. These lifecycle checks have not been verified
+against the selected MSI at runtime. The generic `conf`/`messages.conf` conflict
+scanner remains an unresolved limitation.
 
 For Windows lab use, deploy the receiver first and the Sysmon producer before
 the collector; express role prerequisites using explicit `depends_on` VM and

@@ -1,0 +1,55 @@
+# Ludus artifact migration: evaluation draft
+
+> **Status: draft/evaluation only.** This records research and a proposed direction; it is not an approved execution plan. No migration, repository publication, target-version compatibility check, or runtime verification is authorized or claimed here. See the [status and checkpoint ledger](migration-todo.md), the sole authoritative status location.
+
+## Recommendation
+
+Retain `awesome-ludus` as the blueprint/source aggregator, distribute genuinely owned standard roles from independent role-root repositories, and distribute templates through a separately registered templates-only source. In the aggregator, pin role repositories as submodules under `ansible/roles/<installed-name>/`. Do not also declare those same roles in blueprint `requirements.yml`; use requirements for dependencies and for roles not vendored in that source. This is a proposed architecture, not an approved choice.
+
+This balances standalone role reuse with the current source's convenience, avoids duplicate role resolution paths, and uses the documented templates-only source layout without assuming nested-source discovery. It also makes ownership, identity, dependency closure, and independent release policy explicit prerequisites rather than assuming existing metadata settles them.
+
+## Evidence and current inventory
+
+Research in October 2026 reviewed the repository and current official Ludus documentation. Current inventory: **27 role directories** (4 Git submodules and 23 ordinary directories); the existing collection is an additional submodule; **20 template directories**. All 23 ordinary roles have metadata, with mixed authorship/provenance. Metadata does not establish ownership or redistribution rights. The 4 role submodules and the 23 ordinary directories are candidates to assess, not an approved publication list. No `.github` directory was found during evaluation. Inventory and ownership must be rechecked before execution.
+
+Research noted dependencies/coupling including Malcolm's `include_role` of `dotknewt.ludus_install_docker` and Atomic's `include_role` of `cowdogmoo.workstation.package_management`; `constructing-defense/requirements.yml` currently contains collections only. A role reference is not proof that a standalone consumer acquires the referenced dependency. Build the complete transitive role and collection dependency closure and specify how each is installed and pinned.
+
+### Confirmed official contracts (not target-version runtime evidence)
+
+- A source has root `source.yml` and documented asset directories such as `templates/<name>/`, `ansible/roles/<name>/`, `ansible/collections/<dir>/`, and `blueprints/<id>/`. Sources can be templates-only. Git-backed sources are recursively cloned; source-local asset directories may be submodules.
+- Roles referenced by a blueprint must be in its requirements or supplied as source-local roles. These are alternative paths for the same role identity, not a reason to duplicate the same role in both. Source-local roles are selected/installed through source workflows; merely placing them in a source is not an installation guarantee. Collections have analogous dependency requirements.
+- Manual local role installation uses the directory passed to `ludus ansible role add -d`; its directory name determines installed/listed identity. Off-Galaxy role requirements document `name`, `src`, and `version`. Current docs show a tag example but do not establish raw commit-SHA acceptance as role `version`, nor a separate installed-name field.
+- A separate templates-only source uses root `source.yml` and `templates/<name>/`. It must be registered separately (unless a deliberate aggregate layout is selected); registering templates does not build them, and blueprints do not implicitly register unrelated sources. Mounting a whole templates source beneath the aggregator's `templates/` risks `templates/templates/<name>/`; nested-source discovery is not established.
+- Source `--ref` accepts a commit; docs recommend immutable refs. Source registration and template build are separate actions. Source sync alone does not update already-installed artifacts. See official [Sources](https://docs.ludus.cloud/docs/using-ludus/sources/), [Blueprints](https://docs.ludus.cloud/docs/using-ludus/blueprints/), [Roles](https://docs.ludus.cloud/docs/using-ludus/roles/), [role development](https://docs.ludus.cloud/docs/developers/ansible-roles/), and [Templates](https://docs.ludus.cloud/docs/using-ludus/templates/).
+
+The above reflects current documentation, not a supplied Ludus client/server version. In particular, actual installed identities, raw-SHA requirements behavior, and older-version compatibility remain unverified.
+
+## Proposed decisions and blockers
+
+1. **Role repositories and eligibility.** Use one standard Ansible role at each repository root for every role approved for independent publication. First create a per-role ownership/publication allowlist. Record upstream origin and revision, modifications, authorship, license/notice obligations, and whether each is project-owned, forked, or upstream content. Preserve attribution and comply with redistribution terms. Review both working trees and any history retained for secrets and license exposure. Do not infer ownership from metadata.
+2. **Identity is a cutover blocker.** Before choosing names, map each role's repository name, aggregator submodule directory, requirements `name`, manual clone/upload directory, range-config references, internal role calls, metadata identity, and actual installed identity. Current unnamespaced source paths and `dotknewt`-prefixed configuration names may conflict with the documented directory-name rule. Record a target Ludus client/server version and use version-matched docs plus authorized read-only catalog/installed-role evidence. Do not assume configurations are broken or rename roles blindly.
+3. **Dependency closure.** For each standalone role, inventory direct and transitive roles and collections, compatible version pins, and installation responsibility. Specify the standalone consumer contract (including dependencies referenced with `include_role`). Avoid duplicate declarations in the aggregator for roles already source-local, but retain/document dependency manifests needed by independent consumers. Verify pin syntax against the selected Ludus version before promising SHA pins.
+4. **Templates.** Prefer a separate templates-only repository with root `source.yml` and `templates/<name>/`, retaining template names and internal paths initially. Audit relative file references after extraction. Specify separate source registration and template build prerequisites. Do not nest the entire source under `awesome-ludus/templates/` without proving discovery semantics. Assess global name collisions and versioning because existing installed definitions/images may mask changes.
+5. **Release/reproducibility.** Decide repository owner, visibility, names, maintainers, and release/update policy. Establish independent immutable releases and a coordinated mapping of aggregator commit → role submodule commit(s) → collection and dependency pins → templates-source commit. Ensure referenced commits remain available. Tags/display versions alone are not a complete content mapping. Record the chosen minimum supported Ludus version and compatibility evidence.
+
+These are proposed decisions; outstanding user choices include ownership/visibility and repo names, per-role publication allowlist (including legacy `role_*`), history preservation versus clean snapshots, canonical installed names/minimum Ludus version, template source registration versus a verified alternative, and release/update policy.
+
+## Staged rollout and rollback (proposed)
+
+1. **Gate:** settle decisions above, authorize work, establish scope and baseline. No extraction/publication before ownership, identity, license, and secret gates pass.
+2. **Prepare:** use disposable clones; extract without rewriting aggregator history; compare resulting role/template content and relative paths; prepare repository metadata, provenance/notices, CI/publishing policy, release tags, contributor submodule instructions, and all URL/path/reference updates. Publish dependencies before commits that point to them.
+3. **Pilot:** validate one simple eligible role's standalone and aggregator routes; then migrate dependency-coupled roles with their documented closure. Resolve findings before proceeding.
+4. **Templates:** publish and register the separate source; verify definition installation/build separately and record image provenance. Account for existing instance-wide images.
+5. **Cut over last:** update aggregator pointers, manifests, documentation, and consumer instructions only after independent artifacts and dependencies are available. Review the complete coordinated release mapping.
+
+Rollback must be layered: restore source/aggregator Git pointers; restore/reinstall role content as appropriate; restore template definitions and built images as appropriate; and separately recover guest state if a deployment mutated it. A Git rollback or source sync alone does not undo installed roles, template images, or guest changes. Cleanup and deployment need explicit authorization.
+
+## Verification boundaries
+
+Proposed static checks: fresh recursive clone; exact submodule/ref and manifest checks; role-root structure and metadata; name/reference/dependency-closure consistency; license/provenance/history/secret review; template layout and relative references; and coordinated release mapping. Static checks do not establish runtime behavior or target-version compatibility.
+
+Any live check is a separate, explicitly authorized phase. Isolated clean-state checks must avoid preinstalled user/global roles and existing instance-wide template images masking missing artifacts; record resolved role identity/content and template build provenance. If authorized, exercise actual role installation/blueprint paths and template registration/build, then representative deployment as approved. Deployment, guest probes, isolation/cleanup, and destructive recovery are not authorized by this draft. No live verification has been performed.
+
+## Repository policy and source notes
+
+Follow [`docs/instructions/ludus-authoring.md`](instructions/ludus-authoring.md): distinguish repository policy from official behavior; reusable roles should be namespaced and independent, have standard structure and `meta/main.yml`, maintain identity/reference consistency, document platform/inputs, and declare dependencies. Preserve upstream attribution; never commit external credentials. Its verification rules require static and live evidence to be reported separately, prohibit simulations/fakes as evidence, and do not grant live authorization. The inventory and findings above derive from the migration evaluation, official-contracts, and risk-review research; they are not approvals. This artifact is bounded documentation synthesis, not implementation authorization.

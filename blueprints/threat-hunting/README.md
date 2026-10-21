@@ -8,7 +8,7 @@ Based on the [threat-hunting plan](../../docs/threat-hunting-range-blueprint_PLA
 | Malcolm | 8 | 64 GB | 10 | 17 | `ludus_install_malcolm` |
 | GitLab | 4 | 8 GB | 10 | 18 | `ludus_gitlab_ce` |
 
-Sizing and VLAN/IP assignments follow the existing [constructing-defense range config](../constructing-defense/range-config.yml) for Splunk and Malcolm, and its [README](../constructing-defense/README.md) for GitLab. Total allocation is 16 vCPU and 88 GB RAM, excluding the default router. The plan also permits `ubuntu-24.04.2-x64-server-no-template` and `ubuntu-26.04.1-x64-server-no-template` alternatives.
+Sizing and VLAN/IP assignments follow the existing [constructing-defense range config](../constructing-defense/range-config.yml) for Splunk and Malcolm, and its [README](../constructing-defense/README.md) for GitLab. Total allocation is 16 vCPU and 88 GB RAM, excluding the default router. The plan also permits `no-ubuntu-24.04.2-x64-server-template` and `no-ubuntu-26.04.1-x64-server-template` alternatives.
 
 The roles are in the source root: [`ludus_splunk_server`](../../ansible/roles/ludus_splunk_server), [`ludus_install_malcolm`](../../ansible/roles/ludus_install_malcolm), and [`ludus_gitlab_ce`](../../ansible/roles/ludus_gitlab_ce). The GitLab role's Debian 13 compatibility is assumed by the user and has not been independently established. Template availability and live installation behavior are unverified. Collection availability is managed by Ludus and is not treated here as a readiness blocker.
 

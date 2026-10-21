@@ -1,5 +1,15 @@
 # Windows Splunk logging extension design
 
+> **Supersession notice — 2026-10-20:** The filesystem ACL clauses in this
+> historical design, including the ownership and lifecycle sections below,
+> are superseded for the collector's Windows filesystem paths. Those
+> stricter state-root/marker/seed ACL checks and mutations were assistant-added,
+> not an independently established user requirement. Following the user's
+> direction, the role retains normal installer/inherited filesystem permissions
+> and does not impose a role-specific filesystem ACL policy or claim
+> ACL-backed marker ownership. This notice does not remove the separate Event
+> Log channel READ ACE behavior or the Linux root/mode-0600 requirements.
+
 ## Status and decisions
 
 This design is approved by the user. Implementation planning and execution remain pending separate review and authorization; it is not deployment authorization.
@@ -13,7 +23,7 @@ HEC remains deferred and out of scope for this design; the native receiver path 
 
 ## Goals and non-goals
 
-Goals are a reusable, platform-dispatched collector with explicit Windows inputs, safe ownership, validated artifacts, idempotent convergence, and config-only restart behavior. Installation and configuration must fail before mutation when the platform, version, checksum, path, ACL, or existing ownership is incompatible. Windows collection prerequisites and supported Ansible/PowerShell versions must be explicit; no automatic reboot, upgrade, or password rotation.
+Goals are a reusable, platform-dispatched collector with explicit Windows inputs, safe ownership, validated artifacts, idempotent convergence, and config-only restart behavior. Installation and configuration must fail before mutation when the platform, version, checksum, path, or existing ownership is incompatible. Windows collection prerequisites and supported Ansible/PowerShell versions must be explicit; no automatic reboot, upgrade, or password rotation. Windows filesystem ACL compatibility is not a gate; the role retains installer/inherited permissions.
 
 Non-goals are changing Linux behavior, expanding server OS support, migrating the legacy blueprint, implementing optional Splunk TAs/CIM normalization, inventing TLS, or adding hidden Sysmon sibling-role execution. Raw XML plus indexes does not guarantee CIM dashboards.
 

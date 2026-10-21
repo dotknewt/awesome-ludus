@@ -15,20 +15,20 @@ allowing the suite to require root escalation without granting real privilege.
 From the repository root:
 
 ```bash
-python3 -m venv /tmp/opencode/ludus-configure-bridge-venv
-/tmp/opencode/ludus-configure-bridge-venv/bin/pip install \
+python3 -m venv /tmp/ludus-configure-bridge-venv
+/tmp/ludus-configure-bridge-venv/bin/pip install \
   --requirement ansible/roles/ludus_configure_bridge/tests/requirements.txt
-export ANSIBLE_PLAYBOOK=/tmp/opencode/ludus-configure-bridge-venv/bin/ansible-playbook
+export ANSIBLE_PLAYBOOK=/tmp/ludus-configure-bridge-venv/bin/ansible-playbook
 export ANSIBLE_ROLES_PATH="$PWD/ansible/roles"
 PYTHONDONTWRITEBYTECODE=1 \
-  /tmp/opencode/ludus-configure-bridge-venv/bin/pytest -q \
+  /tmp/ludus-configure-bridge-venv/bin/pytest -q \
   ansible/roles/ludus_configure_bridge/tests
-/tmp/opencode/ludus-configure-bridge-venv/bin/ansible-playbook \
+/tmp/ludus-configure-bridge-venv/bin/ansible-playbook \
   --syntax-check --inventory guest, \
   ansible/roles/ludus_configure_bridge/tests/syntax.yml
-/tmp/opencode/ludus-configure-bridge-venv/bin/yamllint \
+/tmp/ludus-configure-bridge-venv/bin/yamllint \
   ansible/roles/ludus_configure_bridge
-/tmp/opencode/ludus-configure-bridge-venv/bin/ansible-lint \
+/tmp/ludus-configure-bridge-venv/bin/ansible-lint \
   ansible/roles/ludus_configure_bridge
 ```
 

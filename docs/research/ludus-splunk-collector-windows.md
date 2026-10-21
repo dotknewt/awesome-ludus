@@ -4,6 +4,26 @@
 pre-live gate. It is evidence for planning, not evidence of installation,
 authentication, ACL correctness, ingestion, or selected-version runtime support.
 
+**Implementation update: 2026-10-20.** The collector's custom Windows
+filesystem ACL inspection, enforcement, and mutation policy has been removed
+following user direction that no stricter filesystem ACL requirement was
+intended. Previous references below to protected marker/seed ACLs describe the
+superseded implementation, not a user-approved prerequisite. Windows keeps
+normal installer/inherited filesystem permissions; the role does not claim the
+marker is ACL-backed ownership proof. This does not remove the separate
+per-channel Event Log READ ACE behavior.
+
+**Implementation update: 2026-10-21.** The Windows administrator API
+authentication gate and whole-forwarder/state-root recursive reparse scans have
+been removed by the newly approved simplification. Ready now records managed
+installation, configuration, service, and bootstrap metadata only; it does not
+prove administrator login or event arrival. Targeted managed-path/ancestor
+guards remain, and the configuration-conflict scan traverses directories
+incrementally while pruning reparse entries. No new runtime verification is
+claimed. The previously recorded unauthenticated HTTP 401 is not evidence of
+authenticated bootstrap success. Generic `conf`/`messages.conf` conflict
+scanning remains an unresolved limitation.
+
 ## Primary-source conclusions
 
 - The pinned artifact remains the publisher URL
@@ -25,9 +45,11 @@ authentication, ACL correctness, ingestion, or selected-version runtime support.
 - Splunk's `user-seed.conf` reference (9.3 reference, retrieved 2026-10-20)
   defines `[user_info]` with `USERNAME` and `PASSWORD`, and also documents
   `HASHED_PASSWORD`. The repository template uses the documented plaintext
-  `PASSWORD` form, writes it only after restrictive ACLs, and removes it after
-  successful loopback authentication. No source establishes that this
-  sequence works on the selected MSI; native authentication remains open.
+  `PASSWORD` form for fresh bootstrap. The current Windows role no longer
+  requires an API login: it waits for a regular, nonempty `etc/passwd` after
+  service startup before removing the seed. This is initialization metadata,
+  not evidence that credentials work; selected-MSI bootstrap behavior remains
+  unverified.
 - Microsoft documents virtual accounts as automatically managed local accounts
   named `NT SERVICE\<service-name>` with no administrator-managed password.
   Ansible `ansible.windows.win_service` 3.8.0 independently documents
@@ -59,10 +81,10 @@ authentication, ACL correctness, ingestion, or selected-version runtime support.
   That is internally intentional, but the exact MSI default/property behavior
   is not proven by the retrieved Splunk page.
 - `configure.yml` checks the service identity, adds READ ACEs to Security and
-  Sysmon, and conditionally SilkService-Log. It protects the seed with SYSTEM,
-  Administrators, and service-account READ ACLs. This is documentary design
-  evidence only; `SecurityDescriptor`/`SaveChanges` preservation, deny ACE
-  behavior, and effective reads are live-only gates, including on DCs.
+  Sysmon, and conditionally SilkService-Log. Event Log channel READ ACE behavior
+  is separate from filesystem permissions and remains in the role.
+  `SecurityDescriptor`/`SaveChanges` preservation, deny ACE behavior, and
+  effective reads are live-only gates, including on DCs.
 - `inspect.yml` requires Security and Sysmon channels and treats Silk as
   optional, matching the intended producer boundary. **Static correction made:**
   PowerShell variable names are case-insensitive; `$home` is the automatic
@@ -77,22 +99,38 @@ authentication, ACL correctness, ingestion, or selected-version runtime support.
   and UF 10.6.1.1. The official sources collected here do not provide the
   exact 10.6.1.1 OS support table. The selected-version applicability gate is
   therefore unresolved, not failed and not closed.
-- **Static API corrections (2026-10-20):** the installed `ansible.windows`
+- **Historical static API correction (2026-10-20):** the installed `ansible.windows`
   3.8.0 `win_get_url` contract accepts `checksum_algorithm: sha512` and requires
   the checksum argument as bare hexadecimal, so the task now strips the
   `sha512:` prefix while retaining the algorithm. The `win_uri` result exposes
   `status_code`; the retry condition now reads that field. The task still sends
-  `status_code: 200` as its accepted-response argument. These source corrections
-  and static tests do not establish runtime download/authentication behavior.
+  `status_code: 200` as its accepted-response argument. The Windows API-auth
+  task that used `win_uri` has since been removed. These historical source
+  corrections do not establish runtime download/authentication behavior.
   Sources: [Ansible `win_get_url` 3.8.0](https://docs.ansible.com/projects/ansible/latest/collections/ansible/windows/win_get_url_module.html)
   and [Ansible `win_uri` 3.8.0](https://docs.ansible.com/projects/ansible/latest/collections/ansible/windows/win_uri_module.html).
-- Fresh-install phase transition now requires a non-skipped package result and
-  re-reads a pending marker before advancing; existing initialized markers are
-  not advanced by a skipped registered result. Seed ACL management now
-  restricts parent and file DACLs before rendering secret content and refuses
-  unsafe ownership/reparse state or unrelated files in the shared `system/local`
-  parent. This is a source-level fail-closed correction only; ACL effectiveness,
-  seed authentication, and preservation/runtime behavior remain unverified.
+- Fresh-install phase transition requires a non-skipped MSI result and re-reads
+  the marker created during this invocation before advancing; existing
+  initialized markers are not advanced by a skipped result. Existing `pending`
+  markers now stop with manual-recovery guidance. An entry-time
+  `bootstrapPending` marker with a seed or `etc/passwd` also stops before any
+  credential mutation. These source changes do not recover the previously
+  failed development VM or establish successful bootstrap/runtime behavior. The
+  executable ProductVersion is normalized only from an anchored four-part
+  version with an optional single-line `(Build …)` suffix, and service-path
+  matching escapes the fixed path and enforces quote/argument boundaries; this
+  is static evidence, not native PowerShell execution. The superseded seed filesystem
+  ACL policy (including exact owner/mask/inheritance checks and unrelated-child
+  rejection) has been removed. Seed parent/file existence, type, and reparse
+  checks remain; normal installer/inherited filesystem permissions are retained
+  without role-specific ACL changes. Marker acceptance is corroborated by
+  non-ACL service/product/artifact/configuration facts, not ACL-backed proof.
+  The generic `conf`/`messages.conf` conflict scanner remains unresolved.
+  Windows now waits for passwd initialization metadata rather than authenticating
+  through the management API; this does not validate credentials or prove event
+  arrival. Targeted managed-path guards replace whole-installation recursive
+  scans; unrelated state/runtime paths are not globally rejected. Seed and
+  service behavior remain unverified.
 
 ## Gates / status
 
@@ -101,16 +139,19 @@ installer flag meanings at the cited Splunk-page version, seed key syntax,
 virtual-account naming, Ansible module capability, and intended target matrix.
 
 **Blockers before claiming Task 0 closed:** obtain primary documentation that
-applies specifically to UF 10.6.1.1 (or record the limitation explicitly), and
-obtain an authoritative, DC-safe account/ACL procedure or keep the role's local
-SID approach explicitly as an unverified design. The `$home` source mismatch is
-corrected, but the static regression assertion does not establish runtime
-behavior.
+applies specifically to UF 10.6.1.1 (or record the limitation explicitly).
+Filesystem ACL hardening is not a role prerequisite; normal filesystem
+permissions and effective access remain runtime facts, not requirements
+imposed or certified by this role. The separate Event Log local-SID READ
+approach and its DC-safe/effective behavior remain unverified. The `$home`
+source mismatch is corrected, but the static regression assertion does not
+establish runtime behavior.
 
 **Live-only gaps (not documentary blockers):** fresh install and convergence;
-MSI return/reboot behavior; seed authentication and seed removal; service
-identity; effective Security/Sysmon access; optional Silk channel behavior;
-forwarding and event arrival; and preservation of unrelated ACLs/configuration.
+MSI return/reboot behavior; credential validity (no API-auth gate remains) and
+seed removal; service identity; effective Security/Sysmon access; optional Silk
+channel behavior; forwarding and event arrival; and preservation of unrelated
+configuration/permissions.
 No install, deployment, guest probe, or target-server query was performed.
 
 ## Sources (retrieved 2026-10-20)

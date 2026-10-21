@@ -340,6 +340,7 @@ ludus ansible role list                                    # List roles
 ludus ansible role add <rolename>                          # Add from Galaxy
 ludus ansible role add <url>                               # Add from URL
 ludus ansible role add -d ./role-dir                       # Add from directory
+ludus ansible role add -d ./role-dir -f                    # Add/update a role, overwriting the server version
 ludus ansible role add <rolename> --version 1.2.3          # Specific version
 ludus ansible role add <rolename> -f                       # Force reinstall
 ludus ansible role add <rolename> -g                       # Install globally
@@ -347,6 +348,10 @@ ludus ansible role rm <rolename> [-f] [-g]                 # Remove role
 ludus ansible role scope global <rolename>                 # Move to global
 ludus ansible role scope local <rolename> [-c]             # Move to local (or copy)
 ```
+
+When uploading an updated role that already exists on the server, always pass
+`--force`/`-f`; without it the existing server version is kept instead of
+overwritten.
 
 ### ansible collection
 
