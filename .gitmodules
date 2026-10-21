@@ -10,6 +10,3 @@
 [submodule "ansible/roles/ludus_splunk"]
 	path = ansible/roles/ludus_splunk
 	url = https://github.com/curi0usJack/ludus_splunk.git
-[submodule "ansible/roles/ludus_splunk_universalforwarder"]
-	path = ansible/roles/ludus_splunk_universalforwarder
-	url = https://github.com/curi0usJack/ludus_splunk_universalforwarder.git

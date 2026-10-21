@@ -1,5 +1,6 @@
 ---
-- name: Read installed forwarder package status and version
+# Keep established ludus_splunk_collector_* register names for Linux compatibility.
+- name: Read installed forwarder package status and version  # noqa: var-naming[no-role-prefix]
   ansible.builtin.command:
     argv: [dpkg-query, -W, "-f=${db:Status-Status}\\t${Version}\\n", splunkforwarder]
     expand_argument_vars: false
@@ -7,7 +8,7 @@
   changed_when: false
   failed_when: ludus_splunk_collector_installed.rc not in [0, 1]
 
-- name: Inspect existing home, generated unit, and owned app paths without following symlinks
+- name: Inspect existing home, generated unit, and owned app paths without following symlinks  # noqa: var-naming[no-role-prefix]
   ansible.builtin.stat:
     path: "{{ item.path }}"
     follow: false
@@ -29,33 +30,33 @@
     - {key: system_local, path: /opt/splunkforwarder/etc/system/local}
   register: ludus_splunk_collector_paths
 
-- name: Index inspected filesystem paths by key
+- name: Index inspected filesystem paths by key  # noqa: var-naming[no-role-prefix]
   ansible.builtin.set_fact:
     ludus_splunk_collector_path_state: "{{ ludus_splunk_collector_path_state | default({}) | combine({item.item.key: item.stat}) }}"
   loop: "{{ ludus_splunk_collector_paths.results }}"
 
-- name: Read existing splunkfwd account and group
+- name: Read existing splunkfwd account and group  # noqa: var-naming[no-role-prefix]
   ansible.builtin.command:
     argv: [getent, passwd, splunkfwd]
   register: ludus_splunk_collector_user_record
   changed_when: false
   failed_when: ludus_splunk_collector_user_record.rc not in [0, 2]
 
-- name: Read existing splunkfwd group
+- name: Read existing splunkfwd group  # noqa: var-naming[no-role-prefix]
   ansible.builtin.command:
     argv: [getent, group, splunkfwd]
   register: ludus_splunk_collector_group_record
   changed_when: false
   failed_when: ludus_splunk_collector_group_record.rc not in [0, 2]
 
-- name: Read the existing splunkfwd primary group name
+- name: Read the existing splunkfwd primary group name  # noqa: var-naming[no-role-prefix]
   ansible.builtin.command:
     argv: [id, -gn, splunkfwd]
   register: ludus_splunk_collector_primary_group
   changed_when: false
   failed_when: ludus_splunk_collector_primary_group.rc not in [0, 1]
 
-- name: Check systemd unit load state
+- name: Check systemd unit load state  # noqa: var-naming[no-role-prefix]
   ansible.builtin.command:
     argv: [systemctl, show, SplunkForwarder.service, --property=LoadState, --value]
   register: ludus_splunk_collector_unit_loadstate
@@ -142,7 +143,7 @@
         and not (ludus_splunk_collector_path_state.capability_dropin.get('isreg', false) | bool))
     fail_msg: Existing collector state is incompatible or unmanaged; refusing to replace package, identity, seed, unit, or app configuration.
 
-- name: Read existing ownership marker
+- name: Read existing ownership marker  # noqa: var-naming[no-role-prefix]
   ansible.builtin.slurp:
     src: /opt/splunkforwarder/etc/apps/ludus_collector/local/ludus-managed.conf
   register: ludus_splunk_collector_existing_marker
@@ -159,20 +160,20 @@
 - name: Inspect existing service identity, execution, drop-ins, and capability policy
   when: ludus_splunk_collector_unit_loadstate.stdout != 'not-found'
   block:
-    - name: Read existing effective service user and group
+    - name: Read existing effective service user and group  # noqa: var-naming[no-role-prefix]
       ansible.builtin.command:
         argv: [systemctl, show, SplunkForwarder.service, "--property={{ item }}", --value]
       loop: [User, Group, FragmentPath, DropInPaths, CapabilityBoundingSet, AmbientCapabilities]
       register: ludus_splunk_collector_existing_service_properties
       changed_when: false
 
-    - name: Inspect existing service unit file
+    - name: Inspect existing service unit file  # noqa: var-naming[no-role-prefix]
       ansible.builtin.stat:
         path: "{{ (ludus_splunk_collector_existing_service_properties.results | selectattr('item', 'equalto', 'FragmentPath') | first).stdout }}"
         follow: false
       register: ludus_splunk_collector_existing_unit_stat
 
-    - name: Read existing service unit definition
+    - name: Read existing service unit definition  # noqa: var-naming[no-role-prefix]
       ansible.builtin.slurp:
         src: "{{ (ludus_splunk_collector_existing_service_properties.results | selectattr('item', 'equalto', 'FragmentPath') | first).stdout }}"
       register: ludus_splunk_collector_existing_unit_content
@@ -200,7 +201,7 @@
         fail_msg: Existing SplunkForwarder.service is not the expected vendor service or contains an unmanaged drop-in.
 
 
-- name: Read existing role-owned capability drop-in
+- name: Read existing role-owned capability drop-in  # noqa: var-naming[no-role-prefix]
   ansible.builtin.slurp:
     src: /etc/systemd/system/SplunkForwarder.service.d/10-ludus-capabilities.conf
   register: ludus_splunk_collector_existing_capability_dropin

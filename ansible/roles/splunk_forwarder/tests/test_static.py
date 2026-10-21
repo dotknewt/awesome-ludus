@@ -131,10 +131,10 @@ class SplunkCollectorStaticContract(unittest.TestCase):
             [{"path": "/var/log/laurel/audit.log", "sourcetype": "laurel:json", "index": "main"}],
         )
 
-    def test_metadata_declares_linux_subset_and_supported_windows_server_matrix(self):
+    def test_metadata_declares_consolidated_role_identity_and_supported_platforms(self):
         info = self.meta.get("galaxy_info", {})
         self.assertEqual(info.get("author"), "dotknewt")
-        self.assertEqual(info.get("role_name"), "ludus_splunk_collector")
+        self.assertEqual(info.get("role_name"), "splunk_forwarder")
         self.assertEqual(info.get("min_ansible_version"), "2.16")
         platforms = {(item.get("name"), tuple(item.get("versions", [])))
                      for item in info.get("platforms", [])}
@@ -282,8 +282,8 @@ class SplunkCollectorStaticContract(unittest.TestCase):
         readme = re.sub(r"\s+", " ", readme_path.read_text()) if readme_path.exists() else ""
         for value in (
             "Debian 13", "Ubuntu 24.04", "Ubuntu 26.04", "x86_64", "systemd",
-            "ludus_linux_logging_read_users", "splunkfwd", "depends_on",
-            "not verified", "rotation", "production",
+            "ludus_splunk_collector_", "splunk_uf_", "not verified",
+            "input-driven", "SILK", "has not been verified",
         ):
             self.assertIn(value, readme)
 
@@ -336,7 +336,7 @@ class SplunkCollectorStaticContract(unittest.TestCase):
         self.assertTrue(any(_module(task, "fail") is not None for task in pre_tasks),
                         "syntax harness pre-task must fail during ordinary execution")
         roles = play.get("roles", [])
-        self.assertEqual([role.get("role") for role in roles], ["ludus_splunk_collector"])
+        self.assertEqual([role.get("role") for role in roles], ["dotknewt.splunk_forwarder"])
         inputs = play.get("vars", {})
         self.assertTrue(inputs.get("ludus_splunk_collector_accept_license"))
         self.assertEqual(inputs.get("ludus_splunk_collector_receiver_host"), "127.0.0.1")

@@ -32,7 +32,7 @@ ludus:
     ip_last_octet: 21
     roles:
       - dotknewt.ludus_install_sysmon
-      - name: ludus_splunk_universalforwarder
+      - name: dotknewt.splunk_forwarder
         depends_on:
           - vm_name: "{{ range_id }}-splunk"
             role: ludus_splunk

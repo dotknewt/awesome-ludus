@@ -1,0 +1,177 @@
+---
+# Retain upstream ludus_splunk_universalforwarder_* register names for compatibility.
+# Keep upstream fact/register names for compatibility with existing role consumers.
+- name: Set Splunk UF package filename  # noqa: var-naming[no-role-prefix]
+  ansible.builtin.set_fact:
+    splunk_uf_package: "splunkforwarder-{{ splunk_uf_version }}-{{ splunk_uf_build }}-windows-x64.msi"
+
+- name: Check if SplunkForwarder service exists  # noqa: var-naming[no-role-prefix]
+  ansible.windows.win_service:
+    name: SplunkForwarder
+  register: splunk_uf_service
+  failed_when: false
+
+- name: Set installation status  # noqa: var-naming[no-role-prefix]
+  ansible.builtin.set_fact:
+    splunk_uf_installed: "{{ splunk_uf_service.exists | default(false) }}"
+
+- name: Display installation status
+  ansible.builtin.debug:
+    msg: "Splunk UF service {{ 'found' if splunk_uf_installed else 'not found' }} - will {{ 'reconfigure' if splunk_uf_installed else 'install' }}"
+
+- name: Create temp directory
+  ansible.windows.win_file:
+    path: 'C:\Temp'
+    state: directory
+
+- name: Download Splunk UF from splunk.com (with token)
+  ansible.windows.win_get_url:
+    url: >-
+      {{ 'https://download.splunk.com/products/universalforwarder/releases/' ~
+         splunk_uf_version ~ '/windows/' ~ splunk_uf_package ~ '?token=' ~ splunk_uf_download_token }}
+    dest: 'C:\Temp\{{ splunk_uf_package }}'
+    force: false
+  when:
+    - not splunk_uf_installed
+    - splunk_uf_download_token | length > 0
+
+- name: Download Splunk UF from splunk.com (no token required)
+  ansible.windows.win_get_url:
+    url: "https://download.splunk.com/products/universalforwarder/releases/{{ splunk_uf_version }}/windows/{{ splunk_uf_package }}"
+    dest: 'C:\Temp\{{ splunk_uf_package }}'
+    validate_certs: false
+    force: false
+  when:
+    - not splunk_uf_installed
+    - splunk_uf_download_token | length == 0
+
+- name: Build MSI install arguments  # noqa: var-naming[no-role-prefix]
+  ansible.builtin.set_fact:
+    splunk_uf_msi_args: >-
+      AGREETOLICENSE=yes
+      SPLUNKUSERNAME={{ splunk_uf_admin_user }}
+      SPLUNKPASSWORD={{ splunk_uf_admin_password }}
+      RECEIVING_INDEXER={{ splunk_uf_indexer }}:{{ splunk_uf_indexer_port }}
+      {% if splunk_uf_deployment_server | length > 0 %}DEPLOYMENT_SERVER={{ splunk_uf_deployment_server }}{% endif %}
+  when: not splunk_uf_installed
+
+- name: Install Splunk Universal Forwarder  # noqa: var-naming[no-role-prefix]
+  ansible.windows.win_package:
+    path: 'C:\Temp\{{ splunk_uf_package }}'
+    product_id: "Splunk Universal Forwarder"
+    arguments: "{{ splunk_uf_msi_args }}"
+    state: present
+  when: not splunk_uf_installed
+  register: splunk_uf_install
+
+# This must precede config rendering, rather than run as an end-of-play handler.
+- name: Wait for installation to complete  # noqa: no-handler
+  ansible.windows.win_wait_for:
+    path: '{{ splunk_uf_install_dir }}\bin\splunk.exe'
+    timeout: 120
+  when: splunk_uf_install.changed
+
+- name: Get SplunkForwarder service account  # noqa: var-naming[no-role-prefix]
+  ansible.windows.win_service:
+    name: SplunkForwarder
+  register: ludus_splunk_universalforwarder_account_info
+
+- name: Resolve localized Event Log Readers group name  # noqa: var-naming[no-role-prefix]
+  ansible.windows.win_powershell:
+    script: |
+      $group = Get-LocalGroup -SID 'S-1-5-32-573' -ErrorAction Stop
+      $Ansible.Result = $group.Name
+      $Ansible.Changed = $false
+  register: ludus_splunk_universalforwarder_event_log_readers_group
+
+- name: Add SplunkForwarder service account to Event Log Readers  # noqa: var-naming[no-role-prefix]
+  ansible.windows.win_group_membership:
+    name: "{{ ludus_splunk_universalforwarder_event_log_readers_group.result }}"
+    members:
+      - "{{ ludus_splunk_universalforwarder_account_info.username }}"
+    state: present
+  register: ludus_splunk_universalforwarder_event_log_readers_membership
+
+- name: Restart SplunkForwarder after Event Log Readers membership changes
+  ansible.windows.win_service:
+    name: SplunkForwarder
+    state: restarted
+  when:
+    - ludus_splunk_universalforwarder_event_log_readers_membership.changed
+    - splunk_uf_start_service
+
+- name: Ensure local config directory exists
+  ansible.windows.win_file:
+    path: '{{ splunk_uf_install_dir }}\etc\system\local'
+    state: directory
+
+- name: Create inputs.conf from template
+  ansible.windows.win_template:
+    src: windows-inputs.conf.j2
+    dest: '{{ splunk_uf_install_dir }}\etc\system\local\inputs.conf'
+  notify: Restart SplunkForwarder
+
+- name: Create outputs.conf from template
+  ansible.windows.win_template:
+    src: windows-outputs.conf.j2
+    dest: '{{ splunk_uf_install_dir }}\etc\system\local\outputs.conf'
+  when: splunk_uf_indexer | length > 0
+  notify: Restart SplunkForwarder
+
+- name: Stop SplunkForwarder for reconfiguration  # noqa: var-naming[no-role-prefix]
+  ansible.windows.win_service:
+    name: SplunkForwarder
+    state: stopped
+  when:
+    - splunk_uf_installed
+    - splunk_uf_start_service
+  register: service_stop
+  failed_when: false
+
+- name: Wait for service to stop
+  ansible.builtin.pause:
+    seconds: 5
+  when:
+    - splunk_uf_installed
+    - splunk_uf_start_service
+    - service_stop is defined
+
+- name: Start SplunkForwarder after reconfiguration
+  ansible.windows.win_service:
+    name: SplunkForwarder
+    state: started
+  when:
+    - splunk_uf_installed
+    - splunk_uf_start_service
+
+- name: Ensure SplunkForwarder service exists and is configured  # noqa: var-naming[no-role-prefix]
+  ansible.windows.win_service:
+    name: SplunkForwarder
+    start_mode: auto
+    state: started
+  when: splunk_uf_start_service
+  register: service_start
+  failed_when: false
+
+- name: Handle service start failure
+  ansible.builtin.debug:
+    msg: "WARNING: Service failed to start. It may need manual intervention."
+  when:
+    - splunk_uf_start_service
+    - service_start.failed is defined
+    - service_start.failed
+
+- name: Verify service is running  # noqa: var-naming[no-role-prefix]
+  ansible.windows.win_service:
+    name: SplunkForwarder
+  register: final_service_status
+  failed_when: false
+
+- name: Display Splunk UF installation info
+  ansible.builtin.debug:
+    msg: |
+      Splunk Universal Forwarder {{ 'installed' if not splunk_uf_installed else 'configured' }} successfully!
+      Install path: {{ splunk_uf_install_dir }}
+      Forwarding to: {{ splunk_uf_indexer }}:{{ splunk_uf_indexer_port }}
+      Service status: {{ final_service_status.state | default('unknown') }}
+      Configured inputs: {{ splunk_uf_inputs | map(attribute='name') | list | join(', ') }}

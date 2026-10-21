@@ -1,0 +1,14 @@
+[default]
+host = {{ ansible_hostname }}
+
+{% for input in splunk_uf_inputs %}
+[{{ input.name }}]
+disabled = false
+{% if input.index is defined %}
+index = {{ input.index }}
+{% endif %}
+{% if input.sourcetype is defined %}
+sourcetype = {{ input.sourcetype }}
+{% endif %}
+
+{% endfor %}

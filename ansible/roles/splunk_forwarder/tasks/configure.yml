@@ -1,5 +1,6 @@
 ---
-- name: Check current service active state before making policy changes
+# Keep established ludus_splunk_collector_* register names for Linux compatibility.
+- name: Check current service active state before making policy changes  # noqa: var-naming[no-role-prefix]
   ansible.builtin.command:
     argv: [systemctl, show, SplunkForwarder.service, --property=ActiveState, --value]
   register: ludus_splunk_collector_preflight_active
@@ -15,7 +16,7 @@
     mode: "0750"
   when: not ludus_splunk_collector_path_state.system_local.get('exists', false)
 
-- name: Create the initial administrator seed only for an uninitialized instance
+- name: Create the initial administrator seed only for an uninitialized instance  # noqa: var-naming[no-role-prefix]
   ansible.builtin.template:
     src: user-seed.conf.j2
     dest: /opt/splunkforwarder/etc/system/local/user-seed.conf
@@ -91,7 +92,7 @@
     group: root
     mode: "0755"
 
-- name: Install explicit capability-reset policy for the forwarder
+- name: Install explicit capability-reset policy for the forwarder  # noqa: var-naming[no-role-prefix]
   ansible.builtin.template:
     src: capabilities.conf.j2
     dest: /etc/systemd/system/SplunkForwarder.service.d/10-ludus-capabilities.conf
@@ -114,20 +115,20 @@
     name: SplunkForwarder.service
     daemon_reload: true
 
-- name: Read effective generated service properties
+- name: Read effective generated service properties  # noqa: var-naming[no-role-prefix]
   ansible.builtin.command:
     argv: [systemctl, show, SplunkForwarder.service, "--property={{ item }}", --value]
   loop: [User, Group, FragmentPath, DropInPaths, CapabilityBoundingSet, AmbientCapabilities, NoNewPrivileges]
   register: ludus_splunk_collector_effective_properties
   changed_when: false
 
-- name: Inspect effective unit fragment without following symlinks
+- name: Inspect effective unit fragment without following symlinks  # noqa: var-naming[no-role-prefix]
   ansible.builtin.stat:
     path: "{{ (ludus_splunk_collector_effective_properties.results | selectattr('item', 'equalto', 'FragmentPath') | first).stdout }}"
     follow: false
   register: ludus_splunk_collector_effective_fragment_stat
 
-- name: Read effective vendor-generated unit file
+- name: Read effective vendor-generated unit file  # noqa: var-naming[no-role-prefix]
   ansible.builtin.slurp:
     src: "{{ (ludus_splunk_collector_effective_properties.results | selectattr('item', 'equalto', 'FragmentPath') | first).stdout }}"
   register: ludus_splunk_collector_effective_unit_content
@@ -151,7 +152,7 @@
       - ludus_splunk_collector_effective_unit_content.content | b64decode | ludus_splunk_collector_validate_forwarder_unit_execs
     fail_msg: Refusing to start an unexpected, root-run, or capability-enabled forwarder unit.
 
-- name: Enable and start the verified forwarder service
+- name: Enable and start the verified forwarder service  # noqa: var-naming[no-role-prefix]
   ansible.builtin.systemd_service:
     name: SplunkForwarder.service
     enabled: true
@@ -161,7 +162,7 @@
 - name: Apply queued forwarder restarts before readiness checks
   ansible.builtin.meta: flush_handlers
 
-- name: Wait for the local Universal Forwarder management API over its Unix socket
+- name: Wait for the local Universal Forwarder management API over its Unix socket  # noqa: var-naming[no-role-prefix]
   ansible.builtin.uri:
     url: http://localhost:8089/services/server/info?output_mode=json
     method: GET
@@ -177,7 +178,7 @@
   retries: 60
   delay: 10
 
-- name: Verify fresh administrator authentication over the Unix-socket management API
+- name: Verify fresh administrator authentication over the Unix-socket management API  # noqa: var-naming[no-role-prefix]
   ansible.builtin.uri:
     url: http://localhost:8089/services/server/info?output_mode=json
     method: GET
@@ -200,7 +201,7 @@
   no_log: true
   diff: false
 
-- name: Confirm initialized authentication database after fresh authentication
+- name: Confirm initialized authentication database after fresh authentication  # noqa: var-naming[no-role-prefix]
   ansible.builtin.stat:
     path: /opt/splunkforwarder/etc/passwd
   register: ludus_splunk_collector_passwd_after_bootstrap

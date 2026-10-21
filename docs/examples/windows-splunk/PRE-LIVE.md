@@ -1,5 +1,12 @@
 # Windows Splunk example: pre-live closeout
 
+> **Historical / superseded:** This closeout predates the forwarder-role
+> consolidation. Its recorded commands and results below refer to retired paths
+> and are preserved as historical evidence, not current validation. See the
+> merged [`splunk_forwarder` role](../../../ansible/roles/splunk_forwarder/README.md)
+> and [current consolidation plan](../../superpowers/plans/2026-10-21-splunk-forwarder-merge.md)
+> for the current static scope; this notice does not imply runtime readiness.
+
 **Supersession update: 2026-10-20.** The filesystem ACL review and ACL-hardening
 claims recorded in this historical static closeout are superseded: user
 direction confirmed no stricter Windows filesystem ACL requirement. The role now

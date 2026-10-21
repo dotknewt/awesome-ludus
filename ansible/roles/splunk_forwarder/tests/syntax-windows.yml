@@ -1,0 +1,24 @@
+---
+# Static parsing of the actual dev1 Windows forwarder entrypoint; no runtime proof.
+# Intentionally refuse ordinary execution outside the authorized Ludus deployment.
+- name: Parse dev1 Windows forwarder installation and event inputs
+  hosts: dev1_win11
+  gather_facts: false
+  pre_tasks:
+    - name: Refuse execution of this static parser target
+      ansible.builtin.fail:
+        msg: Use the authorized Ludus deployment, not this syntax-only playbook.
+  vars:
+    splunk_uf_version: "10.6.1.1"
+    splunk_uf_build: b2ae2962645c
+    splunk_uf_indexer: "10.5.10.11"
+    splunk_uf_inputs:
+      - name: "WinEventLog://Security"
+        index: wineventlog
+      - name: "WinEventLog://Microsoft-Windows-Sysmon/Operational"
+        index: sysmon
+        sourcetype: "XmlWinEventLog:Microsoft-Windows-Sysmon/Operational"
+      - name: "WinEventLog://Microsoft-Windows-PowerShell/Operational"
+        index: wineventlog
+  roles:
+    - role: dotknewt.splunk_forwarder

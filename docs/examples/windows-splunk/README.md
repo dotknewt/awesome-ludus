@@ -12,7 +12,7 @@ Before use, replace both `REPLACE_WITH_AVAILABLE_*_TEMPLATE` values with
 templates confirmed present on the target server, and replace
 `REPLACE_WITH_RESOLVABLE_SPLUNK_SERVER_ADDRESS` with an address resolvable from
 the Windows VM. Confirm from the target server that the illustrative role IDs
-`ludus_splunk_server`, `ludus_install_sysmon`, and `ludus_splunk_collector` are
+`ludus_splunk_server`, `ludus_install_sysmon`, and `dotknewt.splunk_forwarder` are
 installed and accepted, and that the collector's `depends_on` role references
 match those installed IDs. The server VM is listed first, Sysmon is listed
 before the collector, and the collector declares dependencies on both the
@@ -28,12 +28,13 @@ baseline. Revalidate against the installed versions before claiming compatibilit
 
 The example explicitly accepts the server role's license input and enables its
 native receiver on TCP **9997**; both are opt-in role inputs. The receiver owns
-the `winlogs`, `sysmon`, and `etw` indexes. The Windows collector routes
-Security to `winlogs`, Sysmon to `sysmon`, and SilkService-Log to `etw`.
-Security is the unfiltered baseline (`oldest`, `current_only=0`); no Security
+the `winlogs` and `sysmon` indexes. The consolidated Windows forwarder uses the
+standalone role's input-driven `splunk_uf_inputs` behavior; this example
+explicitly routes Security to `winlogs` and Sysmon to `sysmon`. No Security
 exclusion is enabled. Sysmon installation/filtering remains owned by
-`ludus_install_sysmon`; the collector does not invoke it implicitly. SilkService
-is collection-only: this example does not install or configure its producer.
+`ludus_install_sysmon`; the forwarder does not invoke it implicitly. Optional
+SILK autoconfiguration is omitted because the standalone role has no equivalent;
+see the blocked `SPLUNK-003` backlog item.
 
 This does not include HEC, TLS, firewall rules, the full Splunk TA, optional
 CIM assets, or PSTree configuration. It makes no claim about target-side role

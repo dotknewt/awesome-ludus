@@ -29,16 +29,19 @@ ludus:
     windows: {}
     roles:
       - ludus_install_sysmon
-      - name: ludus_splunk_collector
+      - name: dotknewt.splunk_forwarder
         depends_on:
           - vm_name: "{{ range_id }}-splunk"
             role: ludus_splunk_server
           - vm_name: "{{ range_id }}-win11"
             role: ludus_install_sysmon
     role_vars:
-      ludus_splunk_collector_accept_license: true
-      ludus_splunk_collector_receiver_host: REPLACE_WITH_RESOLVABLE_SPLUNK_SERVER_ADDRESS
-      ludus_splunk_collector_receiver_port: 9997
-      ludus_splunk_collector_windows_security_index: winlogs
-      ludus_splunk_collector_windows_sysmon_index: sysmon
-      ludus_splunk_collector_windows_silk_index: etw
+      splunk_uf_accept_license: true
+      splunk_uf_indexer: REPLACE_WITH_RESOLVABLE_SPLUNK_SERVER_ADDRESS
+      splunk_uf_indexer_port: 9997
+      splunk_uf_inputs:
+        - name: "WinEventLog://Security"
+          index: winlogs
+        - name: "WinEventLog://Microsoft-Windows-Sysmon/Operational"
+          index: sysmon
+          sourcetype: "XmlWinEventLog:Microsoft-Windows-Sysmon/Operational"

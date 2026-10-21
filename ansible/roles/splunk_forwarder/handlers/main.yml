@@ -8,10 +8,9 @@
     - ludus_splunk_collector_preflight_active.stdout | default('inactive') == 'active'
     - not (ludus_splunk_collector_capability_policy.changed | default(false))
 
-- name: Restart Windows forwarder after managed configuration changes
+- name: Restart SplunkForwarder
   ansible.windows.win_service:
     name: SplunkForwarder
     state: restarted
-  when:
-    - ludus_splunk_collector_windows_phase | default('absent') == 'ready'
-    - ludus_splunk_collector_windows_inspection.result.service_state | default('') == 'Running'
+    force_dependent_services: true
+  when: splunk_uf_start_service

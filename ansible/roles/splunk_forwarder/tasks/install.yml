@@ -1,4 +1,5 @@
 ---
+# Keep established ludus_splunk_collector_* register names for Linux compatibility.
 - name: Create a protected package cache directory
   ansible.builtin.file:
     path: /var/cache/ludus-splunk-collector
@@ -20,7 +21,7 @@
     force: false
   when: ludus_splunk_collector_installed.rc != 0
 
-- name: Read Debian package identity using explicit metadata fields
+- name: Read Debian package identity using explicit metadata fields  # noqa: var-naming[no-role-prefix]
   ansible.builtin.command:
     argv:
       - dpkg-deb
@@ -66,7 +67,7 @@
     allow_downgrade: false
   when: ludus_splunk_collector_installed.rc != 0
 
-- name: Confirm installed package status and exact version
+- name: Confirm installed package status and exact version  # noqa: var-naming[no-role-prefix]
   ansible.builtin.command:
     argv: [dpkg-query, -W, "-f=${db:Status-Status}\\t${Version}\\n", splunkforwarder]
     expand_argument_vars: false
@@ -78,7 +79,7 @@
     or ludus_splunk_collector_final_package.stdout.split('\t')[0] != 'installed'
     or ludus_splunk_collector_final_package.stdout.split('\t')[1] != ludus_splunk_collector_version
 
-- name: Inspect newly installed application home without following symlinks
+- name: Inspect newly installed application home without following symlinks  # noqa: var-naming[no-role-prefix]
   ansible.builtin.stat:
     path: /opt/splunkforwarder
     follow: false

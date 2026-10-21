@@ -8,7 +8,7 @@
       ansible.builtin.fail:
         msg: This playbook is for --syntax-check only; do not run it normally.
   roles:
-    - role: ludus_splunk_collector
+    - role: dotknewt.splunk_forwarder
   vars:
     ludus_splunk_collector_accept_license: true
     ludus_splunk_collector_receiver_host: "127.0.0.1"
