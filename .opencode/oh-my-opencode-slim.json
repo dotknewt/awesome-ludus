@@ -34,5 +34,5 @@
       }
     }
   },
-  "disabled_mcps": ["gh_grep", "context7", "hermes"]
+  "disabled_mcps": ["gh_grep", "context7", "hermes","browser"]
 }
