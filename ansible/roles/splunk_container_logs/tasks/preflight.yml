@@ -1,0 +1,64 @@
+---
+- name: Require the C3 Docker mode scalar
+  ansible.builtin.assert:
+    that:
+      - splunk_container_logs_mode | type_debug == 'str'
+      - splunk_container_logs_mode == 'docker'
+    fail_msg: >-
+      splunk_container_logs_mode must be the scalar docker. kubernetes is
+      intentionally rejected in C3 and will be added by C4.
+
+- name: Validate shared HEC transport and bounded queue inputs
+  ansible.builtin.assert:
+    that:
+      - splunk_container_logs_owner_id | type_debug == 'str'
+      - splunk_container_logs_owner_id | length > 0
+      - splunk_container_logs_owner_id is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
+      - splunk_container_logs_hec_endpoint | type_debug == 'str'
+      - splunk_container_logs_hec_endpoint | length > 0
+      - splunk_container_logs_hec_endpoint | urlsplit('hostname') | length > 0
+      - splunk_container_logs_hec_endpoint | urlsplit('path') == '/services/collector/event'
+      - splunk_container_logs_hec_endpoint | urlsplit('query') | length == 0
+      - splunk_container_logs_hec_endpoint | urlsplit('fragment') | length == 0
+      - splunk_container_logs_hec_endpoint | urlsplit('username') is none
+      - splunk_container_logs_hec_endpoint | urlsplit('password') is none
+      - splunk_container_logs_hec_endpoint.startswith('https://') or
+        (splunk_container_logs_hec_endpoint.startswith('http://') and
+         splunk_container_logs_allow_insecure_http)
+      - splunk_container_logs_hec_index | type_debug == 'str'
+      - splunk_container_logs_hec_index | length > 0
+      - splunk_container_logs_hec_token | type_debug == 'str'
+      - splunk_container_logs_hec_token | length > 0
+      - splunk_container_logs_tls_verify is boolean
+      - splunk_container_logs_allow_insecure_http is boolean
+      - splunk_container_logs_ca_file | type_debug == 'str'
+      - splunk_container_logs_start_at in ['end', 'beginning']
+      - splunk_container_logs_queue_size is integer
+      - splunk_container_logs_queue_size is not boolean
+      - splunk_container_logs_queue_size > 0
+      - splunk_container_logs_queue_size <= 2147483647
+      - splunk_container_logs_queue_max_disk_mib is integer
+      - splunk_container_logs_queue_max_disk_mib is not boolean
+      - splunk_container_logs_queue_max_disk_mib >= 200
+      - splunk_container_logs_queue_max_disk_mib <= 8796093022207
+      - splunk_container_logs_collector_url | type_debug == 'str'
+      - splunk_container_logs_collector_url.startswith('https://')
+    fail_msg: >-
+      Supply an exact HEC event endpoint, nonempty index/token, explicit HTTP
+      permission where needed, valid TLS controls, and positive bounded queues.
+  no_log: true
+
+- name: Inspect an optional collector CA file
+  ansible.builtin.stat:
+    path: "{{ splunk_container_logs_ca_file }}"
+  register: splunk_container_logs_ca_status
+  when: splunk_container_logs_ca_file | length > 0
+
+- name: Require a readable regular collector CA file
+  ansible.builtin.assert:
+    that:
+      - splunk_container_logs_ca_status.stat.exists
+      - splunk_container_logs_ca_status.stat.isreg
+      - splunk_container_logs_ca_status.stat.readable | default(false)
+    fail_msg: splunk_container_logs_ca_file must be a readable regular file
+  when: splunk_container_logs_ca_file | length > 0

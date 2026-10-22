@@ -63,8 +63,10 @@ splunk_container_logs_artifacts:
       - per-database byte limit through file_storage max_size
     install_contract:
       archive_root: "splunk-otel-collector"
-      selected_entry: "splunk-otel-collector/bin/otelcol"
+      selected_entry: "./splunk-otel-collector/bin/otelcol"
+      selected_entry_normalized: "splunk-otel-collector/bin/otelcol"
       entry_size_bytes: 449040714
+      entry_sha256: "sha256:bfd3de154091ff3449e7d9a346b8ad1f7795dcb0ce5bd366e10d1f704fc3cb4f"
       install_root: "/opt/splunk-container-logs/collector/0.163.0"
       installed_entrypoint: "/opt/splunk-container-logs/collector/0.163.0/bin/otelcol"
       config_path: "/etc/splunk-container-logs/collector.yaml"

@@ -1,0 +1,6 @@
+---
+- name: Restart the owned Splunk container log collector
+  ansible.builtin.systemd_service:
+    name: splunk-container-logs
+    state: restarted
+  listen: splunk_container_logs_restart

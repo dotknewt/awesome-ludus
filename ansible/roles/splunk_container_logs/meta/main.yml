@@ -1,0 +1,22 @@
+---
+galaxy_info:
+  author: dotknewt
+  role_name: splunk_container_logs
+  description: Collect existing container logs for Splunk Platform HEC
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Debian
+      versions:
+        - bookworm
+    - name: Ubuntu
+      versions:
+        - jammy
+        - noble
+  galaxy_tags:
+    - docker
+    - logging
+    - ludus
+    - splunk
+
+dependencies: []

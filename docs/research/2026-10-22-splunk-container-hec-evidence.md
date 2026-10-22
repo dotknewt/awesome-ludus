@@ -85,8 +85,17 @@ The image is mapped to the Collector repository commit and Apache-2.0 license
 recorded in the manifest. This proves registry descriptor identity and source
 mapping, not image execution or runtime contents.
 
-The collector archive root is `splunk-otel-collector/`. It contains executable
-`bin/otelcol` (449,040,714 bytes), `bin/otelcollauncher` (5,463,599),
+The collector archive stores the selected executable as the unique regular raw
+member `./splunk-otel-collector/bin/otelcol` (normalized
+`splunk-otel-collector/bin/otelcol`), 449,040,714 bytes, streamed SHA-256
+`bfd3de154091ff3449e7d9a346b8ad1f7795dcb0ce5bd366e10d1f704fc3cb4f`.
+The same bounded inspection reconfirmed archive SHA-256
+`bb44c773423c88392c7e27d309c43bfae937ce1b3b0b81831dbc07149a28ca49`.
+Provenance is the controller-accepted streaming `tarfile` result in
+`.superpowers/sdd/2026-10-22-splunk-container-hec/validation-C3-entry-hash.txt`;
+the first literal normalized-name lookup found zero entries, while a bounded
+`./` normalization found exactly one regular member and streamed all bytes.
+It also contains executable `bin/otelcollauncher` (5,463,599),
 `bin/opampsupervisor` (46,784,032), and non-executable sample
 `config/{agent_config.yaml,gateway_config.yaml}` (10,328/8,283). All three
 executables are statically linked x86-64 ELF files. C3 must install only
