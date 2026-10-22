@@ -1,0 +1,14 @@
+---
+galaxy_info:
+  author: dotknewt
+  role_name: windows_logging_policy
+  description: Native readable Windows domain logging policy state and preflight helpers
+  license: MIT
+  min_ansible_version: "2.16"
+  galaxy_tags:
+    - windows
+    - logging
+    - grouppolicy
+    - ludus
+
+dependencies: []
