@@ -115,7 +115,7 @@
         splunk_container_logs_k8s_release or
         (item.spec.template.spec.volumes | default([]) |
          selectattr('hostPath', 'defined') | map(attribute='hostPath.path') | list |
-         intersect(splunk_container_logs_k8s_log_paths) | length == 0)
+         splunk_k8s_host_paths_disjoint(splunk_container_logs_k8s_log_paths))
     fail_msg: >-
       Known DaemonSet source ownership conflicts with this release or its
       selected pod-log roots; coordinate retirement before convergence.

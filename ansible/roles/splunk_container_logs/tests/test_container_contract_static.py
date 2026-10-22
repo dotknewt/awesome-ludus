@@ -283,6 +283,24 @@ class ContainerContractStatic(unittest.TestCase):
         state = ARTIFACTS.read(self, "tasks/kubernetes/cluster-state.yml")
         self.assertIn("ludus.splunk/log-paths", values)
         self.assertIn("ludus.splunk/log-paths", state)
+    def test_observed_daemonset_host_paths_use_normalized_overlap_semantics(self):
+        helper = load_kubernetes_helper(self)
+        disjoint = helper.kubernetes_host_paths_disjoint
+        selected = ["/var/log/pods"]
+        for observed in (["/var/log"], ["/var/log/pods/workload"],
+                         ["/var/log/pods"], ["/var/log/../log/pods"],
+                         ["/var//log/pods/"], ["/"]):
+            self.assertFalse(disjoint(observed, selected))
+        self.assertFalse(disjoint(["/var/log/pods"], ["/var/log"]))
+        self.assertFalse(disjoint(["/var/log/pods"], ["/"]))
+        for observed in (["/var/log/containers"], ["/var/log/pods-old"], []):
+            self.assertTrue(disjoint(observed, selected))
+        for unsupported in (["var/log/pods"], [None], ["/var/log/\x00pods"]):
+            self.assertFalse(disjoint(unsupported, selected))
+        self.assertFalse(disjoint(["/var/log/pods"], []))
+        state = ARTIFACTS.read(self, "tasks/kubernetes/cluster-state.yml")
+        self.assertIn("splunk_k8s_host_paths_disjoint", state)
+        self.assertNotIn("intersect(splunk_container_logs_k8s_log_paths)", state)
     def test_cluster_discovery_and_consumers_are_redacted(self):
         tasks = list(walk_tasks(ARTIFACTS.yaml(self, "tasks/kubernetes/cluster-state.yml", list)))
         discovery = [task for task in tasks if "kubernetes.core.k8s_cluster_info" in task]

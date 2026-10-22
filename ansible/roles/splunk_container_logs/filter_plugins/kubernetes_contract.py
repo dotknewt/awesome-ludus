@@ -67,10 +67,37 @@ def kubernetes_persistent_paths_valid(paths):
     return not (left == right or left.startswith(right + "/") or right.startswith(left + "/"))
 
 
+def _normalized_absolute_path(value):
+    if not isinstance(value, str) or not value.startswith("/") or "\x00" in value:
+        raise ValueError("hostPath must be an absolute string without NUL")
+    return "/" + posixpath.normpath(value).lstrip("/")
+
+
+def kubernetes_host_paths_disjoint(observed_paths, selected_paths):
+    """Fail closed unless normalized observed and selected paths are disjoint."""
+    if (
+        not isinstance(observed_paths, (list, tuple))
+        or not isinstance(selected_paths, (list, tuple))
+        or not selected_paths
+    ):
+        return False
+    try:
+        observed = [_normalized_absolute_path(path) for path in observed_paths]
+        selected = [_normalized_absolute_path(path) for path in selected_paths]
+    except (TypeError, ValueError):
+        return False
+    return not any(
+        posixpath.commonpath((left, right)) in (left, right)
+        for left in observed
+        for right in selected
+    )
+
+
 class FilterModule:
     def filters(self):
         return {
             "splunk_k8s_label_pair_valid": kubernetes_label_pair_valid,
             "splunk_k8s_credential_contract": kubernetes_credential_contract,
             "splunk_k8s_persistent_paths_valid": kubernetes_persistent_paths_valid,
+            "splunk_k8s_host_paths_disjoint": kubernetes_host_paths_disjoint,
         }
