@@ -394,7 +394,102 @@ delivery, indexed-event fields, selected-cluster API compatibility, Secret/RBAC
 behavior, Helm live drift, or Splunk searchability. Those remain live acceptance
 items and require separate authorization.
 
-Fast-generic should run the exact scoped checks requested in the Task C1 report.
-Helm render/schema checking is currently unavailable because Helm is not
-installed; downloaded Helm bytes were inspected but must not be executed by this
-worker.
+The Task C1 report's requested checks are historical: accepted artifact, YAML,
+and source evidence was completed and subsequently reused as recorded below.
+C5 requires only documentary scope, provenance, and formatting review; unchanged
+implementation checks must not be rerun. Helm render/schema checking remains
+unavailable because Helm is not installed, and no installation or execution of
+the inspected Helm bytes is authorized.
+
+## Accepted implementation evidence ledger
+
+This section reconciles the C2–C4 authored static deliverable with the research
+claims above. It does not upgrade source checks into runtime evidence. Commit
+`b03cb9158b3ac80f449e48903c547bbbf22cb570` is the earlier implementation
+checkpoint, not the final current overlap-corrected file state.
+
+| Scope | Accepted commits and exact evidence | What it establishes | What it does not establish |
+| --- | --- | --- | --- |
+| HEC (C2) | `f84fe71283ba02d0861cfb4c7db02a97ae0cd602`, corrected by `2962558733fb3d7fd0cfbce2420eb25cf7e5d30d`; `validation-telemetry-phasefix1-shapes.txt`: Python AST exit 0, source contracts 17/17, parser examples 8/8 | The selected files parse as Python and encode the reviewed source and pure-data parser contracts. | Native role-entrypoint syntax, selected Splunk 10.6.1.1 `btool` shapes, pre-write listener detection, restart/convergence, authenticated acceptance, searchability, and preservation on a real server. Official listener references used for the correction were 10.0 references, not exact 10.6.1.1 runtime evidence. |
+| Docker collector (C3) | `d8d78ec150d17b707fb70ecff1a92c16280d9933`; accepted streaming member evidence in `validation-C3-entry-hash.txt`; archive member `./splunk-otel-collector/bin/otelcol`, 449,040,714 bytes, SHA-256 `bfd3de154091ff3449e7d9a346b8ad1f7795dcb0ce5bd366e10d1f704fc3cb4f` | Exact archive/member identity and source-encoded Docker path, parser, ownership, sandbox, and service contracts. | Collector configuration acceptance, archive extraction on a target, systemd behavior, readable rotating logs, HEC delivery, offsets, outage recovery, or unchanged convergence. |
+| Kubernetes collector (C4), historical pre-final-overlap checkpoint | `b03cb9158b3ac80f449e48903c547bbbf22cb570`; `validation-telemetry-phasefix1.txt`: source contracts 28/28, YAML and file-scoped lint exit 0 for three changed task files, Jinja and helper AST exit 0; `validation-telemetry-phasefix2.txt`: source contracts 28/28 and helper AST exit 0. Unchanged phase-fix-1 YAML/lint/Jinja evidence was reused after the helper/test/README-only phase-fix-2 correction. | At that checkpoint, source and pure-data checks encoded the reviewed Secret, source-path, persistence-path, chart-values, and Helm-task contracts. | Pinned-chart rendering/schema/resource output, Kubernetes API/admission/RBAC compatibility, fresh installation, check-mode behavior, Helm drift/revision convergence, Secret rotation, event delivery, or checkpoint continuity. |
+
+The relevant final correction hashes are recorded rather than recomputed here:
+
+- C2 correction: `hec-preflight.yml`
+  `1c621a50ab4b048106e4562ac5d2695531979e2daf97c3aa325ebb926462b1b5`,
+  `hec_config.py`
+  `a0f3755b9a8f819f8f94935d3f11a34239da2f1c1e735026c02f3be8dfaa7114`,
+  HEC source test
+  `3e890de225df39977975e9566350509f63924218298f88e1b33fe9ebd9c46048`,
+  and parser test
+  `951010e92c731a2a21aa51bfd6c598799979a2130b5952b3c412f67091e0a18e`.
+- C3 commit records the final internal manifest SHA-256 as
+  `711a2989b03f0c1b0c18f0112cbe7832dd387bf2dedbbb7e6d14d9b8f88a0611`.
+- C4's historical pre-final-overlap checkpoint records the Kubernetes helper SHA-256 as
+  `677be74ab41bbd507ec80c6e85af6a1d636d614145aed589b4d43ceaaaa73a7e`
+  and source-test SHA-256 as
+  `b2d9bf467b0e1a9b67bd062502bdfcbe101c6070135122c1772d6ec7f0edbd1e`.
+
+### Final same-namespace overlap correction
+
+The final remediation replaces exact `intersect` matching for already-observed
+same-namespace DaemonSet host paths with normalized equality/ancestor overlap
+semantics. `final-fix-review-package.md` records the current exact hashes:
+
+- `tasks/kubernetes/cluster-state.yml`:
+  `48232ddd55eb2ee1aeb614fb593a9bb53642de0a90957f514792de1dec9230ec`
+- `filter_plugins/kubernetes_contract.py`:
+  `52dd5d3724c646ba2941ca2e11c11c095b9219ac79ffa7419e4839231d7dbf61`
+- `tests/test_container_contract_static.py`:
+  `a783b023bf994e31e30259e889799a4817f69e71408f60aae2d591485c08a279`
+
+`final-fix-validation.txt` records source/pure-data contracts **29/29**, changed
+task YAML and file-scoped lint exit 0, helper AST exit 0, and scoped diff checks
+exit 0 for all three files. The YAML wrapper planned zero role-entrypoint checks.
+This evidence does not prove Helm rendering, native role-entrypoint execution,
+live Kubernetes behavior, delivery, or persistence. The original final reviewer
+accepted the correction in the scoped rereview; no material finding remains.
+
+Raw command argv, complete output, and status are preserved in the named
+`validation-*` files above. In particular, the validator's zero playbook targets
+and zero planned commands are not role-entrypoint syntax evidence. The recorded
+`git diff --no-index --check /dev/null <file>` invocations exited **1** because
+the compared files differ from `/dev/null`; they emitted no whitespace
+diagnostic, but are not exit-0 whitespace checks. Commit proofs separately
+record `git diff --cached --check` exit 0.
+
+Helm and PowerShell were absent from the relevant static environments. They were
+not installed, and their missing coverage remains a gap. C2–C4 implementation
+review reused the pinned artifact/source research in this document while the
+manifest and relevant dependencies remained unchanged. An earlier telemetry
+oracle checkpoint reported no material blocker and retained a maintainability
+advisory to split the long Docker task file plus a duplicated-public-URL concern.
+The corrected final review subsequently required the same-namespace overlap fix
+above, which passed scoped rereview for authored static acceptance. Docker task
+decomposition remains a nonblocking follow-up; live readiness is not established.
+
+## Live authorization and acceptance matrix
+
+No live action was authorized for this work package. Every row below is
+therefore **NOT RUN**; a future authorization must identify the target and scope
+before executing the actual role entrypoint.
+
+| Actual-entrypoint scope | Required evidence | Status |
+| --- | --- | --- |
+| HEC fresh enablement | Enable over vendor defaults; prove effective token/index/listener settings and preserve unrelated Splunk configuration. | **NOT RUN** |
+| HEC convergence/update | Unchanged rerun causes no HEC write/restart; owned update and compatible shared globals converge. | **NOT RUN** |
+| HEC failure paths | Winning/shadowed conflicts, wrong token/index/TLS, listener collision, interrupted pending state, and post-mutation failure disposition. | **NOT RUN** |
+| HEC emitted/searchable event | Require HTTP 200 plus HEC JSON `code == 0`; separately search for event/index identity. Acceptance alone is not searchability. | **NOT RUN** |
+| Docker fresh/convergence | Install against real existing `json-file` logs; second run has no restart; prove runtime package/config/service and container runtime remain as contracted. | **NOT RUN** |
+| Docker delivery/persistence | Parse and search a representative event; exercise rotation, collector restart, HEC outage/recovery, bounded queue behavior, and offset continuity. | **NOT RUN** |
+| Docker failure/preservation | Unsupported driver, unreadable source, ownership collision, invalid config, activation/restart failures; prove source/runtime state and unrelated resources are preserved. | **NOT RUN** |
+| Kubernetes fresh/convergence | Use an existing supported cluster/context; inspect rendered/applied logs-only resources; second run has no Helm revision change. | **NOT RUN** |
+| Kubernetes delivery/persistence | Search an actual pod event; verify selected nodes, existing/owned Secret paths, rollout offset continuity, credential rotation after role rerun, and managed drift behavior. | **NOT RUN** |
+| Kubernetes failure/preservation | Bad context/TLS/Secret/namespace/ownership/pending release, admission/RBAC and outage failures; prove no cluster/runtime/audit mutation or unrelated-resource damage. | **NOT RUN** |
+
+No deployment, check-mode guest probe, installation, cleanup, event generation,
+or endpoint query was performed. Static source/parser checks do not establish
+selected-version compatibility, native convergence, delivery, persistence, or
+deployment readiness. Current disposition remains **PASS WITH WARNINGS — NOT
+VERIFIED**.
