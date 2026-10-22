@@ -19,6 +19,8 @@ Every range configuration created in this repository must include all three of t
 
 This is repository policy, not a claim about official Ludus defaults; the official schema's documented default timezone is `America/New_York` ([range-config schema](https://docs.ludus.cloud/schemas/range-config.json)). Apply explicit change/exclusion instructions as given and record the deviation. Only an explicit user instruction may omit the whole `defaults:` block; never drop these defaults silently.
 
+For every range configuration created in this repository, set the router to `template: no-debian-13.5-x64-server-template`, `vm_name: "{{ range_id }}-router"`, and `hostname: "{{ range_id }}-router"` unless the user explicitly requests different values or no router. These are repository defaults, not Ludus-enforced or official defaults. The official schema supports `router.template`, `router.vm_name`, and `router.hostname` as string properties but does not prescribe these values ([range-config schema](https://docs.ludus.cloud/schemas/range-config.json); [configuration guide](https://docs.ludus.cloud/docs/configuration)).
+
 ## Reusable role design
 
 - Make each role independently reusable, namespaced, and usable without a particular blueprint. Own the installation and configuration of the component the role represents.
