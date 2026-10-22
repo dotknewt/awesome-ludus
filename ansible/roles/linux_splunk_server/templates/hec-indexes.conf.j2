@@ -1,0 +1,8 @@
+# Managed by the linux_splunk_server role. Do not edit in place.
+{% for splunk_server_hec_index in splunk_server_hec_indexes %}
+[{{ splunk_server_hec_index }}]
+homePath = $SPLUNK_DB/{{ splunk_server_hec_index }}/db
+coldPath = $SPLUNK_DB/{{ splunk_server_hec_index }}/colddb
+thawedPath = $SPLUNK_DB/{{ splunk_server_hec_index }}/thaweddb
+
+{% endfor %}

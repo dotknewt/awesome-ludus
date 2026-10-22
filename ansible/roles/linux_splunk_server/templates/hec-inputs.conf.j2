@@ -1,0 +1,14 @@
+# Managed by the linux_splunk_server role. Do not edit in place.
+[http]
+disabled = 0
+port = {{ splunk_server_hec_port }}
+enableSSL = {{ splunk_server_hec_ssl_enabled | ternary('true', 'false') }}
+{% if splunk_server_hec_server_cert | length > 0 %}
+serverCert = {{ splunk_server_hec_server_cert }}
+{% endif %}
+
+[http://{{ splunk_server_hec_token_name }}]
+disabled = 0
+token = {{ splunk_server_hec_token }}
+index = {{ splunk_server_hec_default_index }}
+indexes = {{ splunk_server_hec_indexes | join(',') }}

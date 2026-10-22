@@ -1,0 +1,36 @@
+---
+- name: Send authenticated HEC acceptance event
+  ansible.builtin.uri:
+    url: "{{ splunk_server_hec_validation_endpoint }}"
+    method: POST
+    headers:
+      Authorization: "Splunk {{ splunk_server_hec_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      event: ludus-linux-splunk-hec-validation
+      index: "{{ splunk_server_hec_default_index }}"
+      source: ludus:ansible:hec-validation
+      sourcetype: ludus:hec:validation
+    status_code: 200
+    return_content: true
+    validate_certs: "{{ splunk_server_hec_validate_certs }}"
+    ca_path: "{{ splunk_server_hec_ca_path if splunk_server_hec_ca_path | length > 0 else omit }}"
+  register: splunk_server_hec_validation_result  # noqa: var-naming[no-role-prefix]
+  no_log: true
+  when:
+    - splunk_server_hec_enabled
+    - splunk_server_hec_validate
+    - not ansible_check_mode
+
+- name: Require successful parsed HEC acceptance response
+  ansible.builtin.assert:
+    that:
+      - splunk_server_hec_validation_result.status == 200
+      - splunk_server_hec_validation_result.json.code == 0
+    fail_msg: HEC returned HTTP 200 without JSON code 0; acceptance failed.
+  no_log: true
+  when:
+    - splunk_server_hec_enabled
+    - splunk_server_hec_validate
+    - not ansible_check_mode

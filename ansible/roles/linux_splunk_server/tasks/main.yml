@@ -25,6 +25,7 @@
          '/linux/' ~ splunk_server_package ~
          ('?token=' ~ splunk_server_download_token
           if splunk_server_download_token | length > 0 else '') }}
+  no_log: true
 
 - name: Download Splunk from splunk.com
   ansible.builtin.get_url:
@@ -32,6 +33,7 @@
     dest: "/tmp/{{ splunk_server_package }}"
     mode: '0644'
     validate_certs: false
+  no_log: true
   when: not splunk_server_binary.stat.exists
 
 - name: Extract Splunk tarball
@@ -46,6 +48,8 @@
     src: user-seed.conf.j2
     dest: "{{ splunk_server_home }}/etc/system/local/user-seed.conf"
     mode: '0600'
+  diff: false
+  no_log: true
   when: not splunk_server_binary.stat.exists
 
 - name: Accept license and start Splunk for first time
@@ -124,6 +128,8 @@
   register: splunk_server_create_index  # noqa: var-naming[no-role-prefix]
   changed_when: splunk_server_create_index.rc == 0
   failed_when: false
+  no_log: true
+  when: not (splunk_server_hec_enabled and 'wineventlog' in splunk_server_hec_indexes)
 
 - name: Check whether the sysmon index exists
   ansible.builtin.command:
@@ -136,7 +142,9 @@
 - name: Create the sysmon index
   ansible.builtin.command:
     cmd: "{{ splunk_server_home }}/bin/splunk add index sysmon -auth {{ splunk_server_admin_user }}:{{ splunk_server_admin_password }}"
-  when: "'sysmon' not in splunk_server_index_list.stdout_lines"
+  when:
+    - "'sysmon' not in splunk_server_index_list.stdout_lines"
+    - not (splunk_server_hec_enabled and 'sysmon' in splunk_server_hec_indexes)
   # Keep the approved splunk_server_* namespace rather than directory-derived prefix.
   register: splunk_server_create_sysmon_index  # noqa: var-naming[no-role-prefix]
   changed_when: splunk_server_create_sysmon_index.rc == 0
@@ -157,6 +165,7 @@
   register: splunk_server_license_install  # noqa: var-naming[no-role-prefix]
   changed_when: splunk_server_license_install.rc == 0
   failed_when: false
+  no_log: true
 
 - name: Disable first-time login popups
   ansible.builtin.template:
@@ -179,11 +188,13 @@
     timeout: 60
   when: splunk_server_enable_boot_start
 
+- name: Converge optional owned HEC configuration
+  ansible.builtin.import_tasks: hec.yml
+
 - name: Display Splunk access information
   ansible.builtin.debug:
     msg: |
       Splunk Enterprise installed successfully!
       Web UI: https://{{ ansible_host }}:{{ splunk_server_web_port }}
       Username: {{ splunk_server_admin_user }}
-      Password: {{ splunk_server_admin_password }}
       Receiving port: {{ splunk_receiver_port }}
