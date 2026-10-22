@@ -5,11 +5,12 @@ description: Use when naming, renaming, reviewing, or validating Ludus Packer OS
 
 # Ludus Template Naming
 
+This skill defines **repository policy**, not a universal Ludus naming rule.
 Apply one canonical grammar to Ludus Packer template directories, top-level
 `.pkr.hcl` files, `vm_name` values, and exact consuming references. Preserve the
 template's semantics; normalize only their representation.
 
-## Canonical Grammar
+## Canonical Grammar (Repository Policy)
 
 Use lowercase ASCII letters, digits, hyphens, and dots only; never underscores.
 Use hyphens between fields and within compound releases or multiword qualifiers.
@@ -57,7 +58,9 @@ flare-vm-us-template
 Set the top-level `.pkr.hcl` basename equal to the directory basename. Set the
 built template name to that basename plus exactly one `-template` suffix.
 
-## Classification Workflow
+## Read-Only Classification and Construction
+
+**REQUIRED SUB-SKILL:** Operational template workflows must load this skill.
 
 1. Inspect the complete template directory, top-level `.pkr.hcl`, installer
    answer files, and exact consuming references before interpreting a legacy
@@ -81,17 +84,33 @@ built template name to that basename plus exactly one `-template` suffix.
 5. Ask one short question when evidence does not resolve a token. Never assume
    `no` means Norwegian; it can belong to `no-security-updates`, while the
    locale requires installer or other direct locale evidence.
-6. Construct the basename with the family-specific shape and separators above.
-7. Stop if the target directory or target `.pkr.hcl` already exists, including
-   when a named-environment upgrade would collide with an unchanged identity
-   name. Do not silently overwrite or merge into that target.
-8. Rename the directory and top-level `.pkr.hcl`, set `vm_name`, and update
-   exact old-name references. Do not blindly replace short tokens.
-9. Search for the old full basename and inspect every remaining match.
+6. Construct and validate the proposed basename using the family-specific
+   shape and separators above. Standalone naming/normalization preserves every
+   classified semantic field. An operational caller supplies its authorized
+   semantic delta (for example, a new release or locale): classify the source
+   first, then construct the proposed target by applying that delta and
+   preserving all other classified semantics. This phase is read-only: report
+   the proposed identity and evidence gaps without renaming files, editing
+   `vm_name`, or changing references.
 
 Do not change locale, role, edition, feature, release, or architecture merely
 to satisfy naming. Do not create backward-compatible aliases unless explicitly
-requested.
+requested. A standalone naming or normalization request still proceeds to the
+application phase below; read-only construction separates the decision from
+mutation, it does not discard the requested rename.
+
+## Apply a Requested Rename
+
+Apply only after the user has requested normalization/renaming or an operational
+workflow has reached its explicit mutation step. The operational workflow owns
+whether it copies or renames, the mutation sequence, and the scope of reference
+updates; follow that workflow rather than applying the standalone rename
+sequence to its source. Before any mutation, confirm
+the target directory and target `.pkr.hcl` do not exist, including unchanged
+named-environment identity collisions. Then rename the directory and top-level
+`.pkr.hcl`, set `vm_name` to the validated basename plus one `-template`
+suffix, and update exact old-name references. Do not blindly replace short
+tokens. Search for the old full basename and inspect every remaining match.
 
 ## Validate Names
 

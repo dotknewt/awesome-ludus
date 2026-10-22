@@ -1,6 +1,6 @@
 ---
 name: update-os-template
-description: Clone and update Ludus Packer templates for a new OS release. Use when a new Debian, Ubuntu, Kali, Windows, or Windows Server release needs a template based on the latest existing template, including the template name, iso_checksum, iso_url, vm_name, template_description, and release-specific source identifiers.
+description: Use when creating a new Ludus Packer OS-release template by copying a compatible existing template, including release-specific ISO metadata, Packer identifiers, and answer-file or boot changes.
 ---
 
 # Update An OS Template
@@ -32,42 +32,22 @@ template variant is ambiguous. Never guess an ISO checksum.
    newest compatible template as the source.
 4. Read its `.pkr.hcl` and inspect all files in the template directory for
    release-specific references before copying.
-5. Classify an explicitly named environment before applying an OS-shaped
-   grammar. If the source is `flare-vm-no` or another `flare-vm-<locale>`
-   identity (including a terminal `-template` suffix), stop before selecting a
-   target name or entering generic release reconstruction. Require an explicit
-   naming decision: either retain the unchanged identity, or specify a new
-   named-environment identity and its schema. Never derive a release-bearing
+5. **REQUIRED SUB-SKILL:** Load `ludus-template-naming` and use its
+   **Read-Only Classification and Construction** and **Validate Names** sections
+   to propose and validate the target basename. This is repository naming
+   policy, not a universal Ludus rule. For an OS-shaped source, classify its
+   semantics first, then construct the target using the requested new release
+   while preserving all other classified semantics. Preserve the old source
+   directory unchanged; classify and construct before copying, without applying
+   the rename to the source. If the source is
+   `flare-vm-no` or another `flare-vm-<locale>` identity (including a terminal
+   `-template` suffix), stop before selecting a target name. Require and record
+   an explicit naming decision: either retain the unchanged identity, or specify
+   a new named-environment identity and schema. Never derive a release-bearing
    FLARE name or silently reuse the unchanged identity for an OS upgrade. Do
-   not continue until that decision is recorded. For OS-shaped names only,
-   classify the source's family, architecture, Linux role when applicable,
-   locale, edition, and feature qualifiers from directory contents, then
-   reconstruct the full canonical target basename with the new release. Accept
-   only `ubuntu`, `debian`, `kali`, `windows`, and `windows-server`. Stop and
-   require an explicit naming-schema decision before constructing a name for
-   any other family. Use
-   `<os>-<release>-<arch>-<role>[-<qualifier>...]-<locale>` for `ubuntu`,
-   `debian`, and `kali`,
-   `windows-<release>-<arch>[-<qualifier>...]-<locale>` for Windows clients, and
-   `windows-server-<release>-<arch>[-<qualifier>...]-<locale>` for Windows
-   Server. Use dots for numeric releases, hyphens for semantic alphanumeric
-   release parts and multiword qualifiers, and an explicit lowercase two-letter
-   locale as the final field. For example, reconstruct legacy
-   `debian-13-2-x64-no-server` as `debian-13.6.0-x64-server-no`. When updating
-   `windows-server-2019-x64-no-security-updates-us`, preserve
-   `no-security-updates` and `us` while changing only the release semantics.
-   Use compound releases such as `11-22h2`. Require lowercase ASCII DNS-compatible
-   names without underscores: each dot-separated label must be 1–63 characters
-   and start and end with a letter or digit; the full name must be at most 253
-   characters without a trailing root dot. Check the final built name including
-   `-template` against both limits as well as the basename.
-   Add qualifiers only when directly evidenced by the template: retain
-   `enterprise`, explicitly identified `no-security-updates`, and genuine
-   `tpm` when a TPM device is configured. Never infer `tpm` from bypass registry
-   commands or harvest incidental installer/provisioner settings. Omit
-   `tpm_bypas`, `tpm_bypass`, `standard`, `standard_evaluation`, and
-   `desktop_experience` from names without changing template settings. Their
-   hyphenated spellings remain excluded too; never add `flare-vm` as an OS qualifier.
+   not continue until that decision is recorded. For OS-shaped sources, ask for
+   an explicit schema decision if their family is outside the naming skill's
+   supported families.
 6. Stop and report the conflict if the target directory or target `.pkr.hcl`
    already exists. Do not merge into or overwrite an existing template.
 7. Copy the entire source directory to the new directory so supporting files,
@@ -80,13 +60,13 @@ template variant is ambiguous. Never guess an ISO checksum.
      exact ISO. Keep the Packer format `<algorithm>:<digest>`.
    - `iso_url`: use the exact official or project-approved ISO URL. For Debian,
      apply the archive-path rule below.
-    - `vm_name`: use `<target-template-name>-template`.
-    - `template_description`: replace the old OS release with the new release
-      while preserving the existing description format and dynamic build date.
-    - For Ubuntu, rename the `proxmox-iso` source label to match the target
-      major and minor release with punctuation removed. For example, Ubuntu
-      `26.04.1` uses `source "proxmox-iso" "ubuntu2604"`. Update every exact
-      reference to that label, including entries in `build.sources`.
+   - `vm_name`: use `<target-template-name>-template`.
+   - `template_description`: replace the old OS release with the new release
+     while preserving the existing description format and dynamic build date.
+   - For Ubuntu, rename the `proxmox-iso` source label to match the target
+     major and minor release with punctuation removed. For example, Ubuntu
+     `26.04.1` uses `source "proxmox-iso" "ubuntu2604"`. Update every exact
+     reference to that label, including entries in `build.sources`.
 10. Search the copied directory for the old full template name, old release,
     old ISO URL, and old checksum. Do not blindly replace matches: distinguish
     release-neutral identifiers from values that would break the new release.
@@ -134,16 +114,13 @@ architecture, ISO type, and filename. Obtain the checksum for that exact ISO.
 
 Before finishing:
 
-1. Confirm the target basename uses the applicable family shape, dots for
-   numeric release components, hyphens within semantic release or qualifier
-   fields, the Linux role position when applicable, and a final explicit locale.
-   If the source is a named `flare-vm-<locale>` environment, confirm that the
-   explicit naming decision was recorded before any target name was chosen and
-   that no release, OS, architecture, edition, or feature was inferred.
+1. Confirm the target basename and built name pass `ludus-template-naming`'s
+   validator. If the source is a named `flare-vm-<locale>` environment, confirm
+   that the explicit naming decision was recorded before any target name was
+   chosen and that no release, OS, architecture, edition, or feature was inferred.
 2. Confirm the target directory and `.pkr.hcl` basename are identical.
-3. Confirm `vm_name` is the canonical target basename plus exactly one
-   `-template` suffix. Validate both names against the DNS label boundaries,
-   63-character label limit, and 253-character total limit above.
+3. Confirm `vm_name` is the validated target basename plus exactly one
+   `-template` suffix.
 4. Confirm `template_description` names the new OS release and no longer names
    the source release.
 5. For Ubuntu, confirm the `proxmox-iso` source label matches the target major

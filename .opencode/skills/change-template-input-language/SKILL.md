@@ -1,6 +1,6 @@
 ---
 name: change-template-input-language
-description: Change keyboard input languages and layouts in Ludus Packer OS templates. Use when converting a Windows, Debian, Kali, or Ubuntu template from one keyboard locale to another, including template directory and .pkr.hcl renames, Packer naming edits, Autounattend.xml InputLocale, preseed xkb-keymap, and Ubuntu autoinstall keyboard settings.
+description: Use when changing a Ludus Packer template's physical keyboard layout or installer input-language setting for Windows, Debian, Kali, Ubuntu, or a named FLARE environment.
 ---
 
 # Change Template Input Language
@@ -23,12 +23,14 @@ Keyboard layout, language locale, and filename token are different identifier
 systems. Do not assume one value is valid in all three. Ask one short question
 if the requested physical layout is ambiguous, such as ANSI US versus British,
 standard versus Dvorak, or a locale with multiple national layouts.
-Stop before renaming and ask one short question if directory and installer
-evidence do not resolve a legacy basename token. Never assume `no` is the
-locale; it can belong to a qualifier such as `no-security-updates`. Classify
-an explicitly named environment such as `flare-vm-no` before applying an
-OS-shaped grammar; preserve its identity rather than inventing OS, release,
-architecture, edition, or feature fields.
+**REQUIRED SUB-SKILL:** Load `ludus-template-naming` and use its **Read-Only
+Classification and Construction** and **Validate Names** sections for filename
+classification and target construction. This is repository naming policy, not
+a universal Ludus rule. Classify the source first, then construct the proposed
+target with the requested locale as the authorized semantic delta, preserving
+all other classified semantics. Stop before mutation and ask one short question
+if directory and installer evidence do not resolve a legacy basename token.
+Classification and construction are read-only; do not rename during this phase.
 
 ## Identifier Lookup
 
@@ -47,20 +49,9 @@ Validate values before editing. Do not invent them.
   layout pair such as `0409:00000409`. Multiple values are semicolon-separated
   and the first is the default. Confirm values using Microsoft documentation
   or the target Windows image's keyboard-layout registry data.
-- Reconstruct the complete basename with hyphens between and within semantic
-  fields. Use dots for numeric release components and hyphens for semantic
-  alphanumeric release parts (`11-22h2`) and multiword qualifiers
-  (`no-security-updates`). Use
-  `<os>-<release>-<arch>-<role>[-<qualifier>...]-<locale>` for Linux,
-  `windows-<release>-<arch>[-<qualifier>...]-<locale>` for Windows clients, and
-  `windows-server-<release>-<arch>[-<qualifier>...]-<locale>` for Windows
-  Server. Require `desktop` or `server` in the Linux role position and an
-  explicit lowercase two-letter locale, including `us`, as the final field.
-- Require lowercase ASCII DNS-compatible names without underscores: each
-  dot-separated label is 1–63 characters and starts and ends with a letter or
-  digit; the full textual name is at most 253 characters without a trailing
-  root dot. Check both the basename and final built name including `-template`,
-  which extends the final label.
+- Use the naming skill's validator for both the proposed basename and built
+  name. Keyboard identifiers and the physical layout remain independently
+  validated below; a filename locale does not prove the keyboard layout.
 
 For standard Norwegian Bokmal QWERTY, use:
 
@@ -86,28 +77,18 @@ Norwegian XKB keyboard.
    `flare-vm-us-template`.
 2. Stop and report a conflict if the target directory or target top-level
    `.pkr.hcl` already exists. Do not merge into or overwrite either target.
-3. Do not infer or add OS, release, architecture, edition, feature, or excluded
-   Windows metadata fields: `tpm_bypas`, `tpm_bypass`, `standard`,
-   `standard_evaluation`, and `desktop_experience`, including their hyphenated
-   spellings. Preserve the underlying
-   template settings. Retain `tpm` only when a TPM device is configured; never
-   infer it from bypass registry commands.
+3. Preserve the existing FLARE identity schema and underlying template
+   settings; do not expand the named environment into OS-shaped fields.
 4. Rename the directory and top-level `.pkr.hcl` to the new
    `flare-vm-<locale>` basename, update exact identity references, and leave
    release-neutral support files unchanged.
 
 ### Generic OS template
 
-1. Classify the family, release, architecture, Linux role when applicable,
-   qualifiers, and locale from the complete template directory and installer
-   evidence, then reconstruct the full canonical target basename. For example,
-   legacy `ubuntu-24.04.2-x64-us-desktop` becomes
-   `ubuntu-24.04.2-x64-desktop-no`.
-   Add qualifiers only with direct template evidence: retain `enterprise`,
-   explicitly identified `no-security-updates`, and genuine `tpm` only for a
-   configured TPM device. Exclude the incidental Windows metadata fields above
-   and their hyphenated spellings; never use `flare-vm` as an OS qualifier or
-   infer `tpm` from bypass commands.
+1. Use the naming skill to classify the complete template and construct the
+   target basename with only the requested locale change. Its decision also
+   preserves existing semantic fields; do not interpret or rewrite naming rules
+   here.
 2. Stop and report a conflict before renaming if either the target directory or
    target top-level `.pkr.hcl` already exists. Do not merge into or overwrite
    either target.
@@ -117,8 +98,11 @@ Norwegian XKB keyboard.
 5. Do not rename release-neutral support files such as `Autounattend.xml`,
    `kali-preseed.cfg`, `debian-13-preseed.cfg`, or `http/user-data`.
 
-This workflow changes the existing template in place. Copy it instead only if
-the user explicitly asks to retain both locale variants.
+This workflow changes the existing template in place by default. Copy it instead
+only if the user explicitly asks to retain both locale variants. Apply the
+already-classified target only after this choice is settled and the collision
+check passes; for an explicitly requested copy, perform the same collision
+check against the copy target before copying or editing anything.
 
 ## Required Packer Edits
 
@@ -209,19 +193,14 @@ input-language-only request.
 Before finishing:
 
 1. For the named FLARE branch, confirm the target is exactly
-   `flare-vm-<new-locale>`, the old final locale was replaced rather than an OS
-   shape being invented, and no excluded Windows metadata field was added.
-   Confirm `tpm` is present only when a TPM device is configured, never because
-   of bypass registry commands.
-2. For the generic OS branch, confirm the target basename follows the family
-   shape, uses dots for numeric release components and hyphens within
-   semantic fields, places the Linux role correctly when applicable, and ends
-   with an explicit locale.
+   `flare-vm-<new-locale>` and that only its final locale changed; do not
+   invent an OS-shaped identity.
+2. For the generic OS branch, confirm the target basename and built name pass
+   the naming skill's validator and only the requested locale differs from the
+   classified source.
 3. Confirm the directory basename and `.pkr.hcl` basename are identical.
-4. Confirm the built name and `vm_name` default follow the same canonical
-   basename plus exactly one `-template` suffix. Validate both names against
-   the DNS label boundaries, 63-character label limit, and 253-character total
-   limit above.
+4. Confirm the built name and `vm_name` default use the validated target
+   basename plus exactly one `-template` suffix.
 5. Search the converted template for the old full basename and old keyboard
    values. Classify each remaining match; ISO filenames and prose may
    legitimately contain language text.
