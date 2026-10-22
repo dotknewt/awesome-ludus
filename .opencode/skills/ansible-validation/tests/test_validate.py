@@ -62,14 +62,14 @@ class ValidatorTests(unittest.TestCase):
     def test_all_discovers_repository_roles_playbooks_and_artifact_data(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            role = self.make_role(root)
+            role = self.make_role(root, "ludus_bridge_promisq")
             template_playbook = root / "templates" / "linux" / "ansible" / "reset.yml"
             template_playbook.parent.mkdir(parents=True)
             template_playbook.write_text("---\n- name: Reset\n  hosts: all\n")
             source = root / "source.yml"
             source.write_text("---\nname: source\n")
-            root_playbook = root / "ludus-configure-bridge.yaml"
-            root_playbook.write_text("---\n- name: Configure bridge\n  hosts: all\n")
+            role_playbook = role / "ludus-configure-bridge.yaml"
+            role_playbook.write_text("---\n- name: Configure bridge\n  hosts: all\n")
             unknown_root_yaml = root / "notes.yaml"
             unknown_root_yaml.write_text("---\nkind: notes\n")
             (root / ".yamllint.yml").write_text("---\nextends: default\n")
@@ -89,7 +89,8 @@ class ValidatorTests(unittest.TestCase):
             inventory = validate.build_inventory(validate.parse_args(["--all"], root), root)
 
             self.assertEqual(inventory.roles, (role,))
-            self.assertEqual(inventory.playbooks, (root_playbook, template_playbook))
+            self.assertEqual(inventory.playbooks, (role_playbook, template_playbook))
+            self.assertIn(role_playbook, inventory.syntax_targets)
             self.assertEqual(inventory.data, (source, collection, blueprint, unknown_root_yaml))
             self.assertNotIn(unknown_root_yaml, inventory.syntax_targets)
             self.assertNotIn(ignored_skill, inventory.yaml_targets)

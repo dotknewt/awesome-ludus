@@ -21,7 +21,9 @@ PACKAGES = {
     "yamllint": "yamllint",
 }
 WARNING_STATUS = "PASS WITH WARNINGS — NOT VERIFIED"
-ROOT_PLAYBOOKS = ("ludus-configure-bridge.yaml",)
+ROLE_PLAYBOOKS = (
+    Path("ansible/roles/ludus_bridge_promisq/ludus-configure-bridge.yaml"),
+)
 
 
 class InvocationError(ValueError):
@@ -128,8 +130,8 @@ def _discover_all(root: Path) -> tuple[tuple[Path, ...], tuple[Path, ...], tuple
 
     playbooks = [
         path
-        for name in ROOT_PLAYBOOKS
-        if (path := root / name).is_file() and _contained(path, root)
+        for relative_path in ROLE_PLAYBOOKS
+        if (path := root / relative_path).is_file() and _contained(path, root)
     ]
     templates_root = root / "templates"
     if templates_root.is_dir():
@@ -142,7 +144,7 @@ def _discover_all(root: Path) -> tuple[tuple[Path, ...], tuple[Path, ...], tuple
         data.append(source)
     data.extend(_yaml_files(root / "ansible" / "collections", root))
     data.extend(_yaml_files(root / "blueprints", root))
-    known_root = {*ROOT_PLAYBOOKS, "source.yml", ".yamllint.yml", ".yamllint.yaml"}
+    known_root = {"source.yml", ".yamllint.yml", ".yamllint.yaml"}
     root_yaml = sorted((*root.glob("*.yml"), *root.glob("*.yaml")))
     data.extend(
         path
