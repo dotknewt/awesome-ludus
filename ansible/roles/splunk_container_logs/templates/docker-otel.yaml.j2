@@ -1,0 +1,76 @@
+extensions:
+  file_storage/checkpoints:
+    directory: {{ (splunk_container_logs_docker_state_dir ~ '/checkpoints') | to_json }}
+    fsync: true
+  file_storage/exporter_queue:
+    directory: {{ (splunk_container_logs_docker_state_dir ~ '/exporter_queue') | to_json }}
+    timeout: 0
+    max_size: {{ splunk_container_logs_queue_max_disk_mib * 1048576 }}
+    fsync: true
+
+receivers:
+  filelog/docker_json:
+    include: {{ splunk_container_logs_resolved_includes | to_json }}
+    exclude: {{ splunk_container_logs_resolved_excludes | to_json }}
+    start_at: {{ splunk_container_logs_start_at }}
+    storage: file_storage/checkpoints
+    include_file_path: true
+    delete_after_read: false
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+      max_elapsed_time: 0s
+    operators:
+      - id: parse_docker_json
+        type: json_parser
+        parse_from: body
+        parse_to: attributes
+      - id: parse_docker_timestamp
+        type: time_parser
+        parse_from: attributes.time
+        layout_type: gotime
+        layout: "2006-01-02T15:04:05.999999999Z07:00"
+      - id: preserve_docker_source
+        type: move
+        from: attributes["log.file.path"]
+        to: attributes["com.splunk.source"]
+      - id: select_docker_body
+        type: move
+        from: attributes.log
+        to: body
+
+exporters:
+  splunk_hec/logs:
+    endpoint: {{ splunk_container_logs_hec_endpoint | to_json }}
+    token: {{ splunk_container_logs_hec_token | to_json }}
+    index: {{ splunk_container_logs_hec_index | to_json }}
+    sourcetype: docker:json
+    tls:
+      insecure_skip_verify: {{ (not splunk_container_logs_tls_verify) | lower }}
+{% if splunk_container_logs_ca_file | length > 0 %}
+      ca_file: {{ splunk_container_logs_resolved_ca_file | to_json }}
+{% endif %}
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 0s
+    sending_queue:
+      enabled: true
+      storage: file_storage/exporter_queue
+      sizer: requests
+      queue_size: {{ splunk_container_logs_queue_size }}
+      num_consumers: 10
+      block_on_overflow: true
+
+service:
+  extensions:
+    - file_storage/checkpoints
+    - file_storage/exporter_queue
+  pipelines:
+    logs:
+      receivers:
+        - filelog/docker_json
+      exporters:
+        - splunk_hec/logs

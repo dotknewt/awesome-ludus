@@ -1,0 +1,57 @@
+---
+windows_logging_policy_domain: ""
+windows_logging_policy_server: ""
+windows_logging_policy_owner_id: ludus-windows-logging-policy
+windows_logging_policy_management_host: ""
+windows_logging_policy_state_dir: 'C:\ProgramData\Ludus\WindowsLoggingPolicy'
+
+windows_logging_policy_logging_enabled: false
+windows_logging_policy_enrollment_enabled: false
+windows_logging_policy_defender_disable_policy_enabled: false
+
+windows_logging_policy_names:
+  logging: Ludus-Logging
+  enrollment: Ludus-CertEnroll
+  defender: Ludus-DisableDefender
+
+windows_logging_policy_links:
+  logging: []
+  enrollment: []
+  defender: []
+
+windows_logging_policy_audit_subcategories:
+  - {guid: '{0cce9242-69ae-11d9-bed3-505054503030}', success: true, failure: true}
+  - {guid: '{0cce9240-69ae-11d9-bed3-505054503030}', success: true, failure: true}
+  - {guid: '{0cce9236-69ae-11d9-bed3-505054503030}', success: true, failure: true}
+  - {guid: '{0cce9237-69ae-11d9-bed3-505054503030}', success: true, failure: true}
+  - {guid: '{0cce9235-69ae-11d9-bed3-505054503030}', success: true, failure: true}
+  - {guid: '{0cce923e-69ae-11d9-bed3-505054503030}', success: true, failure: true}
+  - {guid: '{0cce923b-69ae-11d9-bed3-505054503030}', success: true, failure: true}
+  - {guid: '{0cce923c-69ae-11d9-bed3-505054503030}', success: true, failure: true}
+  - {guid: '{0cce923d-69ae-11d9-bed3-505054503030}', success: true, failure: true}
+  - {guid: '{0cce9215-69ae-11d9-bed3-505054503030}', success: true, failure: true}
+  - {guid: '{0cce921c-69ae-11d9-bed3-505054503030}', success: true, failure: true}
+  - {guid: '{0cce921b-69ae-11d9-bed3-505054503030}', success: true, failure: true}
+  - {guid: '{0cce9221-69ae-11d9-bed3-505054503030}', success: true, failure: true}
+  - {guid: '{0cce9244-69ae-11d9-bed3-505054503030}', success: true, failure: true}
+  - {guid: '{0cce9227-69ae-11d9-bed3-505054503030}', success: true, failure: true}
+
+windows_logging_policy_powershell:
+  module_logging_enabled: true
+  module_names:
+    - '*'
+  script_block_logging_enabled: true
+  script_block_invocation_logging_enabled: true
+  transcription_enabled: true
+  transcription_invocation_header: true
+  transcription_directory: 'C:\Transcripts'
+
+windows_logging_policy_enrollment:
+  renew_update_revoke: true
+  update_templates: true
+  offline_expiration_percent: 10
+  offline_expiration_store: MY
+
+windows_logging_policy_defender:
+  disable_antispyware: true
+  disable_realtime_monitoring: true

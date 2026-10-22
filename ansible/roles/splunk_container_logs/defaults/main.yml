@@ -1,0 +1,36 @@
+---
+splunk_container_logs_mode: ""
+splunk_container_logs_owner_id: ludus-container-logs
+splunk_container_logs_hec_endpoint: ""
+splunk_container_logs_hec_index: ""
+splunk_container_logs_hec_token: ""
+splunk_container_logs_tls_verify: true
+splunk_container_logs_allow_insecure_http: false
+splunk_container_logs_ca_file: ""
+splunk_container_logs_start_at: end
+
+splunk_container_logs_docker_include: []
+splunk_container_logs_docker_exclude: []
+splunk_container_logs_docker_state_dir: /var/lib/splunk-container-logs
+splunk_container_logs_docker_logging_driver: ""
+
+# The URL may point at a mirror, but vars/artifacts.yml fixes the accepted bytes.
+splunk_container_logs_collector_url: >-
+  https://github.com/signalfx/splunk-otel-collector/releases/download/v0.163.0/splunk-otel-collector_0.163.0_amd64.tar.gz
+splunk_container_logs_chart_url: >-
+  https://github.com/signalfx/splunk-otel-collector-chart/releases/download/splunk-otel-collector-0.163.0/splunk-otel-collector-0.163.0.tgz
+splunk_container_logs_queue_size: 1000
+splunk_container_logs_queue_max_disk_mib: 512
+
+splunk_container_logs_kubeconfig: ""
+splunk_container_logs_kube_context: ""
+splunk_container_logs_k8s_cluster_name: ""
+splunk_container_logs_k8s_namespace: splunk-logs
+splunk_container_logs_k8s_release: splunk-container-logs
+splunk_container_logs_k8s_existing_secret: ""
+splunk_container_logs_k8s_node_selector: {}
+splunk_container_logs_k8s_tolerations: []
+splunk_container_logs_k8s_log_paths:
+  - /var/log/pods
+splunk_container_logs_k8s_checkpoint_path: /var/addon/splunk/otel_pos
+splunk_container_logs_k8s_queue_path: /var/addon/splunk/exporter_queue

@@ -1,0 +1,350 @@
+---
+- name: Run HEC safety and ownership preflight
+  ansible.builtin.import_tasks: hec-preflight.yml
+
+- name: Report HEC check-mode plan boundary
+  ansible.builtin.debug:
+    msg: >-
+      HEC check mode completed read-only preflight; no effective app state,
+      restart, or event is claimed.
+  when:
+    - splunk_server_hec_enabled
+    - ansible_check_mode
+
+- name: Create protected HEC ownership state directory
+  ansible.builtin.file:
+    path: "{{ splunk_server_hec_state_path }}"
+    state: directory
+    owner: "{{ splunk_server_hec_service_user }}"
+    group: "{{ splunk_server_hec_service_group }}"
+    mode: '0700'
+  when:
+    - splunk_server_hec_enabled
+    - not ansible_check_mode
+
+- name: Persist fixed HEC ownership identity
+  ansible.builtin.copy:
+    content: "{{ splunk_server_hec_ownership | to_nice_yaml(indent=2, sort_keys=true) }}"
+    dest: "{{ splunk_server_hec_state_path }}/ownership.yml"
+    owner: "{{ splunk_server_hec_service_user }}"
+    group: "{{ splunk_server_hec_service_group }}"
+    mode: '0600'
+  when:
+    - splunk_server_hec_enabled
+    - not ansible_check_mode
+
+- name: Create protected owned HEC app directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ splunk_server_hec_service_user }}"
+    group: "{{ splunk_server_hec_service_group }}"
+    mode: '0700'
+  loop:
+    - "{{ splunk_server_hec_app_path }}"
+    - "{{ splunk_server_hec_app_path }}/local"
+  when:
+    - splunk_server_hec_enabled
+    - not ansible_check_mode
+
+- name: Persist HEC app ownership marker
+  ansible.builtin.copy:
+    content: "{{ splunk_server_hec_ownership | to_nice_yaml(indent=2, sort_keys=true) }}"
+    dest: "{{ splunk_server_hec_app_path }}/ludus-hec-owner.yml"
+    owner: "{{ splunk_server_hec_service_user }}"
+    group: "{{ splunk_server_hec_service_group }}"
+    mode: '0600'
+  when:
+    - splunk_server_hec_enabled
+    - not ansible_check_mode
+
+- name: Render read-only HEC check-mode plan  # noqa: var-naming[no-role-prefix]
+  ansible.builtin.set_fact:
+    splunk_server_hec_check_inputs_candidate: >-
+      {{ lookup('ansible.builtin.template', 'hec-inputs.conf.j2') }}
+    splunk_server_hec_check_indexes_candidate: >-
+      {{ lookup('ansible.builtin.template', 'hec-indexes.conf.j2') }}
+  no_log: true
+  when:
+    - splunk_server_hec_enabled
+    - ansible_check_mode
+
+- name: Remove stale protected HEC candidates before rendering
+  ansible.builtin.file:
+    path: "{{ splunk_server_hec_state_path }}/candidates"
+    state: absent
+  when:
+    - splunk_server_hec_enabled
+    - not ansible_check_mode
+
+- name: Create protected HEC candidate directory
+  ansible.builtin.file:
+    path: "{{ splunk_server_hec_state_path }}/candidates"
+    state: directory
+    owner: "{{ splunk_server_hec_service_user }}"
+    group: "{{ splunk_server_hec_service_group }}"
+    mode: '0700'
+  when:
+    - splunk_server_hec_enabled
+    - not ansible_check_mode
+
+- name: Render protected HEC inputs candidate
+  ansible.builtin.template:
+    src: hec-inputs.conf.j2
+    dest: "{{ splunk_server_hec_state_path }}/candidates/inputs.conf"
+    owner: "{{ splunk_server_hec_service_user }}"
+    group: "{{ splunk_server_hec_service_group }}"
+    mode: '0600'
+  diff: false
+  no_log: true
+  when:
+    - splunk_server_hec_enabled
+    - not ansible_check_mode
+
+- name: Render protected HEC indexes candidate
+  ansible.builtin.template:
+    src: hec-indexes.conf.j2
+    dest: "{{ splunk_server_hec_state_path }}/candidates/indexes.conf"
+    owner: "{{ splunk_server_hec_service_user }}"
+    group: "{{ splunk_server_hec_service_group }}"
+    mode: '0600'
+  diff: false
+  no_log: true
+  when:
+    - splunk_server_hec_enabled
+    - not ansible_check_mode
+
+- name: Inspect active and candidate HEC configuration
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    checksum_algorithm: sha256
+  loop:
+    - "{{ splunk_server_hec_app_path }}/local/inputs.conf"
+    - "{{ splunk_server_hec_app_path }}/local/indexes.conf"
+    - "{{ splunk_server_hec_state_path }}/candidates/inputs.conf"
+    - "{{ splunk_server_hec_state_path }}/candidates/indexes.conf"
+  register: splunk_server_hec_write_stats  # noqa: var-naming[no-role-prefix]
+  no_log: true
+  when:
+    - splunk_server_hec_enabled
+    - not ansible_check_mode
+
+- name: Require safe active HEC configuration paths
+  ansible.builtin.assert:
+    that:
+      - >-
+        not item.stat.exists or
+        (item.stat.isreg and not item.stat.islnk)
+    fail_msg: An active HEC configuration path is not a regular owned file.
+  loop: "{{ splunk_server_hec_write_stats.results[0:2] }}"
+  loop_control:
+    label: "{{ item.stat.path }}"
+  no_log: true
+  when:
+    - splunk_server_hec_enabled
+    - not ansible_check_mode
+
+- name: Compare protected HEC candidates with active files  # noqa: var-naming[no-role-prefix]
+  ansible.builtin.set_fact:
+    splunk_server_hec_inputs_need_write: >-
+      {{ not splunk_server_hec_write_stats.results[0].stat.exists or
+         splunk_server_hec_write_stats.results[0].stat.checksum !=
+         splunk_server_hec_write_stats.results[2].stat.checksum or
+         splunk_server_hec_write_stats.results[0].stat.mode != '0600' or
+         splunk_server_hec_write_stats.results[0].stat.pw_name !=
+         splunk_server_hec_service_user or
+         splunk_server_hec_write_stats.results[0].stat.gr_name !=
+         splunk_server_hec_service_group }}
+    splunk_server_hec_indexes_need_write: >-
+      {{ not splunk_server_hec_write_stats.results[1].stat.exists or
+         splunk_server_hec_write_stats.results[1].stat.checksum !=
+         splunk_server_hec_write_stats.results[3].stat.checksum or
+         splunk_server_hec_write_stats.results[1].stat.mode != '0600' or
+         splunk_server_hec_write_stats.results[1].stat.pw_name !=
+         splunk_server_hec_service_user or
+         splunk_server_hec_write_stats.results[1].stat.gr_name !=
+         splunk_server_hec_service_group }}
+  no_log: true
+  when:
+    - splunk_server_hec_enabled
+    - not ansible_check_mode
+
+- name: Persist pending restart intent before active HEC replacement
+  ansible.builtin.copy:
+    content: |
+      owner_id: ludus-linux-splunk-hec
+      reason: active-hec-config-replacement
+    dest: "{{ splunk_server_hec_state_path }}/pending-restart.yml"
+    owner: "{{ splunk_server_hec_service_user }}"
+    group: "{{ splunk_server_hec_service_group }}"
+    mode: '0600'
+  no_log: true
+  when:
+    - splunk_server_hec_enabled
+    - not ansible_check_mode
+    - splunk_server_hec_inputs_need_write or splunk_server_hec_indexes_need_write
+
+- name: Replace active HEC inputs from protected candidate
+  ansible.builtin.copy:
+    src: "{{ splunk_server_hec_state_path }}/candidates/inputs.conf"
+    dest: "{{ splunk_server_hec_app_path }}/local/inputs.conf"
+    remote_src: true
+    owner: "{{ splunk_server_hec_service_user }}"
+    group: "{{ splunk_server_hec_service_group }}"
+    mode: '0600'
+  diff: false
+  no_log: true
+  when:
+    - splunk_server_hec_enabled
+    - not ansible_check_mode
+    - splunk_server_hec_inputs_need_write
+
+- name: Replace active HEC indexes from protected candidate
+  ansible.builtin.copy:
+    src: "{{ splunk_server_hec_state_path }}/candidates/indexes.conf"
+    dest: "{{ splunk_server_hec_app_path }}/local/indexes.conf"
+    remote_src: true
+    owner: "{{ splunk_server_hec_service_user }}"
+    group: "{{ splunk_server_hec_service_group }}"
+    mode: '0600'
+  diff: false
+  no_log: true
+  when:
+    - splunk_server_hec_enabled
+    - not ansible_check_mode
+    - splunk_server_hec_indexes_need_write
+
+- name: Read post-write effective HEC input configuration
+  ansible.builtin.command:
+    argv:
+      - "{{ splunk_server_home }}/bin/splunk"
+      - btool
+      - inputs
+      - list
+      - --debug
+  register: splunk_server_hec_effective_inputs  # noqa: var-naming[no-role-prefix]
+  changed_when: false
+  check_mode: false
+  no_log: true
+  when:
+    - splunk_server_hec_enabled
+    - not ansible_check_mode
+
+- name: Read post-write effective HEC index configuration
+  ansible.builtin.command:
+    argv:
+      - "{{ splunk_server_home }}/bin/splunk"
+      - btool
+      - indexes
+      - list
+      - --debug
+  register: splunk_server_hec_effective_indexes  # noqa: var-naming[no-role-prefix]
+  changed_when: false
+  check_mode: false
+  no_log: true
+  when:
+    - splunk_server_hec_enabled
+    - not ansible_check_mode
+
+- name: Parse post-write btool stanza and provenance records  # noqa: var-naming[no-role-prefix]
+  ansible.builtin.set_fact:
+    splunk_server_hec_effective_inputs_parse: >-
+      {{ splunk_server_hec_effective_inputs.stdout | splunk_hec_parse_btool }}
+    splunk_server_hec_effective_indexes_parse: >-
+      {{ splunk_server_hec_effective_indexes.stdout | splunk_hec_parse_btool }}
+  no_log: true
+  when:
+    - splunk_server_hec_enabled
+    - not ansible_check_mode
+
+- name: Correlate every expected HEC setting with stanza and source  # noqa: var-naming[no-role-prefix]
+  ansible.builtin.set_fact:
+    splunk_server_hec_effective_conflicts: >-
+      {{ splunk_server_hec_effective_inputs_parse |
+         splunk_hec_effective_conflicts(
+           splunk_server_hec_effective_indexes_parse,
+           splunk_server_hec_app_path ~ '/local/inputs.conf',
+           splunk_server_hec_app_path ~ '/local/indexes.conf',
+           splunk_server_hec_token_name,
+           splunk_server_hec_token,
+           splunk_server_hec_indexes,
+           splunk_server_hec_default_index,
+           splunk_server_hec_port,
+           splunk_server_hec_ssl_enabled,
+           splunk_server_hec_server_cert) }}
+  no_log: true
+  when:
+    - splunk_server_hec_enabled
+    - not ansible_check_mode
+
+- name: Require exact effective HEC stanza value and provenance contract
+  ansible.builtin.assert:
+    that:
+      - splunk_server_hec_effective_conflicts | length == 0
+    fail_msg: >-
+      Post-write HEC values lack exact stanza/value/source correlation; the
+      protected pending marker and partial owned app remain for review.
+  no_log: true
+  when:
+    - splunk_server_hec_enabled
+    - not ansible_check_mode
+
+- name: Queue HEC restart only after effective checks
+  ansible.builtin.command:
+    argv: ["/bin/true"]
+  changed_when: >-
+    splunk_server_hec_inputs_need_write or
+    splunk_server_hec_indexes_need_write or
+    splunk_server_hec_pending_restart.stat.exists
+  notify: splunk_server_hec_restart
+  when:
+    - splunk_server_hec_enabled
+    - not ansible_check_mode
+
+- name: Apply verified HEC restart before readiness checks
+  ansible.builtin.meta: flush_handlers
+  when:
+    - splunk_server_hec_enabled
+    - not ansible_check_mode
+
+- name: Check Splunk process readiness after HEC convergence
+  ansible.builtin.command:
+    argv:
+      - "{{ splunk_server_home }}/bin/splunk"
+      - status
+      - --run-as-root
+  register: splunk_server_hec_status  # noqa: var-naming[no-role-prefix]
+  changed_when: false
+  check_mode: false
+  when:
+    - splunk_server_hec_enabled
+    - not ansible_check_mode
+
+- name: Check HEC listener TCP readiness
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ splunk_server_hec_port }}"
+    state: started
+    timeout: 60
+  when:
+    - splunk_server_hec_enabled
+    - not ansible_check_mode
+
+- name: Remove resolved protected HEC candidates
+  ansible.builtin.file:
+    path: "{{ splunk_server_hec_state_path }}/candidates"
+    state: absent
+  when:
+    - splunk_server_hec_enabled
+    - not ansible_check_mode
+
+- name: Clear resolved HEC pending restart marker
+  ansible.builtin.file:
+    path: "{{ splunk_server_hec_state_path }}/pending-restart.yml"
+    state: absent
+  when:
+    - splunk_server_hec_enabled
+    - not ansible_check_mode
+
+- name: Run optional authenticated HEC event validation
+  ansible.builtin.import_tasks: hec-validate.yml

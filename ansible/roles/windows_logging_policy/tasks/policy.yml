@@ -1,0 +1,46 @@
+---
+- name: Reconcile readable Windows logging GPOs on the designated host
+  ansible.windows.win_powershell:
+    error_action: stop
+    depth: 3
+    script: |
+      [CmdletBinding(SupportsShouldProcess)]
+      param([hashtable] $Configuration)
+
+      $Ansible.Changed = $false
+      $Ansible.Result = @{}
+
+      {{ lookup('ansible.builtin.file', role_path + '/files/LoggingPolicyState.ps1') }}
+      {{ lookup('ansible.builtin.file', role_path + '/files/Publish-LoggingAudit.ps1') }}
+      {{ lookup('ansible.builtin.file', role_path + '/files/Invoke-LoggingPolicy.ps1') }}
+
+      $progress = New-LoggingPolicyProgress
+      try {
+          $result = Invoke-LoggingPolicy -Configuration $Configuration -PlanOnly $Ansible.CheckMode -Progress $progress
+          $Ansible.Changed = [bool] $result.changed
+          $Ansible.Result = $result
+      }
+      catch {
+          $Ansible.Result = Get-LoggingPolicyFailureResult -Progress $progress -Failure $_
+          $Ansible.Changed = [bool] $Ansible.Result.changed
+          $Ansible.Failed = $true
+          throw
+      }
+    parameters:
+      Configuration:
+        domain: "{{ windows_logging_policy_domain }}"
+        server: "{{ windows_logging_policy_server }}"
+        owner_id: "{{ windows_logging_policy_owner_id }}"
+        management_host: "{{ windows_logging_policy_management_host }}"
+        state_dir: "{{ windows_logging_policy_state_dir }}"
+        logging_enabled: "{{ windows_logging_policy_logging_enabled }}"
+        enrollment_enabled: "{{ windows_logging_policy_enrollment_enabled }}"
+        defender_disable_policy_enabled: "{{ windows_logging_policy_defender_disable_policy_enabled }}"
+        names: "{{ windows_logging_policy_names }}"
+        links: "{{ windows_logging_policy_links }}"
+        audit_subcategories: "{{ windows_logging_policy_audit_subcategories }}"
+        powershell: "{{ windows_logging_policy_powershell }}"
+        enrollment: "{{ windows_logging_policy_enrollment }}"
+        defender: "{{ windows_logging_policy_defender }}"
+        execution_inventory_host: "{{ inventory_hostname }}"
+        desired_audit_csv: "{{ lookup('template', role_path + '/templates/audit.csv.j2') }}"

@@ -1,0 +1,15 @@
+---
+- name: Load reviewed container collector artifact contract
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/vars/artifacts.yml"
+
+- name: Validate shared collector inputs
+  ansible.builtin.include_tasks: preflight.yml
+
+- name: Configure Docker json-file collection
+  ansible.builtin.include_tasks: docker.yml
+  when: splunk_container_logs_mode == 'docker'
+
+- name: Configure Kubernetes container log collection
+  ansible.builtin.include_tasks: kubernetes.yml
+  when: splunk_container_logs_mode == 'kubernetes'

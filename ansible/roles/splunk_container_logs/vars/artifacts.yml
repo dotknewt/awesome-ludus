@@ -1,0 +1,375 @@
+---
+# Internal, immutable candidate set for the C1 acceptance gate. Caller-facing
+# defaults belong in defaults/main.yml (C3/C4), never in this high-precedence
+# role-vars file. Consume this set only after controller/reviewer/oracle approval.
+splunk_container_logs_artifacts:
+  review_status: proposed_for_acceptance
+  v1_input_policy:
+    collector_release: >-
+      version 0.163.0 and its archive SHA-256 are fixed to this reviewed
+      manifest; only the download URL may name a mirror whose bytes match that
+      SHA-256
+    chart_release: >-
+      version 0.163.0 and its package SHA-256 are fixed to this reviewed
+      manifest; only the download URL may name a mirror whose bytes match that
+      SHA-256
+    collector_image: >-
+      repository and Linux/amd64 manifest digest are fixed to this reviewed
+      manifest
+    new_release: >-
+      requires a complete update and review of this internal manifest; runtime
+      version, checksum, image, layout, capability, dependency, or merge-strategy
+      substitution is unsupported
+    queue_limits: normal caller inputs independent of artifact identity
+  collector:
+    version: "0.163.0"
+    artifact_type: "script-free release tar archive"
+    url: >-
+      https://github.com/signalfx/splunk-otel-collector/releases/download/v0.163.0/splunk-otel-collector_0.163.0_amd64.tar.gz
+    sha256: "sha256:bb44c773423c88392c7e27d309c43bfae937ce1b3b0b81831dbc07149a28ca49"
+    source:
+      repository: "https://github.com/signalfx/splunk-otel-collector"
+      ref: "0a7df0e76f57c5b849b296619948f30e7e06594d"
+      license: "Apache-2.0"
+    platforms:
+      architecture: amd64
+      binary_format: "ELF 64-bit x86-64, statically linked"
+      init_system: systemd
+      operating_systems:
+        - Debian 12
+        - Ubuntu 22.04
+        - Ubuntu 24.04
+    dependencies:
+      runtime_shared_libraries: []
+      role_platform_prerequisites:
+        - systemd
+        - pre-existing readable Docker json-file logs
+    components:
+      receiver_factories:
+        - filelog
+      exporter_factories:
+        - splunk_hec
+      extension_factories:
+        - file_storage
+    stanza_operators:
+      - json_parser
+      - time_parser
+      - move
+    capabilities:
+      - persistent file offsets through filelog storage
+      - Docker JSON envelope and RFC3339 timestamp parsing
+      - Splunk Platform HEC logs export with TLS
+      - persistent exporter queue backed by file_storage
+      - per-database byte limit through file_storage max_size
+    install_contract:
+      archive_root: "splunk-otel-collector"
+      selected_entry: "./splunk-otel-collector/bin/otelcol"
+      selected_entry_normalized: "splunk-otel-collector/bin/otelcol"
+      entry_size_bytes: 449040714
+      entry_sha256: "sha256:bfd3de154091ff3449e7d9a346b8ad1f7795dcb0ce5bd366e10d1f704fc3cb4f"
+      install_root: "/opt/splunk-container-logs/collector/0.163.0"
+      installed_entrypoint: "/opt/splunk-container-logs/collector/0.163.0/bin/otelcol"
+      config_path: "/etc/splunk-container-logs/collector.yaml"
+      systemd_exec_start: >-
+        /opt/splunk-container-logs/collector/0.163.0/bin/otelcol
+        --config=/etc/splunk-container-logs/collector.yaml
+      service_identity: root
+      excluded_archive_entries:
+        - "splunk-otel-collector/bin/otelcollauncher"
+        - "splunk-otel-collector/bin/opampsupervisor"
+        - "splunk-otel-collector/config/agent_config.yaml"
+        - "splunk-otel-collector/config/gateway_config.yaml"
+    rejected_debian_package:
+      url: >-
+        https://github.com/signalfx/splunk-otel-collector/releases/download/v0.163.0/splunk-otel-collector_0.163.0_amd64.deb
+      sha256: "sha256:8747774565f130e9c0a73366cda117e401357fff45eeb8fba5fa4d1c2f89a164"
+      size_bytes: 183629366
+      architecture: amd64
+      dependency: libcap2-bin
+      vendor_service: "/lib/systemd/system/splunk-otel-collector.service"
+      vendor_entrypoint: "/usr/bin/otelcollauncher $OTELCOL_OPTIONS"
+      rejection: >-
+        maintainer scripts stop/disable and later enable or conditionally
+        restart the vendor service, set executable capabilities, and recursively
+        change ownership before role-owned configuration validation
+  chart:
+    version: "0.163.0"
+    url: >-
+      https://github.com/signalfx/splunk-otel-collector-chart/releases/download/splunk-otel-collector-0.163.0/splunk-otel-collector-0.163.0.tgz
+    sha256: "sha256:8f7a64a2c10583932c82dcb2f761c2daef748d4b29fb7440092df144a4b0f9d9"
+    source:
+      repository: "https://github.com/signalfx/splunk-otel-collector-chart"
+      ref: "619445cd7da7515d64002ecec36b38bc70d9e7c4"
+      license: "Apache-2.0"
+    platforms:
+      operating_system: linux
+      architecture: amd64
+      kubernetes: >-
+        actual cluster server version must be actively supported upstream and
+        supplied to the pending Helm render gate
+    capabilities:
+      - container file logs from /var/log/pods
+      - existing Secret token and CA mounts
+      - persistent checkpoint and exporter queue hostPath mounts
+      - agent.config deep override through mustMergeOverwrite
+    bundled_dependencies:
+      lock_digest: "sha256:5ef1112e1d0e8545d5c5982565bd4ae35a052852d3d3bf7311bd9ce9d24e6432"
+      disabled:
+        - name: opentelemetry-operator-crds
+          alias: operatorcrds
+          version: "0.0.8"
+          source_repository: "https://github.com/open-telemetry/opentelemetry-operator"
+          license: "Apache-2.0"
+          condition: "operatorcrds.install=false"
+        - name: opentelemetry-operator
+          alias: operator
+          version: "0.126.0"
+          repository: "https://open-telemetry.github.io/opentelemetry-helm-charts"
+          source_repository: "https://github.com/open-telemetry/opentelemetry-operator"
+          license: "Apache-2.0"
+          condition: "operator.enabled=false"
+        - name: opentelemetry-ebpf-instrumentation
+          alias: obi
+          version: "0.14.3"
+          repository: "https://open-telemetry.github.io/opentelemetry-helm-charts"
+          source_repository: "https://github.com/open-telemetry/opentelemetry-ebpf-instrumentation"
+          license: "Apache-2.0"
+          condition: "obi.enabled=false"
+        - name: opentelemetry-target-allocator
+          alias: targetallocator
+          version: "0.161.1"
+          repository: "https://open-telemetry.github.io/opentelemetry-helm-charts"
+          source_repository: "https://github.com/open-telemetry/opentelemetry-operator"
+          license: "Apache-2.0"
+          condition: "targetallocator.enabled=false"
+    images:
+      collector:
+        repository: "quay.io/signalfx/splunk-otel-collector"
+        tag_resolved: "0.163.0"
+        index_digest: "sha256:e1192a0ef85a6094b939b873dbad099f5f926feae402f4ce949e435c3e5cc5a9"
+        index_media_type: "application/vnd.oci.image.index.v1+json"
+        digest: "sha256:e9f0b6afea725b5b6e2a516db64399d37437c09cbe1dac6a5ab0697d8f93a668"
+        media_type: "application/vnd.oci.image.manifest.v1+json"
+        platform: "linux/amd64"
+        source_repository: "https://github.com/signalfx/splunk-otel-collector"
+        source_ref: "0a7df0e76f57c5b849b296619948f30e7e06594d"
+        license: "Apache-2.0"
+      # These untagged UBI defaults are intentionally disabled, not pinned.
+      disabled_helpers:
+        initPatchLogDirs: "agent.skipInitContainers=true"
+        validateSecret: "secret.validateSecret=false"
+    required_logs_only_values:
+      image:
+        otelcol:
+          repository: "quay.io/signalfx/splunk-otel-collector@sha256"
+          tag: "e9f0b6afea725b5b6e2a516db64399d37437c09cbe1dac6a5ab0697d8f93a668"
+      splunkPlatform:
+        logsEnabled: true
+        metricsEnabled: false
+        tracesEnabled: false
+        fsyncEnabled: true
+      splunkObservability:
+        realm: ""
+        accessToken: ""
+        metricsEnabled: false
+        tracesEnabled: false
+        profilingEnabled: false
+        secureAppEnabled: false
+      agent:
+        enabled: true
+        service:
+          enabled: false
+        hostNetwork: false
+        ports:
+          otlp: null
+          otlp-http: null
+          zipkin: null
+          jaeger-thrift: null
+          jaeger-grpc: null
+          opampforwarder: null
+        skipInitContainers: true
+        discovery:
+          enabled: false
+      clusterReceiver:
+        enabled: false
+      gateway:
+        enabled: false
+      operatorcrds:
+        install: false
+      operator:
+        enabled: false
+      instrumentation:
+        enabled: false
+      obi:
+        enabled: false
+      targetallocator:
+        enabled: false
+      remoteManagement:
+        enabled: false
+      logsCollection:
+        containers:
+          enabled: true
+        journald:
+          enabled: false
+      logsToMetrics:
+        enabled: false
+      secret:
+        create: false
+        validateSecret: false
+  tooling:
+    helm:
+      version: "3.20.0"
+      url: "https://get.helm.sh/helm-v3.20.0-linux-amd64.tar.gz"
+      sha256: "sha256:dbb4c8fc8e19d159d1a63dda8db655f9ffa4aac1b9a6b188b34a40957119b286"
+      source:
+        repository: "https://github.com/helm/helm"
+        ref: "b2e4314fa0f229a1de7b4c981273f61d69ee5a59"
+        license: "Apache-2.0"
+      platform: "linux/amd64"
+      capability: "local chart schema validation and rendering"
+      dependency: "not installed; pending external validation gate"
+    helm_diff:
+      version: "3.15.15"
+      url: >-
+        https://github.com/databus23/helm-diff/releases/download/v3.15.15/helm-diff-linux-amd64.tgz
+      sha256: "sha256:504e99410611daa70702362e1b10dc74929df8a912cb3f6b5d21d1ee9d0cb7d9"
+      source:
+        repository: "https://github.com/databus23/helm-diff"
+        ref: "63945947a87e026f2f0a985319fe29b781ae0a35"
+        license: "Apache-2.0"
+      platform: "linux/amd64"
+      capability: "upgrade diff with opt-in three-way merge"
+      dependency: "Helm 3.20.0; not installed"
+    kubernetes_core:
+      version: "6.6.0"
+      source:
+        repository: "https://github.com/ansible-collections/kubernetes.core"
+        ref: "e91b3171ea9bb55f2fc0c3fc7ab06fb571f05ddc"
+        license: "GPL-3.0-or-later"
+      platform: "Ansible controller with ansible-core 2.21.5"
+      capability: "local chart reference, explicit context, values and wait"
+      dependencies:
+        - "Helm >= 3.0.0"
+        - PyYAML
+  queue:
+    size: 1000
+    size_unit: requests
+    max_disk_mib: 512
+    max_size_bytes: 536870912
+    implementation: >-
+      exporterhelper persistent sending_queue backed by a dedicated
+      file_storage extension whose single exporter database has max_size set
+    docker:
+      receiver_id: "filelog/docker_json"
+      checkpoint_storage_id: "file_storage/checkpoints"
+      exporter_id: "splunk_hec/logs"
+      exporter_storage_id: "file_storage/exporter_queue"
+      exporter_storage_directory: "/var/lib/splunk-container-logs/exporter_queue"
+      sending_queue:
+        enabled: true
+        storage: "file_storage/exporter_queue"
+        sizer: requests
+        queue_size: 1000
+        num_consumers: 10
+        block_on_overflow: true
+      retry_on_failure:
+        enabled: true
+        initial_interval: 5s
+        max_interval: 30s
+        max_elapsed_time: 0s
+      storage:
+        timeout: 0
+        max_size: 536870912
+        fsync: true
+    kubernetes:
+      receiver_id: file_log
+      checkpoint_storage_id: file_storage
+      exporter_id: "splunk_hec/platform_logs"
+      exporter_storage_id: "file_storage/persistent_queue"
+      exporter_storage_directory: "/var/addon/splunk/exporter_queue/agent"
+      chart_values_override:
+        featureGates:
+          noDropLogsPipeline: false
+        splunkPlatform:
+          retryOnFailure:
+            enabled: true
+            initialInterval: 5s
+            maxInterval: 30s
+            maxElapsedTime: 0s
+          sendingQueue:
+            enabled: true
+            numConsumers: 10
+            queueSize: 1000
+            persistentQueue:
+              enabled: true
+              storagePath: "/var/addon/splunk/exporter_queue"
+        agent:
+          config:
+            extensions:
+              file_storage/persistent_queue:
+                directory: "/var/addon/splunk/exporter_queue/agent"
+                timeout: 0
+                max_size: 536870912
+                fsync: true
+                compaction:
+                  on_rebound: true
+                  rebound_needed_threshold_mib: 200
+                  rebound_trigger_threshold_mib: 100
+                  directory: "/var/addon/splunk/exporter_queue/agent"
+                  cleanup_on_start: true
+            receivers:
+              file_log:
+                start_at: end
+                retry_on_failure:
+                  enabled: true
+                  initial_interval: 1s
+                  max_interval: 30s
+                  max_elapsed_time: 0s
+            exporters:
+              splunk_hec/platform_logs:
+                retry_on_failure:
+                  enabled: true
+                  initial_interval: 5s
+                  max_interval: 30s
+                  max_elapsed_time: 0s
+                sending_queue:
+                  enabled: true
+                  storage: "file_storage/persistent_queue"
+                  sizer: requests
+                  queue_size: 1000
+                  num_consumers: 10
+                  block_on_overflow: true
+            service:
+              pipelines:
+                logs:
+                  receivers:
+                    - file_log
+  sources:
+    - artifact: collector_archive_and_image
+      url: "https://github.com/signalfx/splunk-otel-collector"
+      ref: "0a7df0e76f57c5b849b296619948f30e7e06594d"
+      license: "Apache-2.0"
+    - artifact: collector_chart
+      url: "https://github.com/signalfx/splunk-otel-collector-chart"
+      ref: "619445cd7da7515d64002ecec36b38bc70d9e7c4"
+      license: "Apache-2.0"
+    - artifact: collector_components_and_operators
+      url: "https://github.com/open-telemetry/opentelemetry-collector-contrib"
+      ref: "df849b5403c041d5e799e7846392a6f18b0b55ae"
+      license: "Apache-2.0"
+    - artifact: exporter_queue_helper
+      url: "https://github.com/open-telemetry/opentelemetry-collector"
+      ref: "5177a6a85ca3783068077e25aec6cebbe1d50d1f"
+      license: "Apache-2.0"
+    - artifact: helm
+      url: "https://github.com/helm/helm"
+      ref: "b2e4314fa0f229a1de7b4c981273f61d69ee5a59"
+      license: "Apache-2.0"
+    - artifact: helm_diff
+      url: "https://github.com/databus23/helm-diff"
+      ref: "63945947a87e026f2f0a985319fe29b781ae0a35"
+      license: "Apache-2.0"
+    - artifact: kubernetes_core
+      url: "https://github.com/ansible-collections/kubernetes.core"
+      ref: "e91b3171ea9bb55f2fc0c3fc7ab06fb571f05ddc"
+      license: "GPL-3.0-or-later"

@@ -1,0 +1,785 @@
+---
+- name: Validate the bounded Docker host and source contract
+  ansible.builtin.assert:
+    that:
+      - ansible_architecture in ['x86_64', 'amd64']
+      - ansible_service_mgr == 'systemd'
+      - (ansible_distribution == 'Debian' and ansible_distribution_major_version == '12') or
+        (ansible_distribution == 'Ubuntu' and ansible_distribution_major_version in ['22', '24'])
+      - splunk_container_logs_docker_logging_driver == 'json-file'
+      - splunk_container_logs_docker_include is sequence
+      - splunk_container_logs_docker_include is not string
+      - splunk_container_logs_docker_include | length > 0
+      - splunk_container_logs_docker_exclude is sequence
+      - splunk_container_logs_docker_exclude is not string
+      - splunk_container_logs_docker_state_dir.startswith('/')
+      - splunk_container_logs_docker_include | length ==
+        splunk_container_logs_docker_include | unique | length
+      - splunk_container_logs_docker_exclude | length ==
+        splunk_container_logs_docker_exclude | unique | length
+    fail_msg: >-
+      Docker mode supports Debian 12 or Ubuntu 22.04/24.04 on amd64/systemd,
+      requires operator-confirmed json-file, and requires unique include paths.
+
+- name: Normalize the dedicated writable state path before any write
+  ansible.builtin.set_fact:
+    splunk_container_logs_normalized_state_dir: >-
+      {{ splunk_container_logs_docker_state_dir | splunk_container_normalize_path }}
+    splunk_container_logs_state_ancestors: >-
+      {{ splunk_container_logs_docker_state_dir | splunk_container_path_ancestors }}
+
+- name: Require a normalized dedicated state subtree
+  ansible.builtin.assert:
+    that:
+      - splunk_container_logs_docker_state_dir == splunk_container_logs_normalized_state_dir
+      - splunk_container_logs_docker_state_dir | splunk_container_dedicated_state_path
+    fail_msg: >-
+      docker_state_dir must be normalized without dot segments or a trailing
+      slash and must be a dedicated subtree of /var/lib, /srv, /mnt, or /opt.
+
+- name: Inspect every lexical state path ancestor without following links
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop: "{{ splunk_container_logs_state_ancestors }}"
+  register: splunk_container_logs_state_ancestor_statuses
+
+- name: Reject symlinked state ancestors before any write
+  ansible.builtin.assert:
+    that:
+      - splunk_container_logs_state_ancestor_statuses.results |
+        selectattr('stat.islnk', 'defined') | selectattr('stat.islnk') |
+        list | length == 0
+      - splunk_container_logs_state_ancestor_statuses.results |
+        selectattr('stat.exists') | rejectattr('stat.isdir') | list | length == 0
+    fail_msg: docker_state_dir has a symlinked or non-directory existing ancestor
+
+- name: Record the nearest existing state ancestor
+  ansible.builtin.set_fact:
+    splunk_container_logs_nearest_state_ancestor: >-
+      {{ splunk_container_logs_state_ancestor_statuses.results |
+         selectattr('stat.exists') | map(attribute='item') | list | last }}
+
+- name: Resolve the nearest existing state ancestor read-only
+  ansible.builtin.command:
+    argv:
+      - readlink
+      - -f
+      - --
+      - "{{ splunk_container_logs_nearest_state_ancestor }}"
+  register: splunk_container_logs_nearest_state_realpath
+  changed_when: false
+  check_mode: false
+
+- name: Require stable nearest-ancestor resolution
+  ansible.builtin.assert:
+    that:
+      - splunk_container_logs_nearest_state_realpath.stdout ==
+        splunk_container_logs_nearest_state_ancestor
+    fail_msg: nearest docker_state_dir ancestor resolves outside its lexical path
+
+- name: Inspect explicit Docker json-file source paths
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: true
+  loop: "{{ splunk_container_logs_docker_include + splunk_container_logs_docker_exclude }}"
+  register: splunk_container_logs_source_statuses
+
+- name: Require existing readable regular Docker json-file sources
+  ansible.builtin.assert:
+    that:
+      - item.item.startswith('/')
+      - item.item.endswith('-json.log')
+      - item.stat.exists
+      - item.stat.isreg
+      - item.stat.readable | default(false)
+    fail_msg: >-
+      Every Docker include/exclude must be an absolute, readable, regular
+      *-json.log path; glob and rootless layouts are unsupported in C3.
+  loop: "{{ splunk_container_logs_source_statuses.results }}"
+
+- name: Resolve Docker json-file source paths with realpath
+  ansible.builtin.command:
+    argv:
+      - readlink
+      - -f
+      - --
+      - "{{ item }}"
+  loop: "{{ splunk_container_logs_docker_include + splunk_container_logs_docker_exclude }}"
+  register: splunk_container_logs_realpath_results
+  changed_when: false
+  check_mode: false
+
+- name: Record resolved Docker json-file source paths
+  ansible.builtin.set_fact:
+    splunk_container_logs_resolved_sources: >-
+      {{ splunk_container_logs_realpath_results.results
+         | map(attribute='stdout') | list }}
+    splunk_container_logs_resolved_includes: >-
+      {{ (splunk_container_logs_realpath_results.results
+          | map(attribute='stdout') | list)[:splunk_container_logs_docker_include | length] }}
+    splunk_container_logs_resolved_excludes: >-
+      {{ (splunk_container_logs_realpath_results.results
+          | map(attribute='stdout') | list)[splunk_container_logs_docker_include | length:] }}
+
+- name: Reject duplicate resolved Docker source ownership
+  ansible.builtin.assert:
+    that:
+      - splunk_container_logs_resolved_sources | length > 0
+      - splunk_container_logs_resolved_sources | unique | length == splunk_container_logs_resolved_sources | length
+    fail_msg: duplicate realpath source or include/exclude overlap is unsupported
+
+- name: Resolve an optional collector CA path read-only
+  ansible.builtin.command:
+    argv:
+      - readlink
+      - -f
+      - --
+      - "{{ splunk_container_logs_ca_file }}"
+  register: splunk_container_logs_ca_realpath
+  changed_when: false
+  check_mode: false
+  when: splunk_container_logs_ca_file | length > 0
+
+- name: Record the sandbox-visible collector CA path
+  ansible.builtin.set_fact:
+    splunk_container_logs_resolved_ca_file: >-
+      {{ splunk_container_logs_ca_realpath.stdout
+         if splunk_container_logs_ca_file | length > 0 else '' }}
+
+- name: Reject state overlap with sources and owned fixed roots
+  ansible.builtin.assert:
+    that:
+      - not (splunk_container_logs_normalized_state_dir |
+        splunk_container_paths_overlap(item))
+    fail_msg: docker_state_dir overlaps a source, CA, config, install, or cache path
+  loop: >-
+    {{ splunk_container_logs_resolved_sources +
+       ([splunk_container_logs_resolved_ca_file]
+        if splunk_container_logs_resolved_ca_file | length > 0 else []) +
+       ['/etc/splunk-container-logs', '/opt/splunk-container-logs',
+        '/var/cache/splunk-container-logs'] }}
+
+- name: Require source and CA paths visible inside the service sandbox
+  ansible.builtin.assert:
+    that:
+      - item | splunk_container_sandbox_accessible
+    fail_msg: resolved source or CA path is hidden by the service sandbox
+  loop: >-
+    {{ splunk_container_logs_resolved_sources +
+       ([splunk_container_logs_resolved_ca_file]
+        if splunk_container_logs_resolved_ca_file | length > 0 else []) }}
+
+- name: Read one representative Docker JSON envelope from each include
+  ansible.builtin.command:
+    argv:
+      - head
+      - -n
+      - "1"
+      - --
+      - "{{ item }}"
+  loop: "{{ splunk_container_logs_docker_include }}"
+  register: splunk_container_logs_json_samples
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Require the log stream time Docker JSON envelope
+  ansible.builtin.assert:
+    that:
+      - (item.stdout | from_json) is mapping
+      - "'log' in (item.stdout | from_json)"
+      - "'stream' in (item.stdout | from_json)"
+      - "'time' in (item.stdout | from_json)"
+      - (item.stdout | from_json).log is string
+      - (item.stdout | from_json).stream is string
+      - (item.stdout | from_json).stream in ['stdout', 'stderr']
+      - (item.stdout | from_json).time is string
+      - (item.stdout | from_json).time is
+        match('^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$')
+      - item.stdout | from_json | splunk_container_docker_envelope_valid
+    fail_msg: source does not contain the required Docker json-file log/stream/time envelope
+  loop: "{{ splunk_container_logs_json_samples.results }}"
+  no_log: true
+
+- name: Inventory installed packages without changing them
+  ansible.builtin.package_facts:
+    manager: auto
+
+- name: Inventory services without changing them
+  ansible.builtin.service_facts:
+
+- name: Inspect the protected ownership record before service provenance checks
+  ansible.builtin.stat:
+    path: /etc/splunk-container-logs/ownership.yml
+    follow: false
+  register: splunk_container_logs_owner_status
+
+# `systemctl show` is the documented computer-readable manager interface.
+- name: Read the effective system manager unit search path  # noqa command-instead-of-module
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - show
+      - --property=UnitPath
+      - --value
+  register: splunk_container_logs_manager_unit_path
+  changed_when: false
+  check_mode: false
+
+- name: Record effective unit and drop-in candidates
+  ansible.builtin.set_fact:
+    splunk_container_logs_unit_search_paths: "{{ splunk_container_logs_manager_unit_path.stdout.split() }}"
+    splunk_container_logs_dropin_names:
+      - splunk-container-logs.service.d
+      - splunk-container-.service.d
+      - splunk-.service.d
+      - service.d
+
+- name: Require a usable unique effective manager search path
+  ansible.builtin.assert:
+    that:
+      - splunk_container_logs_unit_search_paths | length > 0
+      - splunk_container_logs_unit_search_paths | unique | length ==
+        splunk_container_logs_unit_search_paths | length
+      - "'/etc/systemd/system' in splunk_container_logs_unit_search_paths"
+      - splunk_container_logs_unit_search_paths |
+        select('match', '^/') | list | length ==
+        splunk_container_logs_unit_search_paths | length
+    fail_msg: systemd manager UnitPath is empty, relative, or ambiguous
+
+- name: Build effective same-name unit and applicable drop-in paths
+  ansible.builtin.set_fact:
+    splunk_container_logs_unit_candidates: >-
+      {{ splunk_container_logs_unit_search_paths |
+         map('regex_replace', '$', '/splunk-container-logs.service') | list }}
+    splunk_container_logs_dropin_candidates: >-
+      {{ splunk_container_logs_unit_search_paths |
+         product(splunk_container_logs_dropin_names) |
+         map('join', '/') | list }}
+
+- name: Inspect every effective same-name unit candidate
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop: "{{ splunk_container_logs_unit_candidates }}"
+  register: splunk_container_logs_same_name_units
+
+- name: Inspect all applicable name prefix and type-wide drop-ins
+  ansible.builtin.find:
+    paths: "{{ splunk_container_logs_dropin_candidates }}"
+    patterns: "*.conf"
+    file_type: any
+    recurse: false
+    hidden: true
+  register: splunk_container_logs_dropin_files
+
+- name: Inspect service aliases in every effective unit search path
+  ansible.builtin.find:
+    paths: "{{ splunk_container_logs_unit_search_paths }}"
+    patterns: "*.service"
+    file_type: link
+    recurse: false
+    hidden: true
+  register: splunk_container_logs_service_aliases
+
+- name: Resolve discovered service aliases without changing them
+  ansible.builtin.command:
+    argv:
+      - readlink
+      - -f
+      - --
+      - "{{ item.path }}"
+  loop: "{{ splunk_container_logs_service_aliases.files }}"
+  register: splunk_container_logs_resolved_service_aliases
+  changed_when: false
+  check_mode: false
+
+# These documented unit properties expose winning, merged, alias, and transient state.
+- name: Read same-name systemd provenance properties  # noqa command-instead-of-module
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - show
+      - "--property={{ item }}"
+      - --value
+      - splunk-container-logs.service
+  loop:
+    - LoadState
+    - FragmentPath
+    - DropInPaths
+    - Names
+    - Transient
+  register: splunk_container_logs_unit_properties
+  changed_when: false
+  check_mode: false
+
+- name: Record same-name systemd provenance properties
+  ansible.builtin.set_fact:
+    splunk_container_logs_unit_load_state: "{{ splunk_container_logs_unit_properties.results[0].stdout }}"
+    splunk_container_logs_unit_fragment_path: "{{ splunk_container_logs_unit_properties.results[1].stdout }}"
+    splunk_container_logs_unit_dropin_paths: "{{ splunk_container_logs_unit_properties.results[2].stdout.split() }}"
+    splunk_container_logs_unit_names: "{{ splunk_container_logs_unit_properties.results[3].stdout.split() }}"
+    splunk_container_logs_unit_transient: "{{ splunk_container_logs_unit_properties.results[4].stdout }}"
+
+- name: Reject unmanaged direct or chained aliases targeting the owned service name
+  ansible.builtin.assert:
+    that:
+      - item.stdout not in splunk_container_logs_unit_candidates
+    fail_msg: unmanaged service alias targets splunk-container-logs.service
+  loop: "{{ splunk_container_logs_resolved_service_aliases.results }}"
+
+- name: Reject external same-name unit and drop-in provenance
+  ansible.builtin.assert:
+    that:
+      - splunk_container_logs_unit_dropin_paths | length == 0
+      - splunk_container_logs_dropin_files.matched == 0
+      - splunk_container_logs_unit_names == ['splunk-container-logs.service']
+      - splunk_container_logs_unit_transient == 'no'
+      - splunk_container_logs_owner_status.stat.exists or
+        'splunk-container-logs.service' not in ansible_facts.services
+      - splunk_container_logs_owner_status.stat.exists or
+        splunk_container_logs_unit_load_state == 'not-found'
+      - splunk_container_logs_owner_status.stat.exists or
+        splunk_container_logs_same_name_units.results |
+        selectattr('stat.exists') | list | length == 0
+      - not splunk_container_logs_owner_status.stat.exists or
+        splunk_container_logs_unit_load_state in ['not-found', 'loaded']
+      - not splunk_container_logs_owner_status.stat.exists or
+        splunk_container_logs_unit_load_state == 'not-found' or
+        splunk_container_logs_unit_fragment_path ==
+        '/etc/systemd/system/splunk-container-logs.service'
+      - not splunk_container_logs_owner_status.stat.exists or
+        (splunk_container_logs_same_name_units.results |
+         selectattr('stat.exists') | map(attribute='item') | list |
+         difference(['/etc/systemd/system/splunk-container-logs.service']) |
+         length == 0)
+    fail_msg: >-
+      Unmanaged same-name alias, shadowed/generated/transient unit, or applicable
+      name-specific, dash-prefix, or type-wide drop-in conflicts with ownership.
+
+- name: Inspect known competing collector configuration paths
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - /etc/otel/collector
+    - /etc/splunk-otel-collector
+    - /etc/systemd/system/splunk-otel-collector.service
+    - /lib/systemd/system/splunk-otel-collector.service
+  register: splunk_container_logs_competing_paths
+
+- name: Reject locally observable competing collector ownership
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.packages.get('splunk-otel-collector', []) | length == 0
+      - "'splunk-otel-collector.service' not in ansible_facts.services"
+      - splunk_container_logs_competing_paths.results | selectattr('stat.exists') | list | length == 0
+    fail_msg: >-
+      A known package, service, or readable configuration already owns a
+      competing collector; C3 does not adopt or replace it.
+
+- name: Define fixed reviewed collector paths and identity
+  ansible.builtin.set_fact:
+    splunk_container_logs_install_root: "{{ splunk_container_logs_artifacts.collector.install_contract.install_root }}"
+    splunk_container_logs_binary: "{{ splunk_container_logs_artifacts.collector.install_contract.installed_entrypoint }}"
+    splunk_container_logs_config_dir: /etc/splunk-container-logs
+    splunk_container_logs_config_path: /etc/splunk-container-logs/collector.yaml
+    splunk_container_logs_unit_path: /etc/systemd/system/splunk-container-logs.service
+    splunk_container_logs_owner_path: /etc/splunk-container-logs/ownership.yml
+    splunk_container_logs_pending_path: /etc/splunk-container-logs/pending.yml
+
+- name: Inspect unresolved collector activation state
+  ansible.builtin.stat:
+    path: "{{ splunk_container_logs_pending_path }}"
+  register: splunk_container_logs_pending_status
+
+- name: Reject unresolved collector activation before ordinary convergence
+  ansible.builtin.assert:
+    that:
+      - not splunk_container_logs_pending_status.stat.exists
+    fail_msg: >-
+      An unresolved pending collector activation exists. Inspect active config,
+      unit, service, and protected ownership before scoped operator recovery.
+
+- name: Inspect fixed owned destinations for unmanaged collisions
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    checksum_algorithm: sha256
+  loop:
+    - "{{ splunk_container_logs_binary }}"
+    - "{{ splunk_container_logs_config_path }}"
+    - "{{ splunk_container_logs_unit_path }}"
+    - "{{ splunk_container_logs_docker_state_dir }}"
+    - "{{ splunk_container_logs_install_root }}"
+    - "{{ splunk_container_logs_config_dir }}"
+    - /var/cache/splunk-container-logs
+  register: splunk_container_logs_owned_destination_statuses
+
+- name: Reject unmanaged objects at owned destinations
+  ansible.builtin.assert:
+    that:
+      - splunk_container_logs_owner_status.stat.exists or
+        (splunk_container_logs_owned_destination_statuses.results |
+         selectattr('stat.exists') | list | length == 0)
+    fail_msg: unmanaged collector service/config/binary/state collision at an owned destination
+
+- name: Reject drifted managed executable before mutation
+  ansible.builtin.assert:
+    that:
+      - splunk_container_logs_owned_destination_statuses.results[0].stat.isreg
+      - splunk_container_logs_owned_destination_statuses.results[0].stat.size ==
+        splunk_container_logs_artifacts.collector.install_contract.entry_size_bytes
+      - splunk_container_logs_owned_destination_statuses.results[0].stat.checksum ==
+        (splunk_container_logs_artifacts.collector.install_contract.entry_sha256 |
+         regex_replace('^sha256:', ''))
+    fail_msg: managed collector executable identity changed
+  when:
+    - splunk_container_logs_owner_status.stat.exists
+    - splunk_container_logs_owned_destination_statuses.results[0].stat.exists
+
+- name: Reject unsafe managed config or unit before mutation
+  ansible.builtin.assert:
+    that:
+      - item.stat.isreg
+      - item.stat.pw_name == 'root'
+      - item.stat.gr_name == 'root'
+      - item.stat.mode == item.expected_mode
+    fail_msg: managed collector config or service unit is not a protected regular file
+  loop:
+    - "{{ splunk_container_logs_owned_destination_statuses.results[1] | combine({'expected_mode': '0600'}) }}"
+    - "{{ splunk_container_logs_owned_destination_statuses.results[2] | combine({'expected_mode': '0644'}) }}"
+  when:
+    - splunk_container_logs_owner_status.stat.exists
+    - item.stat.exists
+
+- name: Reject unsafe managed state root before mutation
+  ansible.builtin.assert:
+    that:
+      - splunk_container_logs_owned_destination_statuses.results[3].stat.isdir
+      - splunk_container_logs_owned_destination_statuses.results[3].stat.pw_name == 'root'
+      - splunk_container_logs_owned_destination_statuses.results[3].stat.gr_name == 'root'
+      - splunk_container_logs_owned_destination_statuses.results[3].stat.mode == '0700'
+    fail_msg: managed collector state root is not protected
+  when:
+    - splunk_container_logs_owner_status.stat.exists
+    - splunk_container_logs_owned_destination_statuses.results[3].stat.exists
+
+- name: Reject unsafe managed install and config roots before mutation
+  ansible.builtin.assert:
+    that:
+      - item.stat.isdir
+      - item.stat.pw_name == 'root'
+      - item.stat.gr_name == 'root'
+      - item.stat.mode == item.expected_mode
+    fail_msg: managed collector install or config root is not protected
+  loop:
+    - "{{ splunk_container_logs_owned_destination_statuses.results[4] | combine({'expected_mode': '0755'}) }}"
+    - "{{ splunk_container_logs_owned_destination_statuses.results[5] | combine({'expected_mode': '0700'}) }}"
+    - "{{ splunk_container_logs_owned_destination_statuses.results[6] | combine({'expected_mode': '0700'}) }}"
+  when:
+    - splunk_container_logs_owner_status.stat.exists
+    - item.stat.exists
+
+- name: Read the protected ownership record
+  ansible.builtin.slurp:
+    path: "{{ splunk_container_logs_owner_path }}"
+  register: splunk_container_logs_owner_content
+  when: splunk_container_logs_owner_status.stat.exists
+
+- name: Decode the protected ownership record
+  ansible.builtin.set_fact:
+    splunk_container_logs_existing_owner: >-
+      {{ splunk_container_logs_owner_content.content | b64decode | from_yaml }}
+  when: splunk_container_logs_owner_status.stat.exists
+
+- name: Require stable managed identity before any write
+  ansible.builtin.assert:
+    that:
+      - splunk_container_logs_owner_status.stat.isreg
+      - splunk_container_logs_owner_status.stat.pw_name == 'root'
+      - splunk_container_logs_owner_status.stat.gr_name == 'root'
+      - splunk_container_logs_owner_status.stat.mode == '0600'
+      - splunk_container_logs_existing_owner.owner_id == splunk_container_logs_owner_id
+      - splunk_container_logs_existing_owner.version == splunk_container_logs_artifacts.collector.version
+      - splunk_container_logs_existing_owner.install_root == splunk_container_logs_install_root
+      - splunk_container_logs_existing_owner.config_path == splunk_container_logs_config_path
+      - splunk_container_logs_existing_owner.state_dir == splunk_container_logs_docker_state_dir
+      - splunk_container_logs_existing_owner.source_paths == splunk_container_logs_resolved_sources
+      - splunk_container_logs_existing_owner.receiver_id == 'filelog/docker_json'
+      - splunk_container_logs_existing_owner.checkpoint_storage_id == 'file_storage/checkpoints'
+      - splunk_container_logs_existing_owner.exporter_storage_id == 'file_storage/exporter_queue'
+    fail_msg: >-
+      Managed collector identity changed or its protected ludus-container-logs
+      record is unsafe; perform an explicit state/source migration.
+  when: splunk_container_logs_owner_status.stat.exists
+
+- name: Report candidate validation gap in check mode
+  ansible.builtin.debug:
+    msg: >-
+      Check mode is read-only: no archive is fetched and no candidate is written.
+      Collector validation is unverified{% if not splunk_container_logs_owned_destination_statuses.results[0].stat.exists %}
+      because the reviewed binary is absent{% endif %}.
+  when: ansible_check_mode
+
+- name: Create protected collector directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: /etc/splunk-container-logs, mode: "0700"}
+    - {path: /var/cache/splunk-container-logs, mode: "0700"}
+    - {path: "{{ splunk_container_logs_install_root }}", mode: "0755"}
+    - {path: "{{ splunk_container_logs_install_root }}/bin", mode: "0755"}
+    - {path: "{{ splunk_container_logs_docker_state_dir }}", mode: "0700"}
+    - {path: "{{ splunk_container_logs_docker_state_dir }}/checkpoints", mode: "0700"}
+    - {path: "{{ splunk_container_logs_docker_state_dir }}/exporter_queue", mode: "0700"}
+  when: not ansible_check_mode
+
+- name: Persist fixed collector ownership identity
+  ansible.builtin.copy:
+    dest: "{{ splunk_container_logs_owner_path }}"
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      owner_id: {{ splunk_container_logs_owner_id | to_json }}
+      version: {{ splunk_container_logs_artifacts.collector.version | to_json }}
+      install_root: {{ splunk_container_logs_install_root | to_json }}
+      config_path: {{ splunk_container_logs_config_path | to_json }}
+      state_dir: {{ splunk_container_logs_docker_state_dir | to_json }}
+      source_paths: {{ splunk_container_logs_resolved_sources | to_json }}
+      receiver_id: filelog/docker_json
+      checkpoint_storage_id: file_storage/checkpoints
+      exporter_storage_id: file_storage/exporter_queue
+  when: not ansible_check_mode
+
+- name: Fetch the fixed-digest script-free collector archive
+  ansible.builtin.get_url:
+    url: "{{ splunk_container_logs_collector_url }}"
+    dest: /var/cache/splunk-container-logs/collector-0.163.0.tar.gz
+    checksum: "{{ splunk_container_logs_artifacts.collector.sha256 }}"
+    owner: root
+    group: root
+    mode: "0600"
+  when:
+    - not ansible_check_mode
+    - not splunk_container_logs_owned_destination_statuses.results[0].stat.exists
+
+- name: Extract and verify only the exact raw executable member
+  when:
+    - not ansible_check_mode
+    - not splunk_container_logs_owned_destination_statuses.results[0].stat.exists
+  block:
+    - name: Create protected executable staging root
+      ansible.builtin.file:
+        path: /var/cache/splunk-container-logs/executable-stage
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Extract the exact reviewed raw archive member without path stripping
+      ansible.builtin.unarchive:
+        src: /var/cache/splunk-container-logs/collector-0.163.0.tar.gz
+        dest: /var/cache/splunk-container-logs/executable-stage
+        remote_src: true
+        include:
+          - "{{ splunk_container_logs_artifacts.collector.install_contract.selected_entry }}"
+
+    - name: Hash the staged collector executable
+      ansible.builtin.stat:
+        path: /var/cache/splunk-container-logs/executable-stage/splunk-otel-collector/bin/otelcol
+        checksum_algorithm: sha256
+      register: splunk_container_logs_staged_binary
+
+    - name: Require the exact staged executable identity
+      ansible.builtin.assert:
+        that:
+          - splunk_container_logs_staged_binary.stat.exists
+          - splunk_container_logs_staged_binary.stat.isreg
+          - splunk_container_logs_staged_binary.stat.size ==
+            splunk_container_logs_artifacts.collector.install_contract.entry_size_bytes
+          - splunk_container_logs_staged_binary.stat.checksum ==
+            (splunk_container_logs_artifacts.collector.install_contract.entry_sha256 |
+             regex_replace('^sha256:', ''))
+        fail_msg: staged collector executable does not match the reviewed member
+
+    - name: Install only the verified collector executable
+      ansible.builtin.copy:
+        src: /var/cache/splunk-container-logs/executable-stage/splunk-otel-collector/bin/otelcol
+        dest: "{{ splunk_container_logs_binary }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0755"
+      register: splunk_container_logs_executable_install
+  always:
+    - name: Remove executable staging bytes
+      ansible.builtin.file:
+        path: /var/cache/splunk-container-logs/executable-stage
+        state: absent
+      changed_when: false
+
+- name: Record whether the verified executable changed
+  ansible.builtin.set_fact:
+    splunk_container_logs_executable_changed: >-
+      {{ (splunk_container_logs_executable_install | default({})).get('changed', false) }}
+
+- name: Inspect the installed reviewed collector executable
+  ansible.builtin.stat:
+    path: "{{ splunk_container_logs_binary }}"
+    checksum_algorithm: sha256
+  register: splunk_container_logs_binary_status
+  when: not ansible_check_mode
+
+- name: Require the reviewed collector executable layout and size
+  ansible.builtin.assert:
+    that:
+      - splunk_container_logs_binary_status.stat.exists
+      - splunk_container_logs_binary_status.stat.isreg
+      - splunk_container_logs_binary_status.stat.size == splunk_container_logs_artifacts.collector.install_contract.entry_size_bytes
+      - splunk_container_logs_binary_status.stat.checksum ==
+        (splunk_container_logs_artifacts.collector.install_contract.entry_sha256 |
+         regex_replace('^sha256:', ''))
+    fail_msg: installed collector executable does not match the reviewed archive layout
+  when: not ansible_check_mode
+
+- name: Render validate and activate protected collector candidates
+  when: not ansible_check_mode
+  block:
+    - name: Render protected collector configuration candidate
+      ansible.builtin.template:
+        src: docker-otel.yaml.j2
+        dest: /etc/splunk-container-logs/.collector.yaml.candidate
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+      diff: false
+      changed_when: false
+
+    - name: Render protected service candidate
+      ansible.builtin.template:
+        src: splunk-container-logs.service.j2
+        dest: /etc/splunk-container-logs/.splunk-container-logs.service.candidate
+        owner: root
+        group: root
+        mode: "0600"
+      changed_when: false
+
+    - name: Validate the collector candidate before active replacement
+      ansible.builtin.command:
+        argv:
+          - "{{ splunk_container_logs_binary }}"
+          - validate
+          - --config=/etc/splunk-container-logs/.collector.yaml.candidate
+      changed_when: false
+      no_log: true
+
+    - name: Compare validated collector candidate with active configuration
+      ansible.builtin.command:
+        argv:
+          - cmp
+          - --silent
+          - /etc/splunk-container-logs/.collector.yaml.candidate
+          - "{{ splunk_container_logs_config_path }}"
+      register: splunk_container_logs_config_comparison
+      changed_when: false
+      failed_when: >-
+        splunk_container_logs_config_comparison.rc not in [0, 1] and not
+        (splunk_container_logs_config_comparison.rc == 2 and
+         not splunk_container_logs_owned_destination_statuses.results[1].stat.exists)
+
+    - name: Compare service candidate with active unit
+      ansible.builtin.command:
+        argv:
+          - cmp
+          - --silent
+          - /etc/splunk-container-logs/.splunk-container-logs.service.candidate
+          - "{{ splunk_container_logs_unit_path }}"
+      register: splunk_container_logs_unit_comparison
+      changed_when: false
+      failed_when: >-
+        splunk_container_logs_unit_comparison.rc not in [0, 1] and not
+        (splunk_container_logs_unit_comparison.rc == 2 and
+         not splunk_container_logs_owned_destination_statuses.results[2].stat.exists)
+
+    - name: Persist pending activation before active replacement
+      ansible.builtin.copy:
+        dest: "{{ splunk_container_logs_pending_path }}"
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          owner_id: {{ splunk_container_logs_owner_id | to_json }}
+          operation: validated-candidate-activation
+          executable_changed: {{ splunk_container_logs_executable_changed | to_json }}
+          config_changed: {{ (splunk_container_logs_config_comparison.rc != 0) | to_json }}
+          unit_changed: {{ (splunk_container_logs_unit_comparison.rc != 0) | to_json }}
+      when: >-
+        splunk_container_logs_executable_changed or
+        splunk_container_logs_config_comparison.rc != 0 or
+        splunk_container_logs_unit_comparison.rc != 0
+
+    - name: Replace active collector.yaml from its validated candidate
+      ansible.builtin.copy:
+        src: /etc/splunk-container-logs/.collector.yaml.candidate
+        dest: "{{ splunk_container_logs_config_path }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0600"
+      when: splunk_container_logs_config_comparison.rc != 0
+      notify: splunk_container_logs_restart
+      no_log: true
+      diff: false
+
+    - name: Replace active service unit from its candidate
+      ansible.builtin.copy:
+        src: /etc/splunk-container-logs/.splunk-container-logs.service.candidate
+        dest: "{{ splunk_container_logs_unit_path }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+      when: splunk_container_logs_unit_comparison.rc != 0
+      notify: splunk_container_logs_restart
+
+    # This delayed notification is intentionally gated by candidate validation.
+    - name: Queue restart for a newly installed validated executable  # noqa no-handler
+      ansible.builtin.debug:
+        msg: Reviewed collector executable installation validated
+      changed_when: true
+      when: splunk_container_logs_executable_changed
+      notify: splunk_container_logs_restart
+  always:
+    - name: Remove protected collector candidates
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/splunk-container-logs/.collector.yaml.candidate
+        - /etc/splunk-container-logs/.splunk-container-logs.service.candidate
+      no_log: true
+      changed_when: false
+
+- name: Enable and start only the dedicated collector service
+  ansible.builtin.systemd_service:
+    name: splunk-container-logs
+    daemon_reload: true
+    enabled: true
+    state: started
+  when: not ansible_check_mode
+
+- name: Apply validated collector restart before resolving pending state
+  ansible.builtin.meta: flush_handlers
+  when: not ansible_check_mode
+
+- name: Clear resolved collector activation marker
+  ansible.builtin.file:
+    path: "{{ splunk_container_logs_pending_path }}"
+    state: absent
+  when: not ansible_check_mode

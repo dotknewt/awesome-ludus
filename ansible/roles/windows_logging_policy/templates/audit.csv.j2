@@ -1,0 +1,23 @@
+Machine Name,Policy Target,Subcategory,Subcategory GUID,Inclusion Setting,Exclusion Setting,Setting Value
+{% set audit_names = {
+  '{0cce9242-69ae-11d9-bed3-505054503030}': 'Kerberos Authentication Service',
+  '{0cce9240-69ae-11d9-bed3-505054503030}': 'Kerberos Service Ticket Operations',
+  '{0cce9236-69ae-11d9-bed3-505054503030}': 'Computer Account Management',
+  '{0cce9237-69ae-11d9-bed3-505054503030}': 'Security Group Management',
+  '{0cce9235-69ae-11d9-bed3-505054503030}': 'User Account Management',
+  '{0cce923e-69ae-11d9-bed3-505054503030}': 'Detailed Directory Service Replication',
+  '{0cce923b-69ae-11d9-bed3-505054503030}': 'Directory Service Access',
+  '{0cce923c-69ae-11d9-bed3-505054503030}': 'Directory Service Changes',
+  '{0cce923d-69ae-11d9-bed3-505054503030}': 'Directory Service Replication',
+  '{0cce9215-69ae-11d9-bed3-505054503030}': 'Logon',
+  '{0cce921c-69ae-11d9-bed3-505054503030}': 'Other Logon/Logoff Events',
+  '{0cce921b-69ae-11d9-bed3-505054503030}': 'Special Logon',
+  '{0cce9221-69ae-11d9-bed3-505054503030}': 'Certification Services',
+  '{0cce9244-69ae-11d9-bed3-505054503030}': 'Detailed File Share',
+  '{0cce9227-69ae-11d9-bed3-505054503030}': 'Other Object Access Events'
+} -%}
+{% for item in windows_logging_policy_audit_subcategories -%}
+{% set setting = 3 if item.success and item.failure else (1 if item.success else (2 if item.failure else 4)) -%}
+{% set inclusion = 'Success and Failure' if setting == 3 else ('Success' if setting == 1 else ('Failure' if setting == 2 else 'No Auditing')) -%}
+,System,{{ audit_names[item.guid | lower] }},{{ item.guid | lower }},{{ inclusion }},,{{ setting }}
+{% endfor -%}

@@ -1,0 +1,627 @@
+---
+- name: Validate HEC management switches
+  ansible.builtin.assert:
+    that:
+      - splunk_server_hec_enabled is boolean
+      - splunk_server_hec_validate is boolean
+      - not splunk_server_hec_validate or splunk_server_hec_enabled
+    fail_msg: HEC switches must be boolean, and validation requires HEC management to be enabled.
+
+- name: Validate enabled HEC inputs
+  ansible.builtin.assert:
+    that:
+      - splunk_server_hec_app is string
+      - splunk_server_hec_app is match('^[A-Za-z][A-Za-z0-9_-]*$')
+      - splunk_version == '10.6.1.1'
+      - splunk_server_hec_port is integer
+      - splunk_server_hec_port >= 1
+      - splunk_server_hec_port <= 65535
+      - splunk_server_hec_ssl_enabled is boolean
+      - splunk_server_hec_server_cert is string
+      - splunk_server_hec_server_cert | length == 0 or splunk_server_hec_ssl_enabled
+      - splunk_server_hec_token_name is string
+      - splunk_server_hec_token_name is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
+      - splunk_server_hec_token is string
+      - splunk_server_hec_token | length > 0
+      - splunk_server_hec_indexes is sequence
+      - splunk_server_hec_indexes is not string
+      - splunk_server_hec_indexes is not mapping
+      - splunk_server_hec_indexes | length > 0
+      - >-
+        splunk_server_hec_indexes | unique | length ==
+        splunk_server_hec_indexes | length
+      - >-
+        splunk_server_hec_indexes | select('string') | list | length ==
+        splunk_server_hec_indexes | length
+      - >-
+        splunk_server_hec_indexes |
+        select('match', '^[A-Za-z][A-Za-z0-9_-]*$') | list | length ==
+        splunk_server_hec_indexes | length
+      - splunk_server_hec_default_index is string
+      - splunk_server_hec_default_index in splunk_server_hec_indexes
+      - splunk_server_hec_validate_certs is boolean
+      - splunk_server_hec_ca_path is string
+    fail_msg: >-
+      HEC requires a safe app/token name, nonempty token, valid port, and a
+      unique nonempty index list containing the default index.
+  when: splunk_server_hec_enabled
+  no_log: true
+
+- name: Validate HEC validation endpoint inputs
+  ansible.builtin.assert:
+    that:
+      - splunk_server_hec_validation_endpoint is string
+      - >-
+        splunk_server_hec_validation_endpoint is
+        match('^https?://[^/]+(?::[0-9]+)?/services/collector/event$')
+      - (splunk_server_hec_ssl_enabled and splunk_server_hec_validation_endpoint is match('^https://')) or
+        (not splunk_server_hec_ssl_enabled and splunk_server_hec_validation_endpoint is match('^http://'))
+    fail_msg: >-
+      Validation requires an explicit event endpoint whose scheme matches the
+      managed HEC listener.
+  when: splunk_server_hec_validate
+  no_log: true
+
+- name: Inspect explicit HEC server certificate
+  ansible.builtin.stat:
+    path: "{{ splunk_server_hec_server_cert }}"
+  register: splunk_server_hec_server_cert_stat  # noqa: var-naming[no-role-prefix]
+  when:
+    - splunk_server_hec_enabled
+    - splunk_server_hec_server_cert | length > 0
+
+- name: Require explicit HEC server certificate to exist
+  ansible.builtin.assert:
+    that:
+      - splunk_server_hec_server_cert_stat.stat.exists
+      - splunk_server_hec_server_cert_stat.stat.isreg
+    fail_msg: The explicit HEC server certificate must be an existing regular file.
+  when:
+    - splunk_server_hec_enabled
+    - splunk_server_hec_server_cert | length > 0
+
+- name: Inspect explicit HEC validation CA bundle
+  ansible.builtin.stat:
+    path: "{{ splunk_server_hec_ca_path }}"
+  register: splunk_server_hec_ca_stat  # noqa: var-naming[no-role-prefix]
+  when:
+    - splunk_server_hec_validate
+    - splunk_server_hec_ca_path | length > 0
+
+- name: Require explicit HEC validation CA bundle to exist
+  ansible.builtin.assert:
+    that:
+      - splunk_server_hec_ca_stat.stat.exists
+      - splunk_server_hec_ca_stat.stat.isreg
+      - splunk_server_hec_validate_certs
+    fail_msg: >-
+      A custom validation CA must be an existing regular file and is meaningful
+      only with certificate validation enabled.
+  when:
+    - splunk_server_hec_validate
+    - splunk_server_hec_ca_path | length > 0
+
+- name: Verify validation execution identity can read explicit CA bundle
+  ansible.builtin.command:
+    argv: [test, -r, "{{ splunk_server_hec_ca_path }}"]
+  changed_when: false
+  check_mode: false
+  when:
+    - splunk_server_hec_validate
+    - splunk_server_hec_ca_path | length > 0
+
+- name: Read running Splunk process owners
+  ansible.builtin.command:
+    argv: [ps, -o, user=, -C, splunkd]
+  register: splunk_server_hec_process_owners  # noqa: var-naming[no-role-prefix]
+  changed_when: false
+  check_mode: false
+  when: splunk_server_hec_enabled
+
+- name: Require one running Splunk service identity
+  ansible.builtin.assert:
+    that:
+      - splunk_server_hec_process_owners.rc == 0
+      - >-
+        splunk_server_hec_process_owners.stdout_lines | map('trim') |
+        reject('equalto', '') | unique | list | length == 1
+    fail_msg: HEC management requires a running splunkd process with one observable service identity.
+  when: splunk_server_hec_enabled
+
+- name: Record actual Splunk service user  # noqa: var-naming[no-role-prefix]
+  ansible.builtin.set_fact:
+    splunk_server_hec_service_user: >-
+      {{ splunk_server_hec_process_owners.stdout_lines | map('trim') |
+         reject('equalto', '') | first }}
+  when: splunk_server_hec_enabled
+
+- name: Read actual Splunk service primary group
+  ansible.builtin.command:
+    argv: [id, -gn, "{{ splunk_server_hec_service_user }}"]
+  register: splunk_server_hec_service_group_result  # noqa: var-naming[no-role-prefix]
+  changed_when: false
+  check_mode: false
+  when: splunk_server_hec_enabled
+
+- name: Record desired HEC ownership identity
+  ansible.builtin.set_fact:
+    splunk_server_hec_service_group: >-  # noqa: var-naming[no-role-prefix]
+      {{ splunk_server_hec_service_group_result.stdout | trim }}
+    splunk_server_hec_app_path: >-  # noqa: var-naming[no-role-prefix]
+      {{ splunk_server_home }}/etc/apps/{{ splunk_server_hec_app }}
+    splunk_server_hec_state_path: >-  # noqa: var-naming[no-role-prefix]
+      {{ splunk_server_home }}/var/lib/ludus-hec
+    splunk_server_hec_ownership:  # noqa: var-naming[no-role-prefix]
+      owner_id: ludus-linux-splunk-hec
+      app: "{{ splunk_server_hec_app }}"
+      token_name: "{{ splunk_server_hec_token_name }}"
+      indexes: "{{ splunk_server_hec_indexes | sort }}"
+  when: splunk_server_hec_enabled
+  no_log: true
+
+- name: Verify Splunk service can read explicit server certificate
+  ansible.builtin.command:
+    argv: [test, -r, "{{ splunk_server_hec_server_cert }}"]
+  become: true
+  become_user: "{{ splunk_server_hec_service_user }}"
+  changed_when: false
+  check_mode: false
+  when:
+    - splunk_server_hec_enabled
+    - splunk_server_hec_server_cert | length > 0
+
+- name: Inspect fixed HEC state directory
+  ansible.builtin.stat:
+    path: "{{ splunk_server_hec_state_path }}"
+  register: splunk_server_hec_state_dir_stat  # noqa: var-naming[no-role-prefix]
+  when: splunk_server_hec_enabled
+
+- name: Require a safe fixed HEC state directory path
+  ansible.builtin.assert:
+    that:
+      - not splunk_server_hec_state_dir_stat.stat.exists or
+        (splunk_server_hec_state_dir_stat.stat.isdir and
+        not splunk_server_hec_state_dir_stat.stat.islnk)
+    fail_msg: The fixed HEC state path must be a real directory, not a symlink.
+  when: splunk_server_hec_enabled
+
+- name: Inspect fixed HEC ownership record
+  ansible.builtin.stat:
+    path: "{{ splunk_server_hec_state_path }}/ownership.yml"
+  register: splunk_server_hec_state_record_stat  # noqa: var-naming[no-role-prefix]
+  when: splunk_server_hec_enabled
+
+- name: Require a safe fixed HEC ownership record path
+  ansible.builtin.assert:
+    that:
+      - not splunk_server_hec_state_record_stat.stat.exists or
+        (splunk_server_hec_state_record_stat.stat.isreg and
+        not splunk_server_hec_state_record_stat.stat.islnk)
+    fail_msg: The fixed HEC ownership record must be a regular file, not a symlink.
+  when: splunk_server_hec_enabled
+
+- name: Inspect unresolved HEC restart marker
+  ansible.builtin.stat:
+    path: "{{ splunk_server_hec_state_path }}/pending-restart.yml"
+  register: splunk_server_hec_pending_restart  # noqa: var-naming[no-role-prefix]
+  when: splunk_server_hec_enabled
+
+- name: Require a protected regular pending restart marker
+  ansible.builtin.assert:
+    that:
+      - not splunk_server_hec_pending_restart.stat.exists or
+        (splunk_server_hec_pending_restart.stat.isreg and
+        not splunk_server_hec_pending_restart.stat.islnk and
+        splunk_server_hec_pending_restart.stat.mode == '0600' and
+        splunk_server_hec_pending_restart.stat.pw_name ==
+        splunk_server_hec_service_user and
+        splunk_server_hec_pending_restart.stat.gr_name ==
+        splunk_server_hec_service_group)
+    fail_msg: The pending HEC restart marker is not a protected owned file.
+  when: splunk_server_hec_enabled
+
+- name: Read unresolved HEC restart marker
+  ansible.builtin.slurp:
+    src: "{{ splunk_server_hec_state_path }}/pending-restart.yml"
+  register: splunk_server_hec_pending_restart_content  # noqa: var-naming[no-role-prefix]
+  when:
+    - splunk_server_hec_enabled
+    - splunk_server_hec_pending_restart.stat.exists
+
+- name: Require pending restart marker ownership identity
+  ansible.builtin.assert:
+    that:
+      - >-
+        (splunk_server_hec_pending_restart_content.content | b64decode |
+        from_yaml).owner_id == 'ludus-linux-splunk-hec'
+    fail_msg: The pending HEC restart marker has invalid ownership identity.
+  when:
+    - splunk_server_hec_enabled
+    - splunk_server_hec_pending_restart.stat.exists
+
+- name: Inventory an existing fixed HEC state directory
+  ansible.builtin.find:
+    paths: "{{ splunk_server_hec_state_path }}"
+    recurse: true
+    file_type: file
+  register: splunk_server_hec_existing_state_files  # noqa: var-naming[no-role-prefix]
+  when:
+    - splunk_server_hec_enabled
+    - splunk_server_hec_state_dir_stat.stat.exists
+
+- name: Reject an unowned fixed HEC state directory
+  ansible.builtin.assert:
+    that:
+      - >-
+        not splunk_server_hec_state_dir_stat.stat.exists or
+        splunk_server_hec_state_record_stat.stat.exists or
+        splunk_server_hec_existing_state_files.matched == 0
+    fail_msg: >-
+      The fixed HEC state directory contains files without this role's
+      ownership record.
+  when: splunk_server_hec_enabled
+
+- name: Read existing fixed HEC ownership record
+  ansible.builtin.slurp:
+    src: "{{ splunk_server_hec_state_path }}/ownership.yml"
+  register: splunk_server_hec_existing_state_record  # noqa: var-naming[no-role-prefix]
+  when:
+    - splunk_server_hec_enabled
+    - splunk_server_hec_state_record_stat.stat.exists
+
+- name: Require existing fixed HEC ownership to match requested identity
+  ansible.builtin.assert:
+    that:
+      - >-
+        (splunk_server_hec_existing_state_record.content | b64decode |
+        from_yaml) == splunk_server_hec_ownership
+    fail_msg: >-
+      Existing HEC ownership differs from the requested app, token name, or
+      index set; explicit migration is required.
+  when:
+    - splunk_server_hec_enabled
+    - splunk_server_hec_state_record_stat.stat.exists
+
+- name: Inspect requested HEC app path
+  ansible.builtin.stat:
+    path: "{{ splunk_server_hec_app_path }}"
+  register: splunk_server_hec_app_path_stat  # noqa: var-naming[no-role-prefix]
+  when: splunk_server_hec_enabled
+
+- name: Reject an app path without fixed ownership state
+  ansible.builtin.assert:
+    that:
+      - >-
+        not splunk_server_hec_app_path_stat.stat.exists or
+        splunk_server_hec_state_record_stat.stat.exists
+      - >-
+        not splunk_server_hec_app_path_stat.stat.exists or
+        (splunk_server_hec_app_path_stat.stat.isdir and
+        not splunk_server_hec_app_path_stat.stat.islnk)
+    fail_msg: The requested HEC app path exists without this role's fixed ownership record.
+  when: splunk_server_hec_enabled
+
+- name: Inventory files in an existing HEC app
+  ansible.builtin.find:
+    paths: "{{ splunk_server_hec_app_path }}"
+    recurse: true
+    file_type: file
+  register: splunk_server_hec_existing_app_files  # noqa: var-naming[no-role-prefix]
+  when:
+    - splunk_server_hec_enabled
+    - splunk_server_hec_app_path_stat.stat.exists
+
+- name: Inspect HEC app ownership marker
+  ansible.builtin.stat:
+    path: "{{ splunk_server_hec_app_path }}/ludus-hec-owner.yml"
+  register: splunk_server_hec_app_marker_stat  # noqa: var-naming[no-role-prefix]
+  when:
+    - splunk_server_hec_enabled
+    - splunk_server_hec_app_path_stat.stat.exists
+
+- name: Reject unmarked nonempty HEC app content
+  ansible.builtin.assert:
+    that:
+      - >-
+        splunk_server_hec_app_marker_stat.stat.exists or
+        splunk_server_hec_existing_app_files.matched == 0
+      - >-
+        not splunk_server_hec_app_marker_stat.stat.exists or
+        (splunk_server_hec_app_marker_stat.stat.isreg and
+        not splunk_server_hec_app_marker_stat.stat.islnk)
+    fail_msg: The requested HEC app contains files but lacks the role-owned app marker.
+  when:
+    - splunk_server_hec_enabled
+    - splunk_server_hec_app_path_stat.stat.exists
+
+- name: Read existing HEC app ownership marker
+  ansible.builtin.slurp:
+    src: "{{ splunk_server_hec_app_path }}/ludus-hec-owner.yml"
+  register: splunk_server_hec_existing_app_marker  # noqa: var-naming[no-role-prefix]
+  when:
+    - splunk_server_hec_enabled
+    - splunk_server_hec_app_path_stat.stat.exists
+    - splunk_server_hec_app_marker_stat.stat.exists
+
+- name: Require existing HEC app marker to match requested identity
+  ansible.builtin.assert:
+    that:
+      - >-
+        (splunk_server_hec_existing_app_marker.content | b64decode |
+        from_yaml) == splunk_server_hec_ownership
+    fail_msg: >-
+      Existing HEC app ownership differs from the requested app, token name, or
+      index set; explicit migration is required.
+  when:
+    - splunk_server_hec_enabled
+    - splunk_server_hec_app_path_stat.stat.exists
+    - splunk_server_hec_app_marker_stat.stat.exists
+
+- name: Inventory all Splunk input and index configuration files
+  ansible.builtin.find:
+    paths: "{{ splunk_server_home }}/etc"
+    recurse: true
+    file_type: file
+    patterns:
+      - inputs.conf
+      - indexes.conf
+  register: splunk_server_hec_conf_files  # noqa: var-naming[no-role-prefix]
+  when: splunk_server_hec_enabled
+
+- name: Inventory symlinked Splunk input and index configuration paths
+  ansible.builtin.find:
+    paths: "{{ splunk_server_home }}/etc"
+    recurse: true
+    file_type: link
+    patterns:
+      - inputs.conf
+      - indexes.conf
+  register: splunk_server_hec_conf_links  # noqa: var-naming[no-role-prefix]
+  when: splunk_server_hec_enabled
+
+- name: Reject uninspected symlinked Splunk configuration definitions
+  ansible.builtin.assert:
+    that:
+      - splunk_server_hec_conf_links.matched == 0
+    fail_msg: >-
+      Symlinked inputs.conf or indexes.conf paths cannot be safely classified by
+      this bounded HEC ownership preflight.
+  when: splunk_server_hec_enabled
+
+- name: Read all Splunk input and index definitions
+  ansible.builtin.slurp:
+    src: "{{ item.path }}"
+  loop: "{{ splunk_server_hec_conf_files.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: splunk_server_hec_conf_contents  # noqa: var-naming[no-role-prefix]
+  no_log: true
+  when: splunk_server_hec_enabled
+
+- name: Parse every raw Splunk input and index stanza  # noqa: var-naming[no-role-prefix]
+  ansible.builtin.set_fact:
+    splunk_server_hec_raw_parse: >-
+      {{ splunk_server_hec_conf_contents.results |
+         splunk_hec_parse_raw_files }}
+  no_log: true
+  when: splunk_server_hec_enabled
+
+- name: Classify all raw HEC ownership conflicts  # noqa: var-naming[no-role-prefix]
+  ansible.builtin.set_fact:
+    splunk_server_hec_raw_conflicts: >-
+      {{ splunk_server_hec_raw_parse |
+         splunk_hec_raw_conflicts(
+           splunk_server_hec_app_path ~ '/local/inputs.conf',
+           splunk_server_hec_app_path ~ '/local/indexes.conf',
+           splunk_server_home ~ '/etc/system/default/inputs.conf',
+           splunk_server_hec_token_name,
+           splunk_server_hec_token,
+           splunk_server_hec_indexes,
+           splunk_server_hec_port,
+           splunk_server_hec_ssl_enabled,
+           splunk_server_hec_server_cert) }}
+  no_log: true
+  when: splunk_server_hec_enabled
+
+- name: Reject malformed, conflicting, or shadowed raw HEC definitions
+  ansible.builtin.assert:
+    that:
+      - splunk_server_hec_raw_conflicts | length == 0
+    fail_msg: >-
+      Raw Splunk configuration has malformed or conflicting HEC definitions;
+      review redacted task details and on-host provenance before retrying.
+  no_log: true
+  when: splunk_server_hec_enabled
+
+- name: Inspect listener ownership on the requested HEC port
+  ansible.builtin.command:
+    argv:
+      - ss
+      - -H
+      - -ltnp
+      - sport
+      - "="
+      - ":{{ splunk_server_hec_port }}"
+  register: splunk_server_hec_port_owner  # noqa: var-naming[no-role-prefix]
+  changed_when: false
+  check_mode: false
+  when: splunk_server_hec_enabled
+
+- name: Reject a requested HEC port owned by another process
+  ansible.builtin.assert:
+    that:
+      - >-
+        splunk_server_hec_port_owner.stdout | trim | length == 0 or
+        'splunkd' in splunk_server_hec_port_owner.stdout
+    fail_msg: The requested HEC port is already owned by a non-Splunk process.
+  when: splunk_server_hec_enabled
+
+- name: Read current effective HEC input provenance
+  ansible.builtin.command:
+    argv:
+      - "{{ splunk_server_home }}/bin/splunk"
+      - btool
+      - inputs
+      - list
+      - --debug
+  register: splunk_server_hec_pre_inputs  # noqa: var-naming[no-role-prefix]
+  changed_when: false
+  check_mode: false
+  no_log: true
+  when: splunk_server_hec_enabled
+
+- name: Read current effective index provenance
+  ansible.builtin.command:
+    argv:
+      - "{{ splunk_server_home }}/bin/splunk"
+      - btool
+      - indexes
+      - list
+      - --debug
+  register: splunk_server_hec_pre_indexes  # noqa: var-naming[no-role-prefix]
+  changed_when: false
+  check_mode: false
+  no_log: true
+  when: splunk_server_hec_enabled
+
+- name: Read current effective Splunk management listener provenance
+  ansible.builtin.command:
+    argv:
+      - "{{ splunk_server_home }}/bin/splunk"
+      - btool
+      - server
+      - list
+      - httpServer
+      - --debug
+  register: splunk_server_hec_pre_server  # noqa: var-naming[no-role-prefix]
+  changed_when: false
+  check_mode: false
+  no_log: true
+  when: splunk_server_hec_enabled
+
+- name: Read current effective Splunk web listener provenance
+  ansible.builtin.command:
+    argv:
+      - "{{ splunk_server_home }}/bin/splunk"
+      - btool
+      - web
+      - list
+      - settings
+      - --debug
+  register: splunk_server_hec_pre_web  # noqa: var-naming[no-role-prefix]
+  changed_when: false
+  check_mode: false
+  no_log: true
+  when: splunk_server_hec_enabled
+
+- name: Parse pre-write btool stanza and provenance records  # noqa: var-naming[no-role-prefix]
+  ansible.builtin.set_fact:
+    splunk_server_hec_pre_inputs_parse: >-
+      {{ splunk_server_hec_pre_inputs.stdout | splunk_hec_parse_btool }}
+    splunk_server_hec_pre_indexes_parse: >-
+      {{ splunk_server_hec_pre_indexes.stdout | splunk_hec_parse_btool }}
+    splunk_server_hec_pre_server_parse: >-
+      {{ splunk_server_hec_pre_server.stdout | splunk_hec_parse_btool }}
+    splunk_server_hec_pre_web_parse: >-
+      {{ splunk_server_hec_pre_web.stdout | splunk_hec_parse_btool }}
+  no_log: true
+  when: splunk_server_hec_enabled
+
+- name: Classify known non-HEC listener collisions  # noqa: var-naming[no-role-prefix]
+  ansible.builtin.set_fact:
+    splunk_server_hec_listener_conflicts: >-
+      {{ splunk_server_hec_pre_inputs_parse |
+         splunk_hec_non_hec_listener_conflicts(
+           splunk_server_hec_pre_server_parse,
+           splunk_server_hec_pre_web_parse,
+           splunk_server_hec_port,
+           splunk_receiver_port,
+           splunk_server_mgmt_port,
+           splunk_server_web_port) }}
+  no_log: true
+  when: splunk_server_hec_enabled
+
+- name: Reject known non-HEC listener collisions before HEC writes
+  ansible.builtin.assert:
+    that:
+      - splunk_server_hec_listener_conflicts | length == 0
+    fail_msg: >-
+      The requested HEC port conflicts with a declared or effective Splunk
+      receiving, management, or web listener; inspect redacted provenance.
+  no_log: true
+  when: splunk_server_hec_enabled
+
+- name: Classify pre-write effective HEC provenance  # noqa: var-naming[no-role-prefix]
+  ansible.builtin.set_fact:
+    splunk_server_hec_preflight_conflicts: >-
+      {{ splunk_server_hec_pre_inputs_parse |
+         splunk_hec_preflight_effective_conflicts(
+           splunk_server_hec_pre_indexes_parse,
+           splunk_server_hec_app_path ~ '/local/inputs.conf',
+           splunk_server_hec_app_path ~ '/local/indexes.conf',
+           splunk_server_home ~ '/etc/system/default/inputs.conf',
+           splunk_server_hec_token_name,
+           splunk_server_hec_token,
+           splunk_server_hec_indexes,
+           splunk_server_hec_port,
+           splunk_server_hec_ssl_enabled,
+           splunk_server_hec_server_cert) }}
+  no_log: true
+  when: splunk_server_hec_enabled
+
+- name: Reject incompatible pre-write effective HEC provenance
+  ansible.builtin.assert:
+    that:
+      - splunk_server_hec_preflight_conflicts | length == 0
+    fail_msg: >-
+      Effective pre-write HEC provenance is malformed or conflicts with the
+      owned contract; inspect redacted btool and raw-definition evidence.
+  no_log: true
+  when: splunk_server_hec_enabled
+
+- name: Reject Splunk cluster peer configuration
+  ansible.builtin.command:
+    argv:
+      - "{{ splunk_server_home }}/bin/splunk"
+      - btool
+      - server
+      - list
+      - clustering
+      - --debug
+  register: splunk_server_hec_clustering  # noqa: var-naming[no-role-prefix]
+  changed_when: false
+  check_mode: false
+  no_log: true
+  when: splunk_server_hec_enabled
+
+- name: Read effective Splunk management TLS configuration
+  ansible.builtin.command:
+    argv:
+      - "{{ splunk_server_home }}/bin/splunk"
+      - btool
+      - server
+      - list
+      - sslConfig
+      - --debug
+  register: splunk_server_hec_management_tls  # noqa: var-naming[no-role-prefix]
+  changed_when: false
+  check_mode: false
+  no_log: true
+  when: splunk_server_hec_enabled
+
+- name: Require standalone Splunk context for owned HEC app
+  ansible.builtin.assert:
+    that:
+      - splunk_server_hec_clustering.stdout is not regex('(?i)mode\\s*=\\s*(slave|peer)')
+    fail_msg: Cluster peers have a different precedence tier and are not supported by this owned HEC path.
+  no_log: true
+  when: splunk_server_hec_enabled
+
+- name: Require management TLS when HEC TLS is enabled
+  ansible.builtin.assert:
+    that:
+      - not splunk_server_hec_ssl_enabled or
+        splunk_server_hec_management_tls.stdout is regex('(?i)enableSplunkdSSL\\s*=\\s*(true|1)')
+    fail_msg: Splunk HEC TLS cannot be enabled while effective management TLS is disabled.
+  no_log: true
+  when: splunk_server_hec_enabled

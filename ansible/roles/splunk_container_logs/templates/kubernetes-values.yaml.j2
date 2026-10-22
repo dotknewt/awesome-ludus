@@ -1,0 +1,162 @@
+image:
+  otelcol:
+    repository: {{ splunk_container_logs_artifacts.chart.required_logs_only_values.image.otelcol.repository | to_json }}
+    tag: {{ splunk_container_logs_artifacts.chart.required_logs_only_values.image.otelcol.tag | to_json }}
+
+clusterName: {{ splunk_container_logs_k8s_cluster_name | to_json }}
+
+featureGates:
+  noDropLogsPipeline: false
+
+splunkPlatform:
+  endpoint: {{ splunk_container_logs_hec_endpoint | to_json }}
+  token: ""
+  index: {{ splunk_container_logs_hec_index | to_json }}
+  logsEnabled: true
+  metricsEnabled: false
+  tracesEnabled: false
+  insecureSkipVerify: {{ (not splunk_container_logs_tls_verify) | lower }}
+  caFile: {{ ('provided-by-splunk-platform-secret' if splunk_container_logs_k8s_use_custom_ca else '') | to_json }}
+  fsyncEnabled: true
+  retryOnFailure:
+    enabled: true
+    initialInterval: 5s
+    maxInterval: 30s
+    maxElapsedTime: 0s
+  sendingQueue:
+    enabled: true
+    numConsumers: 10
+    queueSize: {{ splunk_container_logs_queue_size }}
+    persistentQueue:
+      enabled: true
+      storagePath: {{ splunk_container_logs_k8s_queue_path | to_json }}
+
+splunkObservability:
+  realm: ""
+  accessToken: ""
+  metricsEnabled: false
+  tracesEnabled: false
+  infrastructureMonitoringEventsEnabled: false
+  profilingEnabled: false
+  secureAppEnabled: false
+
+agent:
+  enabled: true
+  service:
+    enabled: false
+  hostNetwork: false
+  skipInitContainers: true
+  discovery:
+    enabled: false
+  podAnnotations:
+    ludus.splunk/owner-id: {{ splunk_container_logs_owner_id | to_json }}
+    ludus.splunk/cluster-name: {{ splunk_container_logs_k8s_cluster_name | to_json }}
+    ludus.splunk/log-paths: {{ splunk_container_logs_k8s_log_paths_identity | to_json }}
+    ludus.splunk/credential-digest: {{ splunk_container_logs_k8s_credential_digest | to_json }}
+  ports:
+    otlp: null
+    otlp-http: null
+    zipkin: null
+    jaeger-thrift: null
+    jaeger-grpc: null
+    opampforwarder: null
+  extraVolumes:
+{% for path in splunk_container_logs_k8s_log_paths %}
+    - name: ludus-container-logs-{{ loop.index0 }}
+      hostPath:
+        path: {{ path | to_json }}
+        type: Directory
+{% endfor %}
+  extraVolumeMounts:
+{% for path in splunk_container_logs_k8s_log_paths %}
+    - name: ludus-container-logs-{{ loop.index0 }}
+      mountPath: {{ path | to_json }}
+      readOnly: true
+{% endfor %}
+  config:
+    extensions:
+      file_storage/persistent_queue:
+        directory: {{ (splunk_container_logs_k8s_queue_path ~ '/agent') | to_json }}
+        timeout: 0
+        max_size: {{ splunk_container_logs_queue_max_disk_mib * 1024 * 1024 }}
+        fsync: true
+        compaction:
+          on_rebound: true
+          rebound_needed_threshold_mib: 200
+          rebound_trigger_threshold_mib: 100
+          directory: {{ (splunk_container_logs_k8s_queue_path ~ '/agent') | to_json }}
+          cleanup_on_start: true
+    receivers:
+      file_log:
+        start_at: {{ splunk_container_logs_start_at }}
+        retry_on_failure:
+          enabled: true
+          initial_interval: 1s
+          max_interval: 30s
+          max_elapsed_time: 0s
+    exporters:
+      splunk_hec/platform_logs:
+        retry_on_failure:
+          enabled: true
+          initial_interval: 5s
+          max_interval: 30s
+          max_elapsed_time: 0s
+        sending_queue:
+          enabled: true
+          storage: file_storage/persistent_queue
+          sizer: requests
+          queue_size: {{ splunk_container_logs_queue_size }}
+          num_consumers: 10
+          block_on_overflow: true
+    service:
+      pipelines:
+        logs:
+          receivers: [file_log]
+        metrics: null
+        traces: null
+
+clusterReceiver:
+  enabled: false
+  eventsEnabled: false
+  k8sObjects: []
+gateway:
+  enabled: false
+operatorcrds:
+  install: false
+operator:
+  enabled: false
+instrumentation:
+  enabled: false
+obi:
+  enabled: false
+targetallocator:
+  enabled: false
+remoteManagement:
+  enabled: false
+logsToMetrics:
+  enabled: false
+
+logsCollection:
+  containers:
+    enabled: true
+  journald:
+    enabled: false
+  checkpointPath: {{ splunk_container_logs_k8s_checkpoint_path | to_json }}
+  extraFileLogs: {}
+
+secret:
+  create: false
+  name: {{ splunk_container_logs_k8s_secret_name | to_json }}
+  validateSecret: false
+  defaultMode: "0440"
+
+nodeSelector:
+{% for key, value in splunk_container_logs_k8s_node_selector | dictsort %}
+{% if key not in ['kubernetes.io/arch', 'kubernetes.io/os'] %}
+  {{ key | to_json }}: {{ value | to_json }}
+{% endif %}
+{% endfor %}
+  kubernetes.io/arch: amd64
+  kubernetes.io/os: linux
+tolerations:
+{{ splunk_container_logs_k8s_tolerations | to_nice_yaml(indent=2) | indent(2, true) }}
