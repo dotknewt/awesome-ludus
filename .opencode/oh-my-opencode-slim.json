@@ -5,31 +5,44 @@
     "ludus": {
       "extends": "openai",
       "agents": {
-        "librarian": {
+        "orchestrator": {
+          "model": "openai/gpt-6-astra",
           "skills_add": ["*"],
-          "mcps": ["ludus-mcp","librarian","firecrawl"]
-     	},
-	  	"explorer": {
-          "model": "openai/gpt-5.6-luna-fast",
-          "variant": "low",
-          "skills": [],
-          "mcps": ["default","librarian","ludus-mcp"]
-        },
-        "fixer": {
-          "skills_add": ["*"]
+          "mcps": ["github-write","ludus-mcp"]
         },
         "oracle": {
-          "skills_add": ["*"]
+          "model": "openai/gpt-6-astra",
+          "variant": "high",
+          "skills_add": ["codebase-design","systematic-debugging","verification-planning"],
+          "mcps": ["research","github-read"]
         },
-		"generic": {
-      "model": "openai/gpt-5.6-luna",
-      "variant": "low",
-      "prompt": "You are a fast generic execution agent for routine mechanical command work. Run requested shell commands, inspect results, and report concise outcomes. For git commits or pushes, inspect git status, git diff, and recent log first; stage only intended files; avoid secrets; preserve repository commit-message style; never amend, rebase, reset --hard, clean, force-push, delete branches, or perform destructive history operations unless the user explicitly requested that exact operation. Do not edit code or make architecture/design decisions.",
-      "orchestratorPrompt": "Delegate to @fast-generic for routine mechanical command work: git status/diff/log reconnaissance, normal commit preparation, creating commits, pushing commits, and no-edit command validation such as lint, typecheck, static verification, tests, builds, or package-manager equivalents. Ask it to inspect diffs before committing, stage only intended files, avoid secrets, preserve repository commit-message style, and report final commit hashes or push results. Do not use it for code edits, design work, architecture, debugging strategy, docs research, or destructive git history operations such as amend, rebase, reset --hard, clean, force-push, or deleting branches unless the user explicitly requested that exact operation.",
-      "skills": [],
-      "mcps": ["ludus-mcp"]
-    }
+        "librarian": {
+          "model": "openai/gpt-5.6-luna",
+          "variant": "medium",
+          "skills_add": ["ludus-cli","troubleshooting"],
+          "mcps": ["research","github-read"]
+     	  },
+	  	  "explorer": {
+          "model": "openai/gpt-5.6-luna-fast",
+          "variant": "low"
+        },
+        "fixer": {
+          "model": "openai/gpt-6-luna",
+          "variant": "medium",
+          "skills_add": ["range-config", "ludus-blueprint", "update-os-template", "update-os-template","ludus-template-naming","change-template-input-language"],
+          // add "browser" if doing webapp work
+          "mcps": [] 
+        },
+		    "fast-generic": {
+          "model": "openai/gpt-5.6-luna",
+          "variant": "low",
+          "prompt": "You are a fast generic execution agent for routine mechanical command work. Run requested shell commands, inspect results, and report concise outcomes. For git commits or pushes, inspect git status, git diff, and recent log first; stage only intended files; avoid secrets; preserve repository commit-message style; never amend, rebase, reset --hard, clean, force-push, delete branches, or perform destructive history operations unless the user explicitly requested that exact operation. Do not edit code or make architecture/design decisions.",
+          "orchestratorPrompt": "Delegate to @fast-generic for routine mechanical command work: git status/diff/log reconnaissance, normal commit preparation, creating commits, pushing commits, and no-edit command validation such as lint, typecheck, static verification, tests, builds, or package-manager equivalents. Ask it to inspect diffs before committing, stage only intended files, avoid secrets, preserve repository commit-message style, and report final commit hashes or push results. Do not use it for code edits, design work, architecture, debugging strategy, docs research, or destructive git history operations such as amend, rebase, reset --hard, clean, force-push, or deleting branches unless the user explicitly requested that exact operation.",
+          "skills_add": ["ansible-validation"],
+          "mcps": []
+        }
       }
     }
-  }
+  },
+  "disabled_mcps": ["gh_grep", "context7","hermes"]
 }
