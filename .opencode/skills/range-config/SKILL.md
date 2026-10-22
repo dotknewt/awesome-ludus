@@ -21,7 +21,9 @@ Use this skill to build safe, valid Ludus YAML configurations and explain tradeo
      stale_hours: 0
      timezone: Europe/Oslo
    ```
-   The official schema default timezone is `America/New_York`; `Europe/Oslo` is this repository's mandated default. When a user explicitly asks to change or exclude a setting, apply the explicit instruction and note the deviation. If the whole `defaults:` block is unwanted, that too must be an explicit instruction — never drop these defaults silently.
+    The official schema default timezone is `America/New_York`; `Europe/Oslo` is this repository's mandated default. When a user explicitly asks to change or exclude a setting, apply the explicit instruction and note the deviation. If the whole `defaults:` block is unwanted, that too must be an explicit instruction — never drop these defaults silently.
+
+   Also apply the router defaults required by the canonical [Ludus authoring policy](../../../docs/instructions/ludus-authoring.md#range-creation-defaults): `template: no-debian-13.5-x64-server-template`, `vm_name: "{{ range_id }}-router"`, and `hostname: "{{ range_id }}-router"`. Explicit user overrides or an explicit request for no router take precedence. These are repository defaults, not official Ludus defaults.
 
 3. **Use `{{ range_id }}` template strings** in vm_name and hostname fields. This resolves to the user's range ID (e.g., "JS").
 
