@@ -49,11 +49,11 @@ running Docker as root.
 
 The documented controller-side workaround is the Ansible Core 2.16.14
 `reset_connection` hotfix in
-[`docs/troubleshooting/docker-socket-reset/`](../../../docs/troubleshooting/docker-socket-reset/).
+[`docker-socket-reset/`](docker-socket-reset/).
 It moves connection-option variable templating into a shared helper used by
 normal connection setup and connection reset. The accompanying patch is
 available there as
-[`ansible-core-2.16.14-reset-connection.patch`](../../../docs/troubleshooting/docker-socket-reset/ansible-core-2.16.14-reset-connection.patch).
+[`ansible-core-2.16.14-reset-connection.patch`](docker-socket-reset/ansible-core-2.16.14-reset-connection.patch).
 
 This patch targets the shared system Ansible installation, not this role. It
 was prepared for Ansible Core 2.16.14 and does not address the documented
