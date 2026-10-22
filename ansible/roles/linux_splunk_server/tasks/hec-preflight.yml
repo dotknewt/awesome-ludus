@@ -484,12 +484,70 @@
   no_log: true
   when: splunk_server_hec_enabled
 
+- name: Read current effective Splunk management listener provenance
+  ansible.builtin.command:
+    argv:
+      - "{{ splunk_server_home }}/bin/splunk"
+      - btool
+      - server
+      - list
+      - httpServer
+      - --debug
+  register: splunk_server_hec_pre_server  # noqa: var-naming[no-role-prefix]
+  changed_when: false
+  check_mode: false
+  no_log: true
+  when: splunk_server_hec_enabled
+
+- name: Read current effective Splunk web listener provenance
+  ansible.builtin.command:
+    argv:
+      - "{{ splunk_server_home }}/bin/splunk"
+      - btool
+      - web
+      - list
+      - settings
+      - --debug
+  register: splunk_server_hec_pre_web  # noqa: var-naming[no-role-prefix]
+  changed_when: false
+  check_mode: false
+  no_log: true
+  when: splunk_server_hec_enabled
+
 - name: Parse pre-write btool stanza and provenance records  # noqa: var-naming[no-role-prefix]
   ansible.builtin.set_fact:
     splunk_server_hec_pre_inputs_parse: >-
       {{ splunk_server_hec_pre_inputs.stdout | splunk_hec_parse_btool }}
     splunk_server_hec_pre_indexes_parse: >-
       {{ splunk_server_hec_pre_indexes.stdout | splunk_hec_parse_btool }}
+    splunk_server_hec_pre_server_parse: >-
+      {{ splunk_server_hec_pre_server.stdout | splunk_hec_parse_btool }}
+    splunk_server_hec_pre_web_parse: >-
+      {{ splunk_server_hec_pre_web.stdout | splunk_hec_parse_btool }}
+  no_log: true
+  when: splunk_server_hec_enabled
+
+- name: Classify known non-HEC listener collisions  # noqa: var-naming[no-role-prefix]
+  ansible.builtin.set_fact:
+    splunk_server_hec_listener_conflicts: >-
+      {{ splunk_server_hec_pre_inputs_parse |
+         splunk_hec_non_hec_listener_conflicts(
+           splunk_server_hec_pre_server_parse,
+           splunk_server_hec_pre_web_parse,
+           splunk_server_hec_port,
+           splunk_receiver_port,
+           splunk_server_mgmt_port,
+           splunk_server_web_port) }}
+  no_log: true
+  when: splunk_server_hec_enabled
+
+- name: Reject known non-HEC listener collisions before HEC writes
+  ansible.builtin.assert:
+    that:
+      - splunk_server_hec_listener_conflicts | length == 0
+    fail_msg: >-
+      The requested HEC port conflicts with a declared or effective Splunk
+      receiving, management, or web listener; inspect redacted provenance.
   no_log: true
   when: splunk_server_hec_enabled
 
@@ -533,6 +591,7 @@
   register: splunk_server_hec_clustering  # noqa: var-naming[no-role-prefix]
   changed_when: false
   check_mode: false
+  no_log: true
   when: splunk_server_hec_enabled
 
 - name: Read effective Splunk management TLS configuration
@@ -547,6 +606,7 @@
   register: splunk_server_hec_management_tls  # noqa: var-naming[no-role-prefix]
   changed_when: false
   check_mode: false
+  no_log: true
   when: splunk_server_hec_enabled
 
 - name: Require standalone Splunk context for owned HEC app
@@ -554,6 +614,7 @@
     that:
       - splunk_server_hec_clustering.stdout is not regex('(?i)mode\\s*=\\s*(slave|peer)')
     fail_msg: Cluster peers have a different precedence tier and are not supported by this owned HEC path.
+  no_log: true
   when: splunk_server_hec_enabled
 
 - name: Require management TLS when HEC TLS is enabled
@@ -562,4 +623,5 @@
       - not splunk_server_hec_ssl_enabled or
         splunk_server_hec_management_tls.stdout is regex('(?i)enableSplunkdSSL\\s*=\\s*(true|1)')
     fail_msg: Splunk HEC TLS cannot be enabled while effective management TLS is disabled.
+  no_log: true
   when: splunk_server_hec_enabled

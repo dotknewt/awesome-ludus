@@ -225,6 +225,101 @@ def effective_conflicts(inputs, indexes_parsed, owned_inputs, owned_indexes,
     return conflicts
 
 
+def _effective_boolean(records, stanza, key, default, label, conflicts):
+    matches = [item for item in records
+               if item["stanza"] == stanza and item["key_lower"] == key.lower()]
+    if not matches:
+        return default
+    if len(matches) != 1:
+        conflicts.append(f"{label}: expected at most one effective {key} record")
+        return None
+    normalized = str(matches[0]["value"]).strip().lower()
+    aliases = {"1": True, "true": True, "yes": True, "on": True,
+               "0": False, "false": False, "no": False, "off": False}
+    if normalized not in aliases:
+        conflicts.append(f"{label}: effective {key} has unsupported boolean shape")
+        return None
+    return aliases[normalized]
+
+
+def _effective_port(records, stanza, key, label, conflicts):
+    matches = [item for item in records
+               if item["stanza"] == stanza and item["key_lower"] == key.lower()]
+    if not matches:
+        conflicts.append(f"{label}: expected one effective port record, found 0")
+        return None
+    if len(matches) != 1:
+        conflicts.append(f"{label}: expected one effective port record, found {len(matches)}")
+        return None
+    value = matches[0]["value"].strip()
+    match = re.search(r"(?:^|:)([0-9]{1,5})$", value)
+    if not match or not 1 <= int(match.group(1)) <= 65535:
+        conflicts.append(f"{label}: effective listener port has unsupported shape")
+        return None
+    return int(match.group(1)), matches[0]["source"]
+
+
+def non_hec_listener_conflicts(inputs, server, web, hec_port, receiving_port,
+                               management_port, web_port):
+    """Return known non-HEC listener collisions without returning raw values."""
+    conflicts = (list(inputs.get("errors", [])) + list(server.get("errors", []))
+                 + list(web.get("errors", [])))
+    declared = {
+        "receiving": receiving_port,
+        "management": management_port,
+        "web": web_port,
+    }
+    for label, port in declared.items():
+        try:
+            matches_hec = int(hec_port) == int(port)
+        except (TypeError, ValueError):
+            conflicts.append(f"{label}: declared listener port is not numeric")
+            continue
+        if matches_hec:
+            conflicts.append(f"HEC port collides with declared Splunk {label} port")
+
+    input_records = inputs.get("records", [])
+    receiving_prefixes = ("splunktcp://", "splunktcp-ssl://",
+                          "splunktcp:", "splunktcp-ssl:")
+    receiving_stanzas = sorted({item["stanza"] for item in inputs.get("stanzas", [])
+                                if item["stanza"].startswith(receiving_prefixes)})
+    for stanza in receiving_stanzas:
+        disabled = _effective_boolean(input_records, stanza, "disabled", False,
+                                      "receiving", conflicts)
+        if disabled is None or disabled:
+            continue
+        prefix = next(item for item in receiving_prefixes if stanza.startswith(item))
+        endpoint = stanza[len(prefix):]
+        match = re.search(r"(?:^|:)([0-9]{1,5})$", endpoint)
+        if not match or not 1 <= int(match.group(1)) <= 65535:
+            conflicts.append("receiving: effective listener stanza has unsupported port shape")
+            continue
+        if int(match.group(1)) == int(hec_port):
+            sources = sorted({item["source"] for item in input_records if item["stanza"] == stanza})
+            source = sources[0] if sources else "<stanza provenance only>"
+            conflicts.append(f"HEC port collides with effective Splunk receiving listener: {source}")
+
+    server_records = server.get("records", [])
+    web_records = web.get("records", [])
+    default_port_disabled = _effective_boolean(
+        server_records, "httpServer", "disableDefaultPort", False,
+        "management", conflicts)
+    if default_port_disabled is False:
+        management = _effective_port(web_records, "settings", "mgmtHostPort",
+                                     "management", conflicts)
+        if management and management[0] == int(hec_port):
+            conflicts.append(f"HEC port collides with effective Splunk management listener: {management[1]}")
+
+    web_enabled = _effective_boolean(web_records, "settings", "startwebserver",
+                                     True, "web", conflicts)
+    if web_enabled is True:
+        effective_web = _effective_port(web_records, "settings", "httpport",
+                                       "web", conflicts)
+        if effective_web and effective_web[0] == int(hec_port):
+            conflicts.append(f"HEC port collides with effective Splunk web listener: {effective_web[1]}")
+    return conflicts
+
+
 class FilterModule:
     def filters(self):
         return {
@@ -233,4 +328,5 @@ class FilterModule:
             "splunk_hec_raw_conflicts": raw_conflicts,
             "splunk_hec_preflight_effective_conflicts": preflight_effective_conflicts,
             "splunk_hec_effective_conflicts": effective_conflicts,
+            "splunk_hec_non_hec_listener_conflicts": non_hec_listener_conflicts,
         }

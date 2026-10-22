@@ -132,6 +132,7 @@ class HecContractStatic(unittest.TestCase):
         required = {
             "parse_raw_files", "parse_btool", "raw_conflicts",
             "preflight_effective_conflicts", "effective_conflicts", "_require",
+            "non_hec_listener_conflicts", "_effective_port",
         }
         self.assertTrue(required <= functions, f"missing bounded parser functions: {required - functions}")
         self.assertNotIn("subprocess", source, "parser helper must not execute services or commands")
@@ -149,6 +150,46 @@ class HecContractStatic(unittest.TestCase):
         sensitive = [task for task in tasks if "splunk_hec_raw_conflicts" in task_text(task)]
         self.assertTrue(sensitive)
         self.assertTrue(all(task.get("no_log") is True for task in sensitive))
+
+    def test_preflight_redacts_sensitive_btool_and_rejects_known_listener_collisions(self):
+        tasks = ARTIFACTS.yaml(self, "tasks/hec-preflight.yml", list)
+        source = "\n".join(task_text(task) for task in tasks)
+        parser_source = ARTIFACTS.read(self, "filter_plugins/hec_config.py")
+        for fragment in (
+            "splunk_hec_non_hec_listener_conflicts",
+            "splunk_server_hec_pre_inputs_parse",
+            "splunk_server_hec_pre_server_parse",
+            "splunk_server_hec_pre_web_parse",
+            "splunk_receiver_port",
+            "splunk_server_mgmt_port",
+            "splunk_server_web_port",
+        ):
+            self.assertIn(fragment, source, f"listener preflight does not consume {fragment}")
+
+        secret_results = ("splunk_server_hec_clustering", "splunk_server_hec_management_tls")
+        for result in secret_results:
+            consumers = [task for task in tasks if result in task_text(task)]
+            self.assertTrue(consumers, f"missing discovery or consumer for {result}")
+            self.assertTrue(all(task.get("no_log") is True for task in consumers),
+                            f"{result} discovery and consumers must be redacted")
+
+        listener_tasks = [task for task in tasks
+                          if "splunk_server_hec_listener_conflicts" in task_text(task)]
+        self.assertGreaterEqual(len(listener_tasks), 2)
+        self.assertTrue(all(task.get("no_log") is True for task in listener_tasks))
+        for stanza_prefix in ("splunktcp://", "splunktcp-ssl://",
+                              "splunktcp:", "splunktcp-ssl:"):
+            self.assertIn(f'"{stanza_prefix}"', parser_source)
+        self.assertRegex(
+            parser_source,
+            r'_effective_port\(web_records,\s*"settings",\s*"mgmtHostPort"',
+            "management port must come from effective web.conf [settings] provenance",
+        )
+        self.assertRegex(
+            parser_source,
+            r'_effective_boolean\(\s*server_records,\s*"httpServer",\s*"disableDefaultPort"',
+            "management disablement must come from server.conf [httpServer] provenance",
+        )
 
     def test_secret_files_and_directories_have_restricted_modes(self):
         tasks = ARTIFACTS.yaml(self, "tasks/hec.yml", list)

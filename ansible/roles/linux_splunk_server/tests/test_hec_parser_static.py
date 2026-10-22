@@ -136,6 +136,68 @@ token = {SECRET}
         self.assertIn("unexpected source", result)
         self.assertNotIn(SECRET, result)
 
+    def test_effective_receiving_management_and_web_collisions_are_rejected(self):
+        inputs = self.parser.parse_btool(
+            "/etc/apps/receiver/local/inputs.conf [splunktcp:9999] disabled = 0\n"
+            "/etc/apps/receiver/local/inputs.conf [splunktcp-ssl:10000] disabled = 0\n"
+            "/etc/apps/receiver/local/inputs.conf [splunktcp://collector:10001] disabled = 0\n"
+            "/etc/apps/receiver/local/inputs.conf [splunktcp-ssl://collector:10002] disabled = 0\n")
+        server = self.parser.parse_btool(
+            "/etc/system/local/server.conf [httpServer] disableDefaultPort = false\n")
+        web = self.parser.parse_btool(
+            "/etc/system/local/web.conf [settings] mgmtHostPort = 127.0.0.1:9090\n"
+            "/etc/system/local/web.conf [settings] httpport = 9000\n"
+            "/etc/system/local/web.conf [settings] startwebserver = true\n")
+        cases = ((9999, "receiving"), (10000, "receiving"),
+                 (10001, "receiving"), (10002, "receiving"),
+                 (9090, "management"), (9000, "web"))
+        for hec_port, label in cases:
+            with self.subTest(listener=label):
+                conflicts = self.parser.non_hec_listener_conflicts(
+                    inputs, server, web, hec_port, 9997, 8089, 8000)
+                self.assertTrue(any(label in item for item in conflicts), conflicts)
+
+    def test_disabled_listener_records_are_ignored_and_malformed_values_are_redacted(self):
+        inputs = self.parser.parse_btool(
+            "/etc/apps/receiver/local/inputs.conf [splunktcp:8088] disabled = true\n")
+        server = self.parser.parse_btool(
+            "/etc/system/local/server.conf [httpServer] disableDefaultPort = true\n")
+        web = self.parser.parse_btool(
+            "/etc/system/local/web.conf [settings] mgmtHostPort = 8088\n"
+            "/etc/system/local/web.conf [settings] httpport = 8088\n"
+            "/etc/system/local/web.conf [settings] startwebserver = false\n")
+        self.assertEqual(self.parser.non_hec_listener_conflicts(
+            inputs, server, web, 8088, 9997, 8089, 8000), [])
+
+        malformed = self.parser.parse_btool(
+            f"/etc/apps/receiver/local/inputs.conf [splunktcp://{SECRET}] disabled = 0\n")
+        conflicts = self.parser.non_hec_listener_conflicts(
+            malformed, {"records": [], "errors": []}, {"records": [], "errors": []},
+            8088, 9997, 8089, 8000)
+        self.assertTrue(any("unsupported port shape" in item for item in conflicts))
+        self.assertNotIn(SECRET, "\n".join(conflicts))
+
+        malformed_web = self.parser.parse_btool(
+            f"/etc/system/local/web.conf [settings] startwebserver = {SECRET}\n")
+        conflicts = self.parser.non_hec_listener_conflicts(
+            {"records": [], "stanzas": [], "errors": []},
+            {"records": [], "errors": []}, malformed_web,
+            8088, 9997, 8089, 8000)
+        self.assertTrue(any("unsupported boolean shape" in item for item in conflicts))
+        self.assertNotIn(SECRET, "\n".join(conflicts))
+
+    def test_enabled_management_and_web_without_effective_ports_fail_closed(self):
+        server = self.parser.parse_btool(
+            "/etc/system/local/server.conf [httpServer] disableDefaultPort = false\n")
+        web = self.parser.parse_btool(
+            "/etc/system/local/web.conf [settings] startwebserver = true\n")
+        conflicts = self.parser.non_hec_listener_conflicts(
+            {"records": [], "stanzas": [], "errors": []}, server, web,
+            8088, 9997, 8089, 8000)
+        result = "\n".join(conflicts)
+        self.assertIn("management: expected one effective port record, found 0", result)
+        self.assertIn("web: expected one effective port record, found 0", result)
+
 
 if __name__ == "__main__":
     unittest.main()
