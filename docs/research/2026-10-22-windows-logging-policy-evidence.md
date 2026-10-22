@@ -105,7 +105,7 @@ audit?: {dc, prior_ad_version, intended_ad_version, prior_gpt_version, intended_
          desired_hash, desired_deletion}
 ```
 
-All GUIDs/DNs are canonicalized only after authoritative resolution. A new-object pending record is persisted before `New-GPO` with `target_name` and null GUID; once creation returns, update/flush pending with that GUID before marker/content/link mutation. A crash before GUID recording causes an unmanaged-name collision requiring review, never adoption. Every registry/audit/link addition, update, removal or disable persists prior and intended ownership before mutation; commit replaces owned identifiers only after authoritative readback. Missing/moved state, owner/domain/writer mismatch, unknown schema, malformed pending, existing unmanaged name, marker/GUID replacement, or any pending/current state outside its bounded transition fails closed. State transfer to a new writer is an explicit operator procedure, not reconstruction.
+All GUIDs/DNs are canonicalized only after authoritative resolution. A new-object pending record is persisted before `New-GPO` with `target_name` and null GUID; the exact ownership marker is supplied in the documented `New-GPO -Comment` creation call, and once creation returns pending is updated/flushed with that GUID before content/link mutation. A crash before GUID recording causes an unmanaged-name collision requiring review, never adoption. Every registry/audit/link addition, update, removal or disable persists prior and intended ownership before mutation; commit replaces owned identifiers only after authoritative readback. Missing/moved state, owner/domain/writer mismatch, unknown schema, malformed pending, existing unmanaged name, marker/GUID replacement, or any pending/current state outside its bounded transition fails closed. State transfer to a new writer is an explicit operator procedure, not reconstruction.
 
 Check mode acquires/read-checks the lock and state, performs discovery/comparison/planning, and writes nothing: no state, GPO, registry, CSV, LDAP, GPT or link mutation. Disabled previously owned policies retire only their committed values/rows and disable committed links; a disabled never-managed policy is a no-op. Unrelated settings, audit rows, tuples, links, ACLs and user policy are immutable from this role's perspective.
 
@@ -116,6 +116,90 @@ Reused static inspection evidence [A1], not re-executed: `/tmp/opencode/portable
 There are five backups, but the legacy role imports only three: GPO-Logging, GPO-CertEnroll and GPO-DisableDefender. Default Domain Policy and Default Domain Controllers Policy are not imported and remain excluded. Correct physical inventory is four INF and four `registry.pol` files: DisableDefender has no INF and Default Domain Controllers Policy has no `registry.pol`. The three selected backups record the logging, `AEPolicy=7`/10/`MY`, and two Defender values represented above. The CertEnroll backup also contains foreign `condef.local` PolicyServers identity/deletion material; readable recreation deliberately omits it. [A1]
 
 ## Evidence matrix and unresolved gates
+
+### W3 implementation disposition
+
+The W3 source implementation consumes, but does not amend, the frozen protocol
+contract above. `tasks/main.yml`/`tasks/policy.yml` pass the documented lowercase
+hashtable through `ansible.windows.win_powershell` and assemble the three local
+function files by controller-side lookup. `Invoke-LoggingPolicy.ps1` serializes
+create, value-scoped registry, audit, and direct-link work under the W2 writer
+with pending state before each mutation and authoritative readback before clear.
+`Publish-LoggingAudit.ps1` contains the bounded four-row-class CSV merge and the
+selected-DC CSV → combined LDAP replacement → GPT update sequence. The Jinja
+template contains only the approved role-owned system-subcategory rows. No
+legacy archive bytes or external importer were added.
+
+Evidence chronology: the controller-accepted W3 RED run is
+`.superpowers/sdd/2026-10-22-windows-logging-policy/validation-W3-red.txt`
+(13 tests, six expected missing-artifact failures, exit 1). The accepted initial
+GREEN artifact is `validation-W3-green.txt`: changed-task YAML validation passed
+with zero coverage errors, scoped `ansible-lint` passed with 0 failures/warnings
+in two files (while reporting the repository yamllint-configuration notice),
+Jinja parsing exited 0, and all 13 explicit-path static contracts passed. `pwsh`
+was unavailable (exit 127), so no PowerShell parser or Windows PowerShell 5.1
+evidence exists.
+
+Fix round 1 re-read official R22 directly. The page metadata identifies updated
+2024-10-30 content at MicrosoftDocs/open_specs_windows commit
+`817392bbb417d3771ef4fdfbbc11e4226d76470f`; its table explicitly includes each
+accepted subcategory GUID, including Removable Storage `0cce9245`, Central
+Access Policy Staging `0cce9246`, User/Device Claims `0cce9247`, PNP Activity
+`0cce9248`, and Group Membership `0cce9249`. The publisher now uses an explicit
+table transcription for validating/preserving unrelated rows; it does not infer
+a numeric range, and W2's 15-GUID ownership allowlist is unchanged. Per-user
+Policy Target identity now uses native `SecurityIdentifier.Value`, preserving
+the original unrelated row text, and payload hash/deletion readback now precedes
+both LDAP and GPT mutation while final full readback remains. Controller-owned
+`validation-W3-fix1.txt` records all 15 focused static contracts passing in
+0.031 seconds with exit 0. It validly reuses the unchanged YAML/lint/Jinja
+evidence from `validation-W3-green.txt` using recorded SHA-256 values
+`339abcb46a3accfdc4a97b7563691ed1e906cbac12ee04b0beced2e8af2b375d`,
+`69893c28e5b0d9e5e2c6fb5bee7662a93952156f385a4ce53b2b71b1cbfad43a`,
+and `70bfc0e84b56c9a40b455ca1e1ffec7c5224cdcc49330874cf0fcaeb8309141b`
+for `tasks/main.yml`, `tasks/policy.yml`, and `templates/audit.csv.j2`
+respectively. `pwsh` remained unavailable, and the implementation author ran no
+fix-round validation commands.
+
+The first oracle phase-gate attempt subsequently required four bounded
+remediations. The W2 integer validator now accepts the publisher's `UInt32`
+version values without changing the unsigned version arithmetic or bounds. GPO
+creation uses the documented `New-GPO -Comment` parameter (the oracle-recorded
+MicrosoftDocs source commit is `0ef3f225d29e26d1cf3119f37dfff70bb6165746`),
+with pending intent before creation and returned-GUID persistence before content
+mutation. Desired registry identifiers that already exist outside committed
+ownership now fail closed before planning/check-mode mutation decisions, while
+owned drift remains reconcilable. Finally, a small invocation-local carrier
+records the affected policy/phase/state path and completed versus uncertain
+mutations; the Ansible wrapper exposes that bounded partial result and changed
+status on a terminating failure while preserving the error and durable pending
+state. Controller-owned `validation-W3-gatefix1.txt` records all 16 source
+contracts passing, changed-`policy.yml` YAML validation with zero coverage
+errors, scoped lint passing with its existing repository configuration notice,
+and scoped diff check exit 0. `pwsh` remained unavailable, so no PowerShell
+parser evidence was added. The implementation author ran no validation/live/
+install commands.
+
+Oracle attempt 2 accepted the first three corrections and the progress model,
+but found that pinned `ansible.windows` 3.8.0 defaults result serialization to
+depth 2. The task now requests `depth: 3`, preserving the exact nested
+`result` → `partial_failure` → completed/uncertain arrays → operation-record
+shape without flattening or changing product behavior. A focused static
+assertion ties that depth to the nested contract. Controller-owned
+`validation-W3-gatefix2.txt` records all 16 source contracts passing in 0.035
+seconds, changed-task YAML validation with zero coverage errors, scoped lint
+with 0 failures/warnings, and scoped diff exit 0. `pwsh` remained unavailable
+(exit 127). Oracle attempt 3 approved the authored static deliverable with no
+remaining blocker; native compatibility and deployment readiness remain
+unverified, and no live operation was authorized. The author ran no validation
+or live checks.
+
+These source checks can expose missing interfaces, broad forbidden commands,
+and obvious phase-order regressions only. They cannot establish Windows
+PowerShell 5.1 compatibility, LDAP modify semantics, SYSVOL atomicity, crash
+recovery, replication, client application, or any effective audit/PowerShell/
+enrollment/Defender outcome. Actual-entrypoint cases remain deferred pending
+separate live authorization.
 
 | Claim | Static primary/reused evidence | Live evidence | Disposition |
 | --- | --- | --- | --- |

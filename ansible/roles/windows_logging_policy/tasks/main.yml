@@ -1,0 +1,25 @@
+---
+- name: Validate Windows logging policy inventory inputs
+  ansible.builtin.assert:
+    that:
+      - windows_logging_policy_management_host is string
+      - windows_logging_policy_management_host | length > 0
+      - windows_logging_policy_management_host | lower == inventory_hostname | lower
+      - windows_logging_policy_domain is string
+      - windows_logging_policy_server is string
+      - windows_logging_policy_owner_id is string
+      - windows_logging_policy_state_dir is string
+      - windows_logging_policy_logging_enabled | type_debug == 'bool'
+      - windows_logging_policy_enrollment_enabled | type_debug == 'bool'
+      - windows_logging_policy_defender_disable_policy_enabled | type_debug == 'bool'
+      - windows_logging_policy_names is mapping
+      - windows_logging_policy_links is mapping
+      - windows_logging_policy_audit_subcategories is sequence
+      - windows_logging_policy_powershell is mapping
+      - windows_logging_policy_enrollment is mapping
+      - windows_logging_policy_defender is mapping
+    fail_msg: Windows logging policy inputs have invalid types or this is not the designated inventory host
+    quiet: true
+
+- name: Reconcile readable Windows logging policies
+  ansible.builtin.include_tasks: policy.yml

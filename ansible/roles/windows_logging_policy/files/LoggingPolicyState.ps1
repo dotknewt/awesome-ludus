@@ -74,7 +74,8 @@ function Assert-LoggingPolicyInteger {
         [int64] $Minimum,
         [int64] $Maximum
     )
-    $isInteger = $Value -is [byte] -or $Value -is [int16] -or $Value -is [int32] -or $Value -is [int64]
+    $isInteger = $Value -is [byte] -or $Value -is [int16] -or $Value -is [int32] -or
+        $Value -is [int64] -or $Value -is [uint32]
     Assert-LoggingPolicyCondition $isInteger "$Label must be an integer"
     $number = [int64] $Value
     Assert-LoggingPolicyCondition ($number -ge $Minimum -and $number -le $Maximum) "$Label is outside the supported range"
