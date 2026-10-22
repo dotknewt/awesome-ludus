@@ -13,7 +13,18 @@ the Ludus server itself, with this repository present there. An operator
 working remotely must SSH into the server and run the command there.
 
 ## Run from the Ludus server
-
+0. Check if the bridge is already configured:
+```
+   BRIDGE_NUM=
+   if ip -d -j link show dev vmbr100${BRIDGE_NUM} |
+      jq -e '.[0].linkinfo.info_data.ageing_time == 0 and
+      (.[0].flags | contains(["PROMISC"]))' >/dev/null
+   then
+      echo "Promisq: True"
+   else
+      echo "Promisq: False"
+   fi
+```
 1. Ensure this repository is available on the Ludus server and change to its
    root directory (the directory containing `ludus-configure-bridge.yaml`).
    Ansible 2.15 or newer must be available there, as declared by the role
