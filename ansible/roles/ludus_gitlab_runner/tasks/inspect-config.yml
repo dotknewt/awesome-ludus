@@ -1,0 +1,93 @@
+---
+- name: Require standard service configuration path
+  ansible.builtin.assert:
+    that: ludus_gitlab_runner_config_path == '/etc/gitlab-runner/config.toml'
+    fail_msg: The systemd package service reads /etc/gitlab-runner/config.toml; custom paths are unsupported.
+
+- name: Inspect canonical runner config
+  ansible.builtin.stat:
+    path: "{{ ludus_gitlab_runner_config_path }}"
+    follow: false
+  register: ludus_gitlab_runner_config_stat
+
+- name: Reject non-regular canonical config paths before reading
+  ansible.builtin.assert:
+    that:
+      - ludus_gitlab_runner_config_stat.stat.isreg
+      - not ludus_gitlab_runner_config_stat.stat.islnk
+    fail_msg: Existing canonical runner config must be a regular non-symlink file.
+  when: ludus_gitlab_runner_config_stat.stat.exists
+
+- name: Read existing canonical runner config
+  ansible.builtin.slurp:
+    src: "{{ ludus_gitlab_runner_config_path }}"
+  register: ludus_gitlab_runner_config_raw
+  when: ludus_gitlab_runner_config_stat.stat.exists
+  no_log: true
+
+- name: Parse the existing TOML structure
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - >-
+        import json,sys,toml; print(json.dumps(toml.loads(sys.stdin.read()),
+        default=lambda value: value.isoformat() if hasattr(value, 'isoformat')
+        else str(value)))
+    stdin: "{{ ludus_gitlab_runner_config_raw.content | default('') | b64decode }}"
+  register: ludus_gitlab_runner_parsed_config
+  changed_when: false
+  when: ludus_gitlab_runner_config_stat.stat.exists and ludus_gitlab_runner_config_raw.content | b64decode | trim | length > 0
+  no_log: true
+
+- name: Decode parsed runner TOML
+  ansible.builtin.set_fact:
+    ludus_gitlab_runner_parsed_toml: "{{ ludus_gitlab_runner_parsed_config.stdout | default('{}') | from_json }}"
+  no_log: true
+
+- name: Validate existing config ownership and runner identity before API changes
+  ansible.builtin.assert:
+    that:
+      - >-
+        not ludus_gitlab_runner_config_stat.stat.exists or
+        ludus_gitlab_runner_parsed_toml.get('runners', []) | length == 0 or
+        'managed by ludus_gitlab_runner' in (ludus_gitlab_runner_config_raw.content | b64decode)
+      - ludus_gitlab_runner_parsed_toml.get('runners', []) | length <= 1
+      - >-
+        ludus_gitlab_runner_parsed_toml.keys()
+        | difference([
+          'concurrent', 'check_interval', 'connection_max_age', 'log_level',
+          'log_format', 'listen_address', 'sentry_dsn', 'session_server',
+          'shutdown_timeout', 'runners'
+          ])
+        | length == 0
+      - >-
+        ludus_gitlab_runner_parsed_toml.get('runners', []) | length == 0 or
+        ludus_gitlab_runner_parsed_toml.runners[0].url.rstrip('/') ==
+        ludus_gitlab_runner_url.rstrip('/')
+      - >-
+        ludus_gitlab_runner_parsed_toml.get('runners', []) | length == 0 or
+        ludus_gitlab_runner_parsed_toml.runners[0].name == ludus_gitlab_runner_name
+      - >-
+        ludus_gitlab_runner_parsed_toml.get('runners', []) | length == 0 or
+        ludus_gitlab_runner_parsed_toml.runners[0].token | length > 0
+      - >-
+        ludus_gitlab_runner_parsed_toml.get('runners', []) | length == 0 or
+        ludus_gitlab_runner_parsed_toml.runners[0].id | int > 0
+    fail_msg: Existing config is invalid, unrelated, or identifies a different runner; refusing mutations.
+  no_log: true
+
+- name: Require protected ownership for existing token-bearing config
+  ansible.builtin.assert:
+    that:
+      - ludus_gitlab_runner_config_stat.stat.uid == 0
+      - ludus_gitlab_runner_config_stat.stat.mode == '0600'
+    fail_msg: Managed token-bearing runner config must be root-owned mode 0600.
+  when: ludus_gitlab_runner_parsed_toml.get('runners', []) | length > 0
+  no_log: true
+
+- name: Preserve selected existing runner structure
+  ansible.builtin.set_fact:
+    ludus_gitlab_runner_saved_entry: "{{ ludus_gitlab_runner_parsed_toml.get('runners', []) | first | default({}) }}"
+  when: ludus_gitlab_runner_parsed_config.stdout is defined
+  no_log: true

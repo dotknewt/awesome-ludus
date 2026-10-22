@@ -16,7 +16,7 @@
 - name: (GITLAB-CE) Check if GitLab-CE is already installed
   ansible.builtin.stat:
     path: /etc/gitlab
-  register: ludus_gitlab_ce_installed
+  register: ludus_gitlab_ce_installed  # noqa: var-naming[no-role-prefix] — Existing task variable retained for compatibility.
 
 - name: (GITLAB-CE) Download GitLab-CE Deb script
   ansible.builtin.get_url:
@@ -68,3 +68,8 @@
 - name: (GITLAB-CE) Run playbook to add content
   ansible.builtin.include_tasks: content.yml
   when: ludus_gitlab.groups is defined or ludus_gitlab.users is defined
+
+# Create the separately delegated API credential even when groups/users are not configured.
+- name: (GITLAB-CE) Bootstrap delegated runner API credential
+  ansible.builtin.include_tasks: bootstrap.yml
+  when: ((ludus_gitlab | default({})).bootstrap | default({})).enabled | default(false) | bool

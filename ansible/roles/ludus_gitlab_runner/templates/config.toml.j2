@@ -1,0 +1,24 @@
+# managed by ludus_gitlab_runner
+concurrent = 1
+check_interval = 0
+
+[[runners]]
+  name = {{ ludus_gitlab_runner_registration_entry.name | to_json }}
+  url = {{ ludus_gitlab_runner_registration_entry.url | to_json }}
+  token = {{ ludus_gitlab_runner_registration_entry.token | to_json }}
+  executor = {{ ludus_gitlab_runner_registration_entry.executor | to_json }}
+{% if ludus_gitlab_runner_registration_entry.id is defined %}
+  id = {{ ludus_gitlab_runner_registration_entry.id }}
+{% endif %}
+{% if ludus_gitlab_runner_registration_entry.token_obtained_at is defined and ludus_gitlab_runner_registration_entry.token_obtained_at is not none %}
+  token_obtained_at = {{ ludus_gitlab_runner_registration_entry.token_obtained_at }}
+{% endif %}
+{% if ludus_gitlab_runner_registration_entry.token_expires_at is defined and ludus_gitlab_runner_registration_entry.token_expires_at is not none %}
+  token_expires_at = {{ ludus_gitlab_runner_registration_entry.token_expires_at }}
+{% endif %}
+  [runners.docker]
+    tls_verify = false
+    image = {{ ludus_gitlab_runner_executor_image | to_json }}
+    privileged = false
+    disable_cache = false
+    volumes = ["/cache"]

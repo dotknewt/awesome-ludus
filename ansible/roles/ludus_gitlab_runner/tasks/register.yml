@@ -1,0 +1,110 @@
+---
+- name: Select the registration entry and token
+  ansible.builtin.set_fact:
+    ludus_gitlab_runner_registration_entry: >-
+      {{ ludus_gitlab_runner_saved_entry
+      if ludus_gitlab_runner_saved_entry | default({}) | length > 0
+      else (ludus_gitlab_runner_created_entry
+      if ludus_gitlab_runner_created_entry is defined else {}) }}
+    ludus_gitlab_runner_registration_token: >-
+      {{ ludus_gitlab_runner_saved_entry.token
+      if ludus_gitlab_runner_saved_entry | default({}) | length > 0
+      else (ludus_gitlab_runner_registration_token
+      if ludus_gitlab_runner_registration_token is defined
+      else ludus_gitlab_runner_auth_token) }}
+  no_log: true
+
+- name: Remove stale temporary registration config
+  ansible.builtin.file:
+    path: /etc/gitlab-runner/config.toml.ludus-tmp
+    state: absent
+  when: ludus_gitlab_runner_registration_entry | length == 0
+
+- name: Create protected temporary registration config file
+  ansible.builtin.file:
+    path: /etc/gitlab-runner/config.toml.ludus-tmp
+    state: touch
+    owner: root
+    group: root
+    mode: '0600'
+  when: ludus_gitlab_runner_registration_entry | length == 0
+
+- name: Register runner into protected temporary configuration
+  ansible.builtin.command:
+    argv:
+      - gitlab-runner
+      - register
+      - --non-interactive
+      - --config
+      - /etc/gitlab-runner/config.toml.ludus-tmp
+      - --url
+      - "{{ ludus_gitlab_runner_url }}"
+      - --token
+      - "{{ ludus_gitlab_runner_registration_token }}"
+      - --executor
+      - docker
+      - --docker-image
+      - "{{ ludus_gitlab_runner_executor_image }}"
+      - --description
+      - "{{ ludus_gitlab_runner_name }}"
+  when: ludus_gitlab_runner_registration_entry | length == 0
+  no_log: true
+  changed_when: true
+
+- name: Read registered runner config
+  ansible.builtin.slurp:
+    src: /etc/gitlab-runner/config.toml.ludus-tmp
+  register: ludus_gitlab_runner_temp_config
+  when: ludus_gitlab_runner_registration_entry | length == 0
+  no_log: true
+
+- name: Parse newly registered TOML structure
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - >-
+        import json,sys,toml; print(json.dumps(toml.loads(sys.stdin.read()),
+        default=lambda value: value.isoformat() if hasattr(value, 'isoformat')
+        else str(value)))
+    stdin: "{{ ludus_gitlab_runner_temp_config.content | default('') | b64decode }}"
+  register: ludus_gitlab_runner_temp_parsed
+  changed_when: false
+  when: ludus_gitlab_runner_registration_entry | length == 0
+  no_log: true
+
+- name: Select newly registered runner structure
+  ansible.builtin.set_fact:
+    ludus_gitlab_runner_registration_entry: >-
+      {{ (ludus_gitlab_runner_temp_parsed.stdout | from_json).get('runners', []) | first }}
+  when: ludus_gitlab_runner_registration_entry | length == 0
+  no_log: true
+
+- name: Write exclusively managed canonical runner config
+  ansible.builtin.template:
+    src: config.toml.j2
+    dest: "{{ ludus_gitlab_runner_config_path }}"
+    owner: root
+    group: root
+    mode: '0600'
+  register: ludus_gitlab_runner_config_write
+  no_log: true
+  diff: false
+
+- name: Remove temporary config after successful canonical write
+  ansible.builtin.file:
+    path: /etc/gitlab-runner/config.toml.ludus-tmp
+    state: absent
+
+- name: Enable and restart changed runner configuration
+  ansible.builtin.service:
+    name: gitlab-runner
+    enabled: true
+    state: restarted
+  when: ludus_gitlab_runner_config_write.changed or ludus_gitlab_runner_docker_group.changed
+
+- name: Ensure runner service is enabled and started
+  ansible.builtin.service:
+    name: gitlab-runner
+    enabled: true
+    state: started

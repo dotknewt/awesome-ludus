@@ -1,0 +1,35 @@
+---
+- name: Enforce runner discovery page limit
+  ansible.builtin.assert:
+    that: ludus_gitlab_runner_page | int <= 100
+    fail_msg: Runner discovery exceeded 100 pages; refusing possible duplicate creation.
+
+- name: Read one runner page
+  ansible.builtin.uri:
+    url: "{{ ludus_gitlab_runner_api_base }}/api/v4/projects/{{ ludus_gitlab_runner_project.id }}/runners?per_page=100&page={{ ludus_gitlab_runner_page }}"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ ludus_gitlab_runner_effective_api_token }}"
+    status_code: 200
+    return_content: true
+  register: ludus_gitlab_runner_current_page
+  no_log: true
+
+- name: Save runner page
+  ansible.builtin.set_fact:
+    ludus_gitlab_runner_pages: "{{ ludus_gitlab_runner_pages + [ludus_gitlab_runner_current_page.json] }}"
+    ludus_gitlab_runner_next_page: >-
+      {% set page_header = ludus_gitlab_runner_current_page.headers.get('x-next-page') %}
+      {{ page_header if page_header is not none else
+         (ludus_gitlab_runner_page | int + 1
+         if ludus_gitlab_runner_current_page.json | length == 100 else '') }}
+  no_log: true
+
+- name: Increment runner page
+  ansible.builtin.set_fact:
+    ludus_gitlab_runner_page: "{{ ludus_gitlab_runner_page | int + 1 }}"
+  when: ludus_gitlab_runner_next_page | length > 0
+
+- name: Fetch subsequent page when pagination continues
+  ansible.builtin.include_tasks: runner-page.yml
+  when: ludus_gitlab_runner_next_page | length > 0

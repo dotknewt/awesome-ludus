@@ -1,0 +1,49 @@
+# yaml-language-server: $schema=https://docs.ludus.cloud/schemas/range-config.json
+
+defaults:
+  snapshot_with_RAM: true
+  stale_hours: 0
+  timezone: Europe/Oslo
+
+ludus:
+  - vm_name: "{{ range_id }}-gitlab-ce"
+    hostname: "{{ range_id }}-gitlab-ce"
+    template: no-debian-13.5-x64-server-template
+    linux: true
+    vlan: 10
+    ip_last_octet: 10
+    ram_gb: 8
+    cpus: 4
+    roles:
+      - ludus_gitlab_ce
+    role_vars:
+      ludus_gitlab:
+        url: "http://10.{{ range_second_octet }}.10.10"
+        smtp: 127.0.0.1
+        email_from: gitlab@example.com
+        displayname: gitlab
+        replyto: no-reply@example.com
+        emailroot: admin@example.com
+        bootstrap:
+          enabled: true
+
+  - vm_name: "{{ range_id }}-gitlab-runner"
+    hostname: "{{ range_id }}-gitlab-runner"
+    template: no-debian-13.5-x64-server-template
+    linux: true
+    vlan: 10
+    ip_last_octet: 11
+    ram_gb: 4
+    cpus: 2
+    roles:
+      - name: ludus_gitlab_runner
+        depends_on:
+          - vm_name: "{{ range_id }}-gitlab-ce"
+            role: ludus_gitlab_ce
+    role_vars:
+      ludus_gitlab_runner_url: "http://10.{{ range_second_octet }}.10.10"
+      ludus_gitlab_runner_bootstrap_from_server: true
+      ludus_gitlab_runner_bootstrap_host: "{{ range_id }}-gitlab-ce"
+      ludus_gitlab_runner_project_name: ludus-runner-demo
+      ludus_gitlab_runner_project_path: root/ludus-runner-demo
+      ludus_gitlab_runner_executor_image: alpine:latest
