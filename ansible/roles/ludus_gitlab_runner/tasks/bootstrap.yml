@@ -1,0 +1,296 @@
+---
+- name: Derive project namespace and leaf path
+  ansible.builtin.set_fact:
+    ludus_gitlab_runner_project_leaf: "{{ ludus_gitlab_runner_project_path.split('/')[-1] }}"
+    ludus_gitlab_runner_project_path_encoded: "{{ ludus_gitlab_runner_project_path | replace('/', '%2F') }}"
+    ludus_gitlab_runner_api_base: "{{ ludus_gitlab_runner_url | regex_replace('/+$', '') }}"
+
+- name: Find project using its encoded full namespace and path
+  ansible.builtin.uri:
+    url: "{{ ludus_gitlab_runner_api_base }}/api/v4/projects/{{ ludus_gitlab_runner_project_path_encoded }}"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ ludus_gitlab_runner_effective_api_token }}"
+    status_code: [200, 404]
+    return_content: true
+  register: ludus_gitlab_runner_project_lookup
+  no_log: true
+
+- name: Fail if persisted state project is no longer present
+  ansible.builtin.fail:
+    msg: Saved runner state references a missing project; manual recovery is required.
+  when:
+    - ludus_gitlab_runner_project_lookup.status == 404
+    - ludus_gitlab_runner_saved_state is defined
+
+- name: Validate saved project ID before any further API writes
+  ansible.builtin.assert:
+    that: ludus_gitlab_runner_saved_state.project_id | int == ludus_gitlab_runner_project_lookup.json.id | int
+    fail_msg: Saved runner state points at a different project; refusing to reuse its token.
+  when:
+    - ludus_gitlab_runner_project_lookup.status == 200
+    - ludus_gitlab_runner_saved_state is defined
+  no_log: true
+
+- name: Resolve target namespace
+  ansible.builtin.uri:
+    url: "{{ ludus_gitlab_runner_api_base }}/api/v4/groups/{{ ludus_gitlab_runner_project_namespace | replace('/', '%2F') }}"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ ludus_gitlab_runner_effective_api_token }}"
+    status_code: [200, 404]
+    return_content: true
+  register: ludus_gitlab_runner_namespace
+  when: ludus_gitlab_runner_project_lookup.status == 404
+  no_log: true
+
+- name: Resolve user namespace if namespace path is not a group
+  ansible.builtin.uri:
+    url: "{{ ludus_gitlab_runner_api_base }}/api/v4/users/{{ ludus_gitlab_runner_project_namespace | urlencode }}"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ ludus_gitlab_runner_effective_api_token }}"
+    status_code: 200
+    return_content: true
+  register: ludus_gitlab_runner_user_namespace
+  when:
+    - ludus_gitlab_runner_project_lookup.status == 404
+    - ludus_gitlab_runner_namespace.status == 404
+  no_log: true
+
+- name: Create project in resolved namespace when absent
+  ansible.builtin.uri:
+    url: "{{ ludus_gitlab_runner_api_base }}/api/v4/projects"
+    method: POST
+    headers:
+      PRIVATE-TOKEN: "{{ ludus_gitlab_runner_effective_api_token }}"
+    body_format: form-urlencoded
+    body:
+      name: "{{ ludus_gitlab_runner_project_name }}"
+      path: "{{ ludus_gitlab_runner_project_leaf }}"
+      namespace_id: >-
+        {{ ludus_gitlab_runner_namespace.json.id
+        if ludus_gitlab_runner_namespace.status == 200
+        else ludus_gitlab_runner_user_namespace.json.id }}
+      initialize_with_readme: "true"
+    status_code: 201
+    return_content: true
+  register: ludus_gitlab_runner_project_create
+  when: ludus_gitlab_runner_project_lookup.status == 404
+  no_log: true
+  changed_when: true
+
+- name: Resolve created or existing project
+  ansible.builtin.set_fact:
+    ludus_gitlab_runner_project: >-
+      {{ ludus_gitlab_runner_project_lookup.json
+      if ludus_gitlab_runner_project_lookup.status == 200
+      else ludus_gitlab_runner_project_create.json }}
+  no_log: true
+
+- name: Validate project identity
+  ansible.builtin.assert:
+    that:
+      - ludus_gitlab_runner_project.path == ludus_gitlab_runner_project_leaf
+      - ludus_gitlab_runner_project.name == ludus_gitlab_runner_project_name
+      - ludus_gitlab_runner_project.id is defined
+      - ludus_gitlab_runner_project.namespace.full_path == ludus_gitlab_runner_project_namespace
+    fail_msg: Existing or created project does not match the requested namespace and identity.
+  no_log: true
+
+- name: Construct CI file API URL
+  ansible.builtin.set_fact:
+    ludus_gitlab_runner_ci_url: >-
+      {{ ludus_gitlab_runner_api_base ~ '/api/v4/projects/' ~ ludus_gitlab_runner_project.id
+      ~ '/repository/files/' ~ (ludus_gitlab_runner_ci_file | urlencode) }}
+
+- name: Read existing CI configuration
+  ansible.builtin.uri:
+    url: "{{ ludus_gitlab_runner_ci_url }}?ref={{ ludus_gitlab_runner_project.default_branch | default('main') | urlencode }}"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ ludus_gitlab_runner_effective_api_token }}"
+    status_code: [200, 404]
+    return_content: true
+  register: ludus_gitlab_runner_ci_lookup
+  no_log: true
+
+- name: Define desired CI file content
+  ansible.builtin.set_fact:
+    ludus_gitlab_runner_ci_content: |-
+      image: {{ ludus_gitlab_runner_executor_image }}
+
+      runner-smoke:
+        script:
+          - echo 'GitLab Runner is ready'
+
+- name: Refuse to overwrite unrelated CI configuration
+  ansible.builtin.assert:
+    that:
+      - >-
+        ludus_gitlab_runner_ci_lookup.status == 404 or
+        ludus_gitlab_runner_ci_lookup.json.content | b64decode == ludus_gitlab_runner_ci_content or
+        ludus_gitlab_runner_allow_ci_file_replace
+    fail_msg: Existing CI differs; explicit replacement opt-in is required.
+  when: ludus_gitlab_runner_ci_lookup.status == 200
+
+- name: Create minimal Docker CI job
+  ansible.builtin.uri:
+    url: "{{ ludus_gitlab_runner_ci_url }}"
+    method: POST
+    headers:
+      PRIVATE-TOKEN: "{{ ludus_gitlab_runner_effective_api_token }}"
+    body_format: json
+    body:
+      branch: "{{ ludus_gitlab_runner_project.default_branch | default('main') }}"
+      commit_message: Add minimal Docker runner pipeline
+      content: "{{ ludus_gitlab_runner_ci_content }}"
+    status_code: 201
+  when: ludus_gitlab_runner_ci_lookup.status == 404
+  no_log: true
+  changed_when: true
+
+- name: Replace existing CI only when explicitly allowed
+  ansible.builtin.uri:
+    url: "{{ ludus_gitlab_runner_ci_url }}"
+    method: PUT
+    headers:
+      PRIVATE-TOKEN: "{{ ludus_gitlab_runner_effective_api_token }}"
+    body_format: json
+    body:
+      branch: "{{ ludus_gitlab_runner_project.default_branch | default('main') }}"
+      commit_message: Update managed Docker runner pipeline
+      content: "{{ ludus_gitlab_runner_ci_content }}"
+    status_code: 200
+  when:
+    - ludus_gitlab_runner_ci_lookup.status == 200
+    - ludus_gitlab_runner_allow_ci_file_replace
+    - ludus_gitlab_runner_ci_lookup.json.content | b64decode != ludus_gitlab_runner_ci_content
+  no_log: true
+  changed_when: true
+
+- name: Initialize runner discovery pagination
+  ansible.builtin.set_fact:
+    ludus_gitlab_runner_page: 1
+    ludus_gitlab_runner_pages: []
+
+- name: Fetch runner discovery page
+  ansible.builtin.include_tasks: runner-page.yml
+
+- name: Find runner with exact configured description
+  ansible.builtin.set_fact:
+    ludus_gitlab_runner_existing: >-
+      {{ (ludus_gitlab_runner_pages | flatten
+      | selectattr('description', 'equalto', ludus_gitlab_runner_name)
+      | list | first) | default({}) }}
+  no_log: true
+
+- name: Fail if remote runner exists but local token cannot be recovered
+  ansible.builtin.fail:
+    msg: >-
+      A runner with this description exists but its authentication token cannot
+      be recovered. Supply the saved token or choose a new name; no remote state
+      was changed.
+  when:
+    - ludus_gitlab_runner_existing | length > 0
+    - ludus_gitlab_runner_saved_entry | default({}) | length == 0
+    - ludus_gitlab_runner_saved_state | default({}) | length == 0
+
+- name: Fail if saved state points to a missing remote runner
+  ansible.builtin.fail:
+    msg: >-
+      Saved runner state exists but the remote runner is absent; manual recovery
+      is required.
+  when:
+    - >-
+      ludus_gitlab_runner_saved_entry | default({}) | length > 0 or
+      ludus_gitlab_runner_saved_state | default({}) | length > 0
+    - ludus_gitlab_runner_existing | length == 0
+
+- name: Validate discovered runner ID against saved config/state
+  ansible.builtin.assert:
+    that:
+      - >-
+        ludus_gitlab_runner_saved_entry.id is defined and
+        ludus_gitlab_runner_saved_entry.id | int > 0 and
+        ludus_gitlab_runner_existing.id | int == ludus_gitlab_runner_saved_entry.id | int
+    fail_msg: Saved runner token belongs to a different runner identity.
+  when:
+    - ludus_gitlab_runner_existing | length > 0
+    - ludus_gitlab_runner_saved_entry | default({}) | length > 0
+  no_log: true
+
+- name: Create runner with server-side tags
+  ansible.builtin.uri:
+    url: "{{ ludus_gitlab_runner_api_base }}/api/v4/user/runners"
+    method: POST
+    headers:
+      PRIVATE-TOKEN: "{{ ludus_gitlab_runner_effective_api_token }}"
+    body_format: json
+    body:
+      runner_type: project_type
+      project_id: "{{ ludus_gitlab_runner_project.id }}"
+      description: "{{ ludus_gitlab_runner_name }}"
+      tag_list: "{{ ludus_gitlab_runner_tags }}"
+      run_untagged: true
+    status_code: 201
+    return_content: true
+  register: ludus_gitlab_runner_created
+  when:
+    - ludus_gitlab_runner_existing | length == 0
+    - ludus_gitlab_runner_saved_entry | default({}) | length == 0
+    - ludus_gitlab_runner_saved_state | default({}) | length == 0
+  no_log: true
+  changed_when: true
+
+- name: Create protected runner state directory
+  ansible.builtin.file:
+    path: "{{ ludus_gitlab_runner_state_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  when: ludus_gitlab_runner_created.json is defined
+
+- name: Persist newly issued runner credential immediately
+  ansible.builtin.copy:
+    dest: "{{ ludus_gitlab_runner_state_path }}"
+    content: >-
+      {{ {'project_path': ludus_gitlab_runner_project_path,
+          'runner_name': ludus_gitlab_runner_name,
+          'gitlab_url': ludus_gitlab_runner_url | regex_replace('/+$', ''),
+          'project_id': ludus_gitlab_runner_project.id,
+          'runner_id': ludus_gitlab_runner_created.json.id,
+          'token': ludus_gitlab_runner_created.json.token,
+          'token_obtained_at': ludus_gitlab_runner_created.json.token_obtained_at | default(None),
+          'token_expires_at': ludus_gitlab_runner_created.json.token_expires_at | default(None)} | to_nice_json }}
+    owner: root
+    group: root
+    mode: '0600'
+  when: ludus_gitlab_runner_created.json is defined
+  no_log: true
+  diff: false
+
+- name: Select registration token from canonical config or saved state
+  ansible.builtin.set_fact:
+    ludus_gitlab_runner_registration_token: >-
+      {{ ludus_gitlab_runner_saved_entry.token
+      if ludus_gitlab_runner_saved_entry | default({}) | length > 0
+      else (ludus_gitlab_runner_saved_state.token
+      if ludus_gitlab_runner_saved_state | default({}) | length > 0
+      else ludus_gitlab_runner_created.json.token) }}
+  when: >-
+    ludus_gitlab_runner_created.json is defined or
+    ludus_gitlab_runner_saved_entry | default({}) | length > 0 or
+    ludus_gitlab_runner_saved_state | default({}) | length > 0
+  no_log: true
+
+- name: Select API-created runner identity for config registration
+  ansible.builtin.set_fact:
+    ludus_gitlab_runner_created_entry: >-
+      {{ ludus_gitlab_runner_created.json | combine({
+          'name': ludus_gitlab_runner_name,
+          'url': ludus_gitlab_runner_url,
+          'executor': 'docker'}) }}
+  when: ludus_gitlab_runner_created.json is defined
+  no_log: true

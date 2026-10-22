@@ -1,5 +1,8 @@
 ---
 ludus_gitlab:  # noqa: var-naming[no-role-prefix] — Public variable retained for compatibility.
+  bootstrap:
+    enabled: false
+    token_file: /var/lib/ludus/gitlab/bootstrap-api-token
   smtp: 127.0.0.1
   url: http://localhost:8080
   email_from: gitlab@example.com

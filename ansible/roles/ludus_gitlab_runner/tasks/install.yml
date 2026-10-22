@@ -1,0 +1,48 @@
+---
+- name: Check for GitLab Runner apt source
+  ansible.builtin.stat:
+    path: /etc/apt/sources.list.d/runner_gitlab-runner.list
+  register: ludus_gitlab_runner_repo
+
+- name: Download GitLab Runner repository setup script
+  ansible.builtin.get_url:
+    url: https://packages.gitlab.com/install/repositories/runner/gitlab-runner/script.deb.sh
+    dest: /var/tmp/ludus-gitlab-runner-repository.sh
+    mode: '0700'
+  when: not ludus_gitlab_runner_repo.stat.exists
+
+- name: Execute GitLab Runner repository setup script
+  ansible.builtin.command:
+    argv:
+      - /bin/bash
+      - /var/tmp/ludus-gitlab-runner-repository.sh
+  args:
+    creates: /etc/apt/sources.list.d/runner_gitlab-runner.list
+  when: not ludus_gitlab_runner_repo.stat.exists
+
+- name: Remove repository setup script
+  ansible.builtin.file:
+    path: /var/tmp/ludus-gitlab-runner-repository.sh
+    state: absent
+  when: not ludus_gitlab_runner_repo.stat.exists
+
+- name: Install GitLab Runner package
+  ansible.builtin.apt:
+    name:
+      - gitlab-runner
+      - python3-toml
+      - docker.io
+    state: present
+    update_cache: true
+
+- name: Ensure Docker service is enabled
+  ansible.builtin.service:
+    name: docker
+    enabled: true
+    state: started
+- name: Ensure runner user belongs to Docker group
+  ansible.builtin.user:
+    name: "{{ ludus_gitlab_runner_user }}"
+    groups: docker
+    append: true
+  register: ludus_gitlab_runner_docker_group

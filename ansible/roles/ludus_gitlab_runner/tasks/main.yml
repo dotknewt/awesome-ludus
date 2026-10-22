@@ -1,0 +1,129 @@
+---
+- name: Validate GitLab Runner inputs
+  ansible.builtin.assert:
+    that:
+      - ludus_gitlab_runner_url | length > 0
+      - ludus_gitlab_runner_auth_token | length > 0 or ludus_gitlab_runner_bootstrap_from_server
+      - >-
+        not ludus_gitlab_runner_bootstrap_from_server or
+        ludus_gitlab_runner_api_token | length > 0 or
+        ludus_gitlab_runner_bootstrap_host | length > 0
+      - >-
+        not ludus_gitlab_runner_bootstrap_from_server or
+        ludus_gitlab_runner_project_path == ludus_gitlab_runner_project_namespace ~ '/' ~
+        (ludus_gitlab_runner_project_path.split('/')[-1])
+    fail_msg: >-
+      Provide a runner auth token or enable bootstrap with either an explicit
+      bootstrap host or an API token. Project path must be namespace/path.
+  no_log: true
+
+- name: Read protected bootstrap API token from the explicit server
+  ansible.builtin.slurp:
+    src: /var/lib/ludus/gitlab/bootstrap-api-token
+  delegate_to: "{{ ludus_gitlab_runner_bootstrap_host }}"
+  become: true
+  register: ludus_gitlab_runner_bootstrap_token_file
+  when:
+    - ludus_gitlab_runner_bootstrap_from_server
+    - ludus_gitlab_runner_api_token | length == 0
+  no_log: true
+
+- name: Select bootstrap API token
+  ansible.builtin.set_fact:
+    ludus_gitlab_runner_effective_api_token: >-
+      {{ ludus_gitlab_runner_api_token if (ludus_gitlab_runner_api_token | length > 0)
+      else (ludus_gitlab_runner_bootstrap_token_file.content | b64decode | trim) }}
+  when: ludus_gitlab_runner_bootstrap_from_server
+  no_log: true
+
+- name: Ensure bootstrap token is available
+  ansible.builtin.assert:
+    that: ludus_gitlab_runner_effective_api_token | default('') | length > 0
+    fail_msg: >-
+      Bootstrap token is unavailable; supply an API token or verify the
+      protected token file on the delegated host.
+  when: ludus_gitlab_runner_bootstrap_from_server
+  no_log: true
+
+- name: Install repository and runner package
+  ansible.builtin.include_tasks: install.yml
+
+- name: Inspect current config before any remote API mutations
+  ansible.builtin.include_tasks: inspect-config.yml
+
+- name: Inspect persisted runner state file
+  ansible.builtin.stat:
+    path: "{{ ludus_gitlab_runner_state_path }}"
+    follow: false
+  register: ludus_gitlab_runner_state_stat
+  when: ludus_gitlab_runner_bootstrap_from_server
+
+- name: Require protected regular runner state file
+  ansible.builtin.assert:
+    that:
+      - ludus_gitlab_runner_state_stat.stat.isreg
+      - ludus_gitlab_runner_state_stat.stat.uid == 0
+      - ludus_gitlab_runner_state_stat.stat.mode == '0600'
+    fail_msg: Existing runner state must be a root-owned regular file with mode 0600.
+  when:
+    - ludus_gitlab_runner_bootstrap_from_server
+    - ludus_gitlab_runner_state_stat.stat.exists
+  no_log: true
+
+- name: Read persisted runner state
+  ansible.builtin.slurp:
+    src: "{{ ludus_gitlab_runner_state_path }}"
+  register: ludus_gitlab_runner_state_raw
+  when:
+    - ludus_gitlab_runner_bootstrap_from_server
+    - ludus_gitlab_runner_state_stat.stat.exists
+  no_log: true
+
+- name: Parse persisted runner state
+  ansible.builtin.set_fact:
+    ludus_gitlab_runner_saved_state: "{{ ludus_gitlab_runner_state_raw.content | b64decode | from_json }}"
+  when: ludus_gitlab_runner_state_raw.content is defined
+  no_log: true
+
+- name: Validate persisted runner state identity
+  ansible.builtin.assert:
+    that:
+      - ludus_gitlab_runner_saved_state.project_path == ludus_gitlab_runner_project_path
+      - ludus_gitlab_runner_saved_state.runner_name == ludus_gitlab_runner_name
+      - ludus_gitlab_runner_saved_state.gitlab_url == ludus_gitlab_runner_url.rstrip('/')
+      - ludus_gitlab_runner_saved_state.token | length > 0
+      - ludus_gitlab_runner_saved_state.runner_id is defined
+      - ludus_gitlab_runner_saved_state.runner_id | int > 0
+      - ludus_gitlab_runner_saved_state.project_id is defined
+    fail_msg: Persisted token state belongs to a different project/runner or is incomplete.
+  when: ludus_gitlab_runner_saved_state is defined
+  no_log: true
+
+- name: Use valid saved credential when no config token exists
+  ansible.builtin.set_fact:
+    ludus_gitlab_runner_saved_entry: >-
+      {{ {'token': ludus_gitlab_runner_saved_state.token,
+          'id': ludus_gitlab_runner_saved_state.runner_id,
+          'name': ludus_gitlab_runner_name,
+          'url': ludus_gitlab_runner_url,
+          'token_obtained_at': ludus_gitlab_runner_saved_state.token_obtained_at | default(None),
+          'token_expires_at': ludus_gitlab_runner_saved_state.token_expires_at | default(None),
+          'executor': 'docker'} }}
+  when:
+    - ludus_gitlab_runner_saved_entry | default({}) | length == 0
+    - ludus_gitlab_runner_saved_state is defined
+  no_log: true
+
+- name: Configure runner, project, and CI using API bootstrap
+  ansible.builtin.include_tasks: bootstrap.yml
+  when: ludus_gitlab_runner_bootstrap_from_server
+
+- name: Set supplied auth token as registration token
+  ansible.builtin.set_fact:
+    ludus_gitlab_runner_registration_token: "{{ ludus_gitlab_runner_auth_token }}"
+    ludus_gitlab_runner_saved_entry: {}
+  when: not ludus_gitlab_runner_bootstrap_from_server
+  no_log: true
+
+- name: Register runner and configure service
+  ansible.builtin.include_tasks: register.yml

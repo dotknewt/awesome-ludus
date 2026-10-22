@@ -1,12 +1,13 @@
 # Ansible Role: GitLab Community Edition (Ludus)
 
-An Ansible Role that installs a Gitlab CE instance and optionnaly create groups and users.
+An Ansible role that installs a GitLab CE instance and optionally creates groups and users.
 
 The role performs the following actions:
 - Setup a repository for GitLab
 - Install the selected version or the latest version of GitLab Community Edition
 - Configure GitLab Community Edition
 - Optionnaly, can create arbitrary groups and users
+- Optionally, creates a dedicated, scoped API credential for explicitly delegated automation
 
 ## Requirements
 
@@ -63,6 +64,36 @@ For the groups and users, they are optionnaly configured in `ludus_gitlab.groups
 
     # Optionnal: Access level of the user to create
     ludus_gitlab.users.access_level: maintainer
+
+### Delegated runner bootstrap credential
+
+Credential creation is opt-in and independent of group/user configuration. Defaults are:
+
+```yaml
+ludus_gitlab:
+  bootstrap:
+    enabled: false
+    token_file: /var/lib/ludus/gitlab/bootstrap-api-token
+```
+
+Set `ludus_gitlab.bootstrap.enabled: true` to create or validate a dedicated GitLab root PAT
+with only the `api` and `create_runner` scopes. The PAT expires after 365 days. The file path
+is an input and defaults to the path above; it must be delegated explicitly to a trusted runner
+host as a root-owned mode-0600 file. Transfer the secret over an approved secret channel—do not
+put its value in range configuration, role variables, inventory, or command arguments. The role
+does not transfer the secret to another host. This credential is a lab-privileged bootstrap
+credential because it belongs to GitLab's root account: anyone who obtains it has the root
+account's API authority within its scopes. Restrict the runner host, transport, and access
+accordingly; this is not a production secret-management design.
+
+On repeat runs the role verifies the persisted token against GitLab and checks ownership,
+permissions, expiration, revocation, and required scopes. GitLab stores a verifier, so the raw
+token cannot be recovered from its PAT record. Keep a protected backup of the raw token if
+recovery is required. If it is lost, missing, or expired, recovery requires an explicit operator
+procedure to provision and securely distribute a replacement; this role will not automatically
+rotate or reissue it, or delete unrelated tokens. Project creation, runner creation, and CI file
+management are owned by the separate runner role, not this CE role. Enabling this option does
+not establish that the remote runner host or runner API workflow is configured or operational.
 
 ## Example Ludus Range Config
 
