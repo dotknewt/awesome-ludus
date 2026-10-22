@@ -1,0 +1,133 @@
+---
+- name: Derive immutable Kubernetes runtime identities from the reviewed manifest
+  ansible.builtin.set_fact:
+    splunk_container_logs_k8s_chart_version: "{{ splunk_container_logs_artifacts.chart.version }}"
+    splunk_container_logs_k8s_chart_filename: >-
+      splunk-otel-collector-{{ splunk_container_logs_artifacts.chart.version }}.tgz
+    splunk_container_logs_k8s_chart_identity: >-
+      splunk-otel-collector-{{ splunk_container_logs_artifacts.chart.version }}
+    splunk_container_logs_k8s_helm_version: >-
+      {{ splunk_container_logs_artifacts.tooling.helm.version }}
+    splunk_container_logs_k8s_helm_diff_version: >-
+      {{ splunk_container_logs_artifacts.tooling.helm_diff.version }}
+
+- name: Validate the bounded Kubernetes input contract
+  ansible.builtin.assert:
+    that:
+      - splunk_container_logs_kubeconfig | type_debug == 'str'
+      - splunk_container_logs_kubeconfig | length > 0
+      - splunk_container_logs_kube_context | type_debug == 'str'
+      - splunk_container_logs_kube_context | length > 0
+      - splunk_container_logs_k8s_cluster_name | type_debug == 'str'
+      - splunk_container_logs_k8s_cluster_name | length > 0
+      - splunk_container_logs_k8s_namespace is match('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
+      - splunk_container_logs_k8s_release is match('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
+      - splunk_container_logs_k8s_existing_secret | type_debug == 'str'
+      - splunk_container_logs_k8s_existing_secret | length == 0 or
+        splunk_container_logs_k8s_existing_secret is match('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
+      - splunk_container_logs_k8s_existing_secret | length == 0 or
+        splunk_container_logs_hec_token | length == 0
+      - splunk_container_logs_k8s_existing_secret | length == 0 or
+        splunk_container_logs_ca_file | length == 0
+      - splunk_container_logs_k8s_node_selector is mapping
+      - splunk_container_logs_k8s_node_selector | length > 0
+      - splunk_container_logs_k8s_node_selector.get('kubernetes.io/os', 'linux') == 'linux'
+      - splunk_container_logs_k8s_node_selector.get('kubernetes.io/arch', 'amd64') == 'amd64'
+      - splunk_container_logs_k8s_tolerations is sequence
+      - splunk_container_logs_k8s_tolerations is not string
+      - splunk_container_logs_k8s_log_paths is sequence
+      - splunk_container_logs_k8s_log_paths is not string
+      - splunk_container_logs_k8s_log_paths | length > 0
+      - splunk_container_logs_k8s_log_paths | unique | length ==
+        splunk_container_logs_k8s_log_paths | length
+      - "'/var/log/pods' in splunk_container_logs_k8s_log_paths"
+      - splunk_container_logs_k8s_log_paths |
+        difference(['/var/log/pods', '/var/log/containers']) | length == 0
+      - "[splunk_container_logs_k8s_checkpoint_path,
+          splunk_container_logs_k8s_queue_path] | splunk_k8s_persistent_paths_valid"
+      - splunk_container_logs_chart_url | type_debug == 'str'
+      - splunk_container_logs_chart_url.startswith('https://')
+    fail_msg: >-
+      Kubernetes mode requires an explicit existing kubeconfig/context/cluster,
+      mutually exclusive token authorities, a valid positive Linux/amd64 node
+      selector, reviewed pod-log roots, distinct persistent paths, and the
+      reviewed HTTPS chart or same-byte mirror.
+  no_log: true
+
+- name: Record stable Kubernetes log mount and source identity
+  ansible.builtin.set_fact:
+    splunk_container_logs_k8s_log_paths_identity: >-
+      {{ splunk_container_logs_k8s_log_paths | sort | join(',') }}
+
+- name: Require Kubernetes label-safe selector entries before any mutation
+  ansible.builtin.assert:
+    that: item.key | splunk_k8s_label_pair_valid(item.value)
+    fail_msg: k8s_node_selector contains an invalid or overlength label key/value
+  loop: "{{ splunk_container_logs_k8s_node_selector | dict2items }}"
+  no_log: true
+
+- name: Inspect the explicit kubeconfig
+  ansible.builtin.stat:
+    path: "{{ splunk_container_logs_kubeconfig }}"
+  register: splunk_container_logs_kubeconfig_status
+  no_log: true
+
+- name: Require a readable regular kubeconfig
+  ansible.builtin.assert:
+    that:
+      - splunk_container_logs_kubeconfig_status.stat.exists
+      - splunk_container_logs_kubeconfig_status.stat.isreg
+      - splunk_container_logs_kubeconfig_status.stat.readable | default(false)
+    fail_msg: splunk_container_logs_kubeconfig must be a readable regular file
+  no_log: true
+
+- name: Read the explicit kubeconfig without changing context
+  ansible.builtin.slurp:
+    src: "{{ splunk_container_logs_kubeconfig }}"
+  register: splunk_container_logs_kubeconfig_raw
+  no_log: true
+
+- name: Parse the explicit kubeconfig in memory
+  ansible.builtin.set_fact:
+    splunk_container_logs_kubeconfig_data: >-
+      {{ splunk_container_logs_kubeconfig_raw.content | b64decode | from_yaml }}
+  no_log: true
+
+- name: Require the exact context to name the exact cluster
+  ansible.builtin.assert:
+    that:
+      - splunk_container_logs_kubeconfig_data is mapping
+      - splunk_container_logs_kubeconfig_data.contexts | default([]) |
+        selectattr('name', 'equalto', splunk_container_logs_kube_context) | list | length == 1
+      - splunk_container_logs_kubeconfig_data.contexts | default([]) |
+        selectattr('name', 'equalto', splunk_container_logs_kube_context) |
+        map(attribute='context.cluster') | first == splunk_container_logs_k8s_cluster_name
+      - splunk_container_logs_kubeconfig_data.clusters | default([]) |
+        selectattr('name', 'equalto', splunk_container_logs_k8s_cluster_name) | list | length == 1
+    fail_msg: kube_context must uniquely select the explicit k8s_cluster_name
+  no_log: true
+
+- name: Read installed Helm version without mutation
+  ansible.builtin.command:
+    argv: [helm, version, --short]
+  register: splunk_container_logs_helm_version
+  changed_when: false
+  check_mode: false
+
+- name: Read installed Helm plugins without mutation
+  ansible.builtin.command:
+    argv: [helm, plugin, list]
+  register: splunk_container_logs_helm_plugins
+  changed_when: false
+  check_mode: false
+
+- name: Require the manifest-reviewed Helm and helm-diff tools
+  ansible.builtin.assert:
+    that:
+      - splunk_container_logs_helm_version.stdout is search(
+          'v' ~ (splunk_container_logs_k8s_helm_version | regex_escape) ~ '([+ ]|$)')
+      - splunk_container_logs_helm_plugins.stdout is search(
+          '(?m)^diff\\s+' ~ (splunk_container_logs_k8s_helm_diff_version | regex_escape) ~ '(\\s|$)')
+    fail_msg: >-
+      Kubernetes mode requires the manifest-reviewed Helm and helm-diff versions;
+      missing tools do not constitute a validated check-mode plan.

@@ -9,3 +9,7 @@
 - name: Configure Docker json-file collection
   ansible.builtin.include_tasks: docker.yml
   when: splunk_container_logs_mode == 'docker'
+
+- name: Configure Kubernetes container log collection
+  ansible.builtin.include_tasks: kubernetes.yml
+  when: splunk_container_logs_mode == 'kubernetes'

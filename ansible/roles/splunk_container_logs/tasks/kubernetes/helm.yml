@@ -1,0 +1,126 @@
+---
+- name: Stage verify render compare and converge the reviewed chart
+  block:
+    - name: Create a protected local chart workspace
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: splunk-container-logs
+      register: splunk_container_logs_k8s_workspace
+      check_mode: false
+
+    - name: Download only the manifest-reviewed chart bytes
+      ansible.builtin.get_url:
+        url: "{{ splunk_container_logs_chart_url }}"
+        dest: >-
+          {{ splunk_container_logs_k8s_workspace.path }}/{{ splunk_container_logs_k8s_chart_filename }}
+        checksum: "{{ splunk_container_logs_artifacts.chart.sha256 }}"
+        mode: "0600"
+        validate_certs: true
+      check_mode: false
+
+    - name: Render protected logs-only values
+      ansible.builtin.template:
+        src: kubernetes-values.yaml.j2
+        dest: "{{ splunk_container_logs_k8s_workspace.path }}/values.yaml"
+        mode: "0600"
+      check_mode: false
+      no_log: true
+
+    - name: Create only the owned collector namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ splunk_container_logs_kubeconfig }}"
+        context: "{{ splunk_container_logs_kube_context }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ splunk_container_logs_k8s_namespace }}"
+            annotations:
+              ludus.splunk/owner-id: "{{ splunk_container_logs_owner_id }}"
+              ludus.splunk/cluster-name: "{{ splunk_container_logs_k8s_cluster_name }}"
+      when:
+        - not ansible_check_mode
+        - splunk_container_logs_namespace_info.resources | length == 0
+
+    - name: Create or update only the explicitly owned caller-token Secret
+      kubernetes.core.k8s:
+        kubeconfig: "{{ splunk_container_logs_kubeconfig }}"
+        context: "{{ splunk_container_logs_kube_context }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ splunk_container_logs_k8s_secret_name }}"
+            namespace: "{{ splunk_container_logs_k8s_namespace }}"
+            annotations:
+              ludus.splunk/owner-id: "{{ splunk_container_logs_owner_id }}"
+              ludus.splunk/cluster-name: "{{ splunk_container_logs_k8s_cluster_name }}"
+          type: Opaque
+          data: >-
+            {{ {'splunk_platform_hec_token': splunk_container_logs_k8s_token_b64} |
+               combine({'splunk_platform_hec_ca_file': splunk_container_logs_k8s_ca_b64}
+               if splunk_container_logs_k8s_use_custom_ca else {}) }}
+      when:
+        - not ansible_check_mode
+        - splunk_container_logs_k8s_existing_secret | length == 0
+      no_log: true
+
+    - name: Compare the reviewed release without mutation in check mode
+      kubernetes.core.helm:
+        kubeconfig: "{{ splunk_container_logs_kubeconfig }}"
+        context: "{{ splunk_container_logs_kube_context }}"
+        name: "{{ splunk_container_logs_k8s_release }}"
+        release_namespace: "{{ splunk_container_logs_k8s_namespace }}"
+        chart_ref: >-
+          {{ splunk_container_logs_k8s_workspace.path }}/{{ splunk_container_logs_k8s_chart_filename }}
+        values_files:
+          - "{{ splunk_container_logs_k8s_workspace.path }}/values.yaml"
+        state: present
+        create_namespace: false
+        dependency_update: false
+        update_repo_cache: false
+        force: false
+        replace: false
+        skip_crds: true
+        reset_values: true
+        wait: true
+        timeout: 10m0s
+      environment:
+        HELM_DIFF_THREE_WAY_MERGE: "true"
+      when: ansible_check_mode
+      no_log: true
+
+    - name: Apply only a real reviewed Helm diff with bounded wait
+      kubernetes.core.helm:
+        kubeconfig: "{{ splunk_container_logs_kubeconfig }}"
+        context: "{{ splunk_container_logs_kube_context }}"
+        name: "{{ splunk_container_logs_k8s_release }}"
+        release_namespace: "{{ splunk_container_logs_k8s_namespace }}"
+        chart_ref: >-
+          {{ splunk_container_logs_k8s_workspace.path }}/{{ splunk_container_logs_k8s_chart_filename }}
+        values_files:
+          - "{{ splunk_container_logs_k8s_workspace.path }}/values.yaml"
+        state: present
+        create_namespace: false
+        dependency_update: false
+        update_repo_cache: false
+        force: false
+        replace: false
+        skip_crds: true
+        reset_values: true
+        wait: true
+        timeout: 10m0s
+      environment:
+        HELM_DIFF_THREE_WAY_MERGE: "true"
+      when: not ansible_check_mode
+      no_log: true
+  always:
+    - name: Remove the protected local chart workspace
+      ansible.builtin.file:
+        path: "{{ splunk_container_logs_k8s_workspace.path | default('') }}"
+        state: absent
+      when: splunk_container_logs_k8s_workspace.path | default('') | length > 0
+      check_mode: false
+      no_log: true

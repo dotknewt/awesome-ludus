@@ -1,0 +1,125 @@
+---
+- name: Discover the selected cluster version read-only
+  kubernetes.core.k8s_cluster_info:
+    kubeconfig: "{{ splunk_container_logs_kubeconfig }}"
+    context: "{{ splunk_container_logs_kube_context }}"
+  register: splunk_container_logs_cluster_info
+  no_log: true
+
+- name: Require a discoverable Kubernetes server version
+  ansible.builtin.assert:
+    that:
+      - splunk_container_logs_cluster_info.version.server is mapping
+      - splunk_container_logs_cluster_info.version.server | length > 0
+    fail_msg: selected context did not report a Kubernetes server version
+  no_log: true
+
+- name: Inspect the destination namespace read-only
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ splunk_container_logs_kubeconfig }}"
+    context: "{{ splunk_container_logs_kube_context }}"
+    api_version: v1
+    kind: Namespace
+    name: "{{ splunk_container_logs_k8s_namespace }}"
+  register: splunk_container_logs_namespace_info
+
+- name: Reject an unmanaged or cross-cluster destination namespace
+  ansible.builtin.assert:
+    that:
+      - splunk_container_logs_namespace_info.resources | length == 0 or
+        (splunk_container_logs_namespace_info.resources.0.metadata.annotations |
+         default({})).get('ludus.splunk/owner-id', '') == splunk_container_logs_owner_id
+      - splunk_container_logs_namespace_info.resources | length == 0 or
+        (splunk_container_logs_namespace_info.resources.0.metadata.annotations |
+         default({})).get('ludus.splunk/cluster-name', '') ==
+        splunk_container_logs_k8s_cluster_name
+    fail_msg: destination namespace exists without matching managed ownership
+
+- name: Select the external or role-owned Secret name
+  ansible.builtin.set_fact:
+    splunk_container_logs_k8s_secret_name: >-
+      {{ splunk_container_logs_k8s_existing_secret
+         if splunk_container_logs_k8s_existing_secret | length > 0
+         else splunk_container_logs_k8s_release ~ '-hec' }}
+
+- name: Inspect every Helm release state read-only
+  kubernetes.core.helm_info:
+    kubeconfig: "{{ splunk_container_logs_kubeconfig }}"
+    context: "{{ splunk_container_logs_kube_context }}"
+    release_name: "{{ splunk_container_logs_k8s_release }}"
+    release_namespace: "{{ splunk_container_logs_k8s_namespace }}"
+    release_state: [all]
+  register: splunk_container_logs_release_info
+  when: splunk_container_logs_namespace_info.resources | length == 1
+  no_log: true
+
+- name: Reject invalid ownership lineage or stable release identity
+  ansible.builtin.assert:
+    that:
+      - splunk_container_logs_release_info.status is not defined or
+        splunk_container_logs_release_info.status.status | lower == 'deployed'
+      - splunk_container_logs_release_info.status is not defined or
+        splunk_container_logs_release_info.status.chart ==
+        splunk_container_logs_k8s_chart_identity
+      - splunk_container_logs_release_info.status is not defined or
+        splunk_container_logs_release_info.status.app_version ==
+        splunk_container_logs_k8s_chart_version
+      - splunk_container_logs_release_info.status is not defined or
+        splunk_container_logs_release_info.status.release_values.get('clusterName', '') ==
+        splunk_container_logs_k8s_cluster_name
+      - splunk_container_logs_release_info.status is not defined or
+        splunk_container_logs_release_info.status.release_values.get('agent', {}).get(
+          'podAnnotations', {}).get('ludus.splunk/owner-id', '') ==
+        splunk_container_logs_owner_id
+      - splunk_container_logs_release_info.status is not defined or
+        splunk_container_logs_release_info.status.release_values.get('agent', {}).get(
+          'podAnnotations', {}).get('ludus.splunk/cluster-name', '') ==
+        splunk_container_logs_k8s_cluster_name
+      - splunk_container_logs_release_info.status is not defined or
+        splunk_container_logs_release_info.status.release_values.get('agent', {}).get(
+          'podAnnotations', {}).get('ludus.splunk/log-paths', '') ==
+        splunk_container_logs_k8s_log_paths_identity
+      - splunk_container_logs_release_info.status is not defined or
+        splunk_container_logs_release_info.status.release_values.get('secret', {}).get(
+          'name', '') == splunk_container_logs_k8s_secret_name
+      - splunk_container_logs_release_info.status is not defined or
+        splunk_container_logs_release_info.status.release_values.get('logsCollection', {}).get(
+          'checkpointPath', '') == splunk_container_logs_k8s_checkpoint_path
+      - splunk_container_logs_release_info.status is not defined or
+        splunk_container_logs_release_info.status.release_values.get('splunkPlatform', {}).get(
+          'sendingQueue', {}).get('persistentQueue', {}).get('storagePath', '') ==
+        splunk_container_logs_k8s_queue_path
+    fail_msg: >-
+      Existing release is pending, failed, unowned, outside reviewed manifest
+      lineage, missing chart-native clusterName, or changes stable Secret/state
+      identity; automatic recovery or migration is forbidden.
+  when: splunk_container_logs_namespace_info.resources | length == 1
+  no_log: true
+
+- name: Inspect namespace DaemonSet source ownership read-only
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ splunk_container_logs_kubeconfig }}"
+    context: "{{ splunk_container_logs_kube_context }}"
+    api_version: apps/v1
+    kind: DaemonSet
+    namespace: "{{ splunk_container_logs_k8s_namespace }}"
+  register: splunk_container_logs_daemonsets
+  when: splunk_container_logs_namespace_info.resources | length == 1
+
+- name: Reject orphaned release resources and known competing log roots
+  ansible.builtin.assert:
+    that:
+      - (item.metadata.labels | default({})).get('app.kubernetes.io/instance', '') !=
+        splunk_container_logs_k8s_release or splunk_container_logs_release_info.status is defined
+      - (item.metadata.labels | default({})).get('app.kubernetes.io/instance', '') ==
+        splunk_container_logs_k8s_release or
+        (item.spec.template.spec.volumes | default([]) |
+         selectattr('hostPath', 'defined') | map(attribute='hostPath.path') | list |
+         intersect(splunk_container_logs_k8s_log_paths) | length == 0)
+    fail_msg: >-
+      Known DaemonSet source ownership conflicts with this release or its
+      selected pod-log roots; coordinate retirement before convergence.
+  loop: "{{ splunk_container_logs_daemonsets.resources | default([]) }}"
+  loop_control:
+    label: >-
+      {{ item.metadata.namespace | default(splunk_container_logs_k8s_namespace) }}/{{ item.metadata.name }}

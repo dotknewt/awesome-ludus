@@ -1,0 +1,12 @@
+---
+- name: Validate Kubernetes inputs and reviewed runtime pins
+  ansible.builtin.include_tasks: kubernetes/input.yml
+
+- name: Inspect Kubernetes destination and release ownership
+  ansible.builtin.include_tasks: kubernetes/cluster-state.yml
+
+- name: Validate Kubernetes Secret material without mutation
+  ansible.builtin.include_tasks: kubernetes/secret.yml
+
+- name: Converge the reviewed logs-only Helm release
+  ansible.builtin.include_tasks: kubernetes/helm.yml
