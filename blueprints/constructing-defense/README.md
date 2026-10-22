@@ -71,11 +71,12 @@ single-node Ludus only and does not create bridges, restart networking, or
 configure individual VLANs independently.
 
 To apply or reapply these settings directly on the host once the range bridge
-exists, run the [host playbook](../../ludus-configure-bridge.yaml) from the
-repository root **on the single-node Ludus/Proxmox host**, with Ansible installed:
+exists, follow the [bridge role guide](../../ansible/roles/ludus_bridge_promisq/README.md)
+and run its wrapper **on the single-node Ludus/Proxmox host**, with Ansible installed:
 
 ```sh
-sudo ansible-playbook ludus-configure-bridge.yaml -e range_second_octet=3
+cd /path/to/awesome-ludus/ansible/roles/ludus_bridge_promisq
+BRIDGE_NUM=3 ./configure-bridge.sh
 ```
 
 Replace `3` with this range's numeric `range_second_octet` allocation (1–254),
@@ -85,7 +86,7 @@ The playbook runs locally on the host and requires the bridge to already exist.
 Removing the role or deleting this blueprint's range does not remove its
 persistent host hook. Before deleting the range or reusing its numeric
 allocation, follow the bridge role's exact
-[retirement procedure](../../ansible/roles/ludus_configure_bridge/README.md#retiring-a-range-or-this-role).
+[retirement procedure](../../ansible/roles/ludus_bridge_promisq/README.md#retiring-a-range-or-this-role).
 
 ## Credentials
 

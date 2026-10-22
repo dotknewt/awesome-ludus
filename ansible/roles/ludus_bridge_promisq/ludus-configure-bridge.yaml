@@ -4,4 +4,4 @@
   connection: local
   gather_facts: false
   roles:
-    - role: ./ansible/roles/ludus_bridge_promisq
+    - role: "{{ playbook_dir }}"

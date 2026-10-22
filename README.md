@@ -23,11 +23,12 @@ When adding an upstream Ansible role:
 
 ## Configure the host packet capture bridge
 
-Once the range bridge exists, run the [host playbook](ludus-configure-bridge.yaml)
-from the repository root **on the single-node Ludus/Proxmox host**, with Ansible installed:
+Once the range bridge exists, use the [bridge role guide](ansible/roles/ludus_bridge_promisq/README.md)
+to run its wrapper **on the single-node Ludus/Proxmox host**, with Ansible installed:
 
 ```sh
-sudo ansible-playbook ludus-configure-bridge.yaml -e range_second_octet=3
+cd /path/to/awesome-ludus/ansible/roles/ludus_bridge_promisq
+BRIDGE_NUM=3 ./configure-bridge.sh
 ```
 
 Replace `3` with your range's numeric `range_second_octet` allocation (1–254),
@@ -36,5 +37,5 @@ The playbook runs locally on the host, enables promiscuous mode, sets bridge
 ageing time to `0`, and installs a persistent interface-up hook to reapply those
 settings. The bridge must already exist.
 
-See the [bridge role documentation](ansible/roles/ludus_configure_bridge/README.md)
+See the [bridge role documentation](ansible/roles/ludus_bridge_promisq/README.md)
 for host prerequisites and the hook retirement procedure.

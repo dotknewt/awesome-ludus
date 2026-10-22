@@ -6,61 +6,51 @@ its `meta/main.yml` declares the role identity `ludus_bridge_promisq`. Do not
 infer compatibility with a role name installed on a Ludus server from either
 name alone; this guide invokes the repository role by its path.
 
-Every task runs once on `localhost` (the Ludus/Proxmox host), uses the
-playbook's local Python interpreter, and escalates to root. The repository-root
-playbook `ludus-configure-bridge.yaml` is explicitly a local play. Run it on
-the Ludus server itself, with this repository present there. An operator
-working remotely must SSH into the server and run the command there.
+The `configure-bridge.sh` wrapper and `ludus-configure-bridge.yaml` playbook
+are colocated with this role. The wrapper resolves the playbook relative to its
+own location; run it on the Ludus server itself, with the repository present
+there. Every role task runs once on `localhost` (the Ludus/Proxmox host), uses
+the playbook's local Python interpreter, and escalates to root.
 
 ## Run from the Ludus server
-0. Check if the bridge is already configured:
-```
-   BRIDGE_NUM=
-   if ip -d -j link show dev vmbr100${BRIDGE_NUM} |
-      jq -e '.[0].linkinfo.info_data.ageing_time == 0 and
-      (.[0].flags | contains(["PROMISC"]))' >/dev/null
-   then
-      echo "Promisq: True"
-   else
-      echo "Promisq: False"
-   fi
-```
-1. Ensure this repository is available on the Ludus server and change to its
-   root directory (the directory containing `ludus-configure-bridge.yaml`).
-   Ansible 2.15 or newer must be available there, as declared by the role
-   metadata; this guide does not install it.
-2. Obtain the range's numeric `range_second_octet` allocation from Ludus. Supply
-   it as a JSON integer from 1 through 254; do not use textual `range_id`.
-3. Run the root playbook. For allocation `2`, with an account that can use sudo:
+1. Ensure this repository is available on the Ludus server. Ansible 2.15 or
+   newer must be available there, as declared by the role metadata; this guide
+   does not install it. The wrapper also requires `ip` and `jq` on the server.
+   `ansible-playbook` is required only when the live bridge does not match the
+   requested state.
+2. Change to the role directory and provide the bridge selection. `BRIDGE_NUM`
+   accepts an allocation from `1` through `254`, a full bridge number from
+   `1001` through `1254`, or a name from `vmbr1001` through `vmbr1254`.
 
    ```bash
-   ansible-playbook -K -e '{"range_second_octet": 2}' ludus-configure-bridge.yaml
+   cd /path/to/awesome-ludus/ansible/roles/ludus_bridge_promisq
+   ./configure-bridge.sh
+   BRIDGE_NUM=2 ./configure-bridge.sh
+   BRIDGE_NUM=1002 ./configure-bridge.sh
+   BRIDGE_NUM=vmbr1002 ./configure-bridge.sh
+   BRIDGE_NUM=vmbr1002 PROMISCUOUS=false ./configure-bridge.sh
    ```
 
-   `-K` prompts for the become/sudo password. If already running as root, omit
-   `-K`. The playbook and role still require root privileges for their host
-   operations.
+   `PROMISCUOUS` accepts exactly `true` or `false`, defaults to `true`, and
+   controls the bridge `PROMISC` flag. Ageing time is always `0` centiseconds.
+   If `BRIDGE_NUM` is unset, the wrapper prompts only in an interactive shell;
+   an unset value in noninteractive use fails. An explicitly empty value also
+   fails rather than prompting.
 
-The playbook targets `localhost` and has `connection: local`. In addition, the
-role tasks set `delegate_to: localhost`, `run_once: true`, and `become: true`.
-Consequently, changing an inventory or targeting a remote host does not retarget
-these tasks: running an inventory-based playbook from an operator workstation
-is **not supported by this unchanged role**. Keep execution local to the Ludus
-server; do not try to redirect the role by overriding inventory hosts.
+For example, from an operator workstation, SSH to the Ludus server first, then
+run the wrapper in that server shell:
 
-For example, from the operator workstation, replace the placeholder with the
-server's SSH destination:
-
-```bash
+```text
 ssh user@ludus-server
-# Run these commands in the server's SSH shell:
-cd /path/to/awesome-ludus
-ansible-playbook -K -e '{"range_second_octet": 2}' ludus-configure-bridge.yaml
+cd /path/to/awesome-ludus/ansible/roles/ludus_bridge_promisq
+BRIDGE_NUM=2 ./configure-bridge.sh
 ```
 
-This runs the playbook in an interactive shell on the server; it does not make the
-workstation an Ansible control host for this role. Adjust the repository path
-and allocation as needed.
+The wrapper intentionally runs on the Ludus server. The playbook targets
+`localhost`, and role tasks use `delegate_to: localhost`, `run_once: true`, and
+`become: true`; an operator workstation inventory cannot retarget them.
+`ansible-playbook -K` is used automatically when the wrapper is not run as
+root; root execution omits `-K`.
 
 This role supports **single-node Ludus only**. It rejects cluster mode because
 clusters use Proxmox SDN VNets rather than the local Linux bridges managed here.
@@ -134,21 +124,15 @@ repository's metadata; before using it in a range, verify the installed role
 identity in the target server's Ludus role catalog. Do not infer compatibility
 from the source directory or metadata alone. Do not pass a bridge name.
 
-The playbook invocation above uses the role defaults: promiscuous mode enabled
-and ageing time `0`. To override either setting for this manual playbook run,
-pass its role variable in the same `-e` JSON object, keeping
-`range_second_octet` an integer. For example:
+The wrapper's default is promiscuous mode enabled and ageing time `0`. Use
+`PROMISCUOUS=false` to disable promiscuous mode; ageing time is intentionally
+fixed at `0` by this wrapper. The playbook remains available for direct
+administrative use from this directory, but the wrapper is the documented
+workflow.
 
-```bash
-ansible-playbook -K \
-  -e '{"range_second_octet": 2, "ludus_configure_bridge_promiscuous": false, "ludus_configure_bridge_ageing_time": 3000}' \
-  ludus-configure-bridge.yaml
-```
-
-This selects `vmbr1002`, disables promiscuous mode, and sets ageing time to 30
-seconds. No bridge-name override is supported: the role derives the bridge from
-the allocation and requires that bridge to exist already. It rejects Ludus
-cluster mode.
+No bridge-name override is passed to Ansible: the wrapper normalizes the
+selection to the range allocation and the role derives the bridge name. The
+role requires the selected bridge to exist and rejects Ludus cluster mode.
 
 ## Read-only checks and operational cautions
 
@@ -176,12 +160,28 @@ sudo ip -d -j link show dev vmbr1002
 sudo ls -l /etc/network/if-up.d/ludus-configure-bridge-vmbr1002
 ```
 
-In the JSON, check that `flags` contains `PROMISC` with the defaults (or omits
-it when promiscuous mode was overridden to `false`), and that
-`linkinfo.info_data.ageing_time` is `0` by default or the requested centisecond
-value (for example, `3000` for the override above). The hook inspection should
-show that exact file exists and is executable. These are read-only observations,
-not proof of persistence through a later interface-up or reboot.
+In the JSON, check that `flags` contains `PROMISC` with the default (or omits
+it when `PROMISCUOUS=false` was used), and that
+`linkinfo.info_data.ageing_time` is `0`; the wrapper always requests that value.
+The hook inspection should show that exact file exists and is executable.
+These are read-only observations, not proof of persistence through a later
+interface-up or reboot.
+
+The wrapper's early-exit decision checks the same live-state properties. For
+example, this read-only predicate checks the default state for `vmbr1002`:
+
+```bash
+ip -d -j link show dev vmbr1002 |
+  jq -e '.[0].linkinfo.info_data.ageing_time == 0 and
+    (.[0].flags | contains(["PROMISC"]))' >/dev/null
+```
+
+The wrapper additionally validates the command result, record shape, bridge
+kind, and expected promiscuous setting before it can skip Ansible. The early
+exit deliberately checks **live bridge state only**: it does not inspect,
+verify, install, or repair the persistent if-up hook. If live settings match
+but the hook is missing or stale, the wrapper still exits without invoking
+Ansible; inspect the hook separately as shown above.
 
 Do not use Ansible `--check` as a reliable preview for this role: it relies on
 command tasks whose registered output feeds later validation and state checks,
