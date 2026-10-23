@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import os
 from dataclasses import replace
 import sys
 import tempfile
@@ -61,6 +62,89 @@ def function_node(tree: ast.Module, name: str) -> ast.FunctionDef:
 
 
 class LudusContractTests(unittest.TestCase):
+    def test_local_yaml_config_extensions_and_case_preserve_target_and_tls(self):
+        for filename in ("config.yml", "config.yaml"):
+            with self.subTest(filename=filename), tempfile.TemporaryDirectory() as home:
+                directory = Path(home) / ".config/ludus"
+                directory.mkdir(parents=True)
+                (directory / filename).write_text("URL: https://configured.invalid\nVERIFY: true\n")
+                with patch.dict(os.environ, {"HOME": home}, clear=True):
+                    settings = ludus._resolve_settings({}, ludus._load_config())
+                self.assertEqual(settings, ("https://configured.invalid", "", True))
+
+    def test_ambiguous_or_unsupported_local_config_blocks_without_payload(self):
+        for files in (
+            {"config.yml": "url: https://one.invalid\n", "config.yaml": "url: https://two.invalid\n"},
+            {"config.yml": "verify: false\nVERIFY: true\n"},
+            {"config.yml": "url: https://one.invalid\nurl: https://two.invalid\n"},
+            {"config.json": '{"url":"https://configured.invalid","verify":true}'},
+        ):
+            with self.subTest(files=tuple(files)), tempfile.TemporaryDirectory() as home:
+                directory = Path(home) / ".config/ludus"
+                directory.mkdir(parents=True)
+                for filename, content in files.items():
+                    (directory / filename).write_text(content)
+                with patch.dict(os.environ, {"HOME": home}, clear=True):
+                    with self.assertRaises(ludus.LudusAdapterError) as raised:
+                        ludus._load_config()
+                self.assertEqual((raised.exception.exit_code, raised.exception.outcome), (2, "blocked"))
+                self.assertNotIn("https://", str(raised.exception))
+
+    def test_uppercase_config_user_cannot_bypass_impersonation_block(self):
+        with tempfile.TemporaryDirectory() as home:
+            directory = Path(home) / ".config/ludus"
+            directory.mkdir(parents=True)
+            (directory / "config.yaml").write_text("USER: another-user\n")
+            with patch.dict(os.environ, {"HOME": home}, clear=True):
+                with self.assertRaises(ludus.LudusAdapterError):
+                    ludus._resolve_settings({}, ludus._load_config())
+
+    def test_all_staged_roles_validated_before_upload_loop(self):
+        deploy = function_node(workflow_tree(), "deploy")
+        validations = [node for node in ast.walk(deploy) if isinstance(node, ast.Call)
+                       and isinstance(node.func, ast.Attribute) and node.func.attr == "validate_staged_roles"]
+        self.assertEqual(len(validations), 1, "validate the full configured staged scope before any upload")
+        validation = validations[0]
+        self.assertEqual(ast.unparse(validation.args[0]), "staged")
+        self.assertEqual(ast.unparse(validation.args[1]), "active.roles")
+        upload_loop = next(node for node in ast.walk(deploy) if isinstance(node, ast.For)
+                           and any(isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                                   and call.func.attr == "upload" for call in ast.walk(node)))
+        self.assertLess(validation.lineno, upload_loop.lineno)
+
+    def test_late_terminal_observation_is_unknown(self):
+        target = models.Target(models.ServerKey("server", "scope"), "range",
+                               models.Capabilities("client", "server", {}, "unknown-only"))
+        for status in ("success", "failure", "aborted"):
+            observation = models.Observation(target, "selected", status, "user-selected", None, ())
+            for remaining in (0.0, -0.01):
+                with self.subTest(status=status, remaining=remaining):
+                    self.assertEqual(workflow.selected_history_outcome(
+                        "selected", observation, remaining_budget=remaining), "unknown")
+            self.assertEqual(workflow.selected_history_outcome(
+                "selected", observation, remaining_budget=0.01),
+                "success" if status == "success" else "failure")
+
+    def test_monitor_passes_post_read_budget_to_terminal_classifier(self):
+        monitor = function_node(workflow_tree(), "monitor")
+        classifier = next(node for node in ast.walk(monitor) if isinstance(node, ast.Call)
+                          and isinstance(node.func, ast.Name) and node.func.id == "selected_history_outcome")
+        self.assertIn("remaining_budget", {keyword.arg for keyword in classifier.keywords})
+        reads = [node.lineno for node in ast.walk(monitor) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Attribute) and node.func.attr in {"observe_run", "observe_history"}]
+        budgets = [node.lineno for node in ast.walk(monitor) if isinstance(node, ast.Call)
+                   and isinstance(node.func, ast.Name) and node.func.id == "_remaining_budget"]
+        self.assertTrue(any(max(reads) < line <= classifier.lineno for line in budgets))
+
+    def test_source_preflight_errors_are_safe_blockers(self):
+        deploy = function_node(workflow_tree(), "deploy")
+        handlers = [node for node in ast.walk(deploy) if isinstance(node, ast.ExceptHandler)
+                    and node.type is not None and ast.unparse(node.type) == "source.SourceError"]
+        self.assertEqual(len(handlers), 1)
+        text = ast.unparse(handlers[0])
+        self.assertIn("'blocked', 2", text)
+        self.assertNotIn("str(exc)", text)
+
     def test_deploy_cli_contract_and_safe_help(self):
         """Parser exposes the pinned deploy defaults and help is local-only."""
         tree = cli_tree()

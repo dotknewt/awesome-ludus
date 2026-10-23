@@ -157,6 +157,11 @@ def deploy(
 
             with store.run_lock(run.run_id):
                 staged = source.stage_roles(roles, store.stage_root(run.run_id))
+                source.validate_staged_roles(staged, active.roles)
+                session.register_staged_secrets(staged)
+                for item in staged:
+                    _durable_write(store, store.write_event, run.run_id,
+                                   {"type": "resolution", "evidence": session.safe_resolution_evidence(item)})
                 run = replace(run, phase="staged", baseline=snapshot)
                 _persist(store, run)
                 entries = {item.role.identity: store.load_entry(session.target.server, item.role.identity)
@@ -267,6 +272,9 @@ def deploy(
             return _exception_summary(store, run, "blocked", 2, message)
         except models.DeploymentError as exc:
             return _exception_summary(store, run, exc.outcome, exc.exit_code, exc.message)
+        except source.SourceError:
+            return _exception_summary(store, run, "blocked", 2,
+                                      "Local source validation blocked deployment; consult recorded mutation counts")
         except Exception:
             # Suppress parser, filesystem, and adapter details that may contain secrets.
             return _exception_summary(store, run, "unknown", 4,
@@ -288,9 +296,10 @@ def correlate(run: models.RunRecord, observation: models.Observation) -> models.
     return "unknown"
 
 
-def selected_history_outcome(history_id: str, observation: models.Observation) -> models.Outcome:
+def selected_history_outcome(history_id: str, observation: models.Observation, *,
+                             remaining_budget: float = math.inf) -> models.Outcome:
     """Classify only the exact explicitly selected history record."""
-    if observation.attribution != "user-selected" or observation.history_id != history_id:
+    if not remaining_budget > 0 or observation.attribution != "user-selected" or observation.history_id != history_id:
         return "unknown"
     if observation.history_status == "success":
         return "success"
@@ -348,15 +357,15 @@ def monitor(*, run_id: str | None, range_id: str | None, history_id: str | None,
                 break
             observation = (session.read.observe_run(run) if run is not None
                            else session.read.observe_history(history_id))
+            remaining = _remaining_budget(deadline, time.monotonic())
             if observation.target != session.target:
                 outcome = "unknown"
             elif run is not None:
                 # Operation correlation is unknown-only for this adapter contract.
                 outcome = "unknown"
             else:
-                outcome = selected_history_outcome(history_id, observation)
+                outcome = selected_history_outcome(history_id, observation, remaining_budget=remaining)
             terminal = outcome in {"success", "failure"}
-            remaining = _remaining_budget(deadline, time.monotonic())
             if not wait or terminal or remaining <= 0:
                 break
             time.sleep(min(interval, remaining))

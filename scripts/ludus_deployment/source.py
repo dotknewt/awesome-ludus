@@ -267,6 +267,8 @@ def _path_without_symlink_ancestors(path: Path, label: str) -> Path:
 
 
 def _metadata(role_dir: Path) -> tuple[str, str]:
+    if (role_dir / "meta/main.yml").exists() and (role_dir / "meta/main.yaml").exists():
+        raise SourceError("Ambiguous role metadata files")
     metadata = role_dir / "meta" / "main.yml"
     if not metadata.is_file():
         metadata = role_dir / "meta" / "main.yaml"
@@ -277,6 +279,13 @@ def _metadata(role_dir: Path) -> tuple[str, str]:
     except (OSError, UnicodeError, yaml.YAMLError, SourceError) as exc:
         raise SourceError(f"invalid role metadata: {role_dir.name}") from exc
     info = data.get("galaxy_info") if isinstance(data, dict) else None
+    if not isinstance(data, dict) or set(data) - {"galaxy_info", "dependencies", "allow_duplicates"}:
+        raise SourceError("Unsupported role metadata fields")
+    if "allow_duplicates" in data and not isinstance(data["allow_duplicates"], bool):
+        raise SourceError("Unsupported role metadata value")
+    dependencies = data.get("dependencies", [])
+    if not isinstance(dependencies, list) or dependencies:
+        raise SourceError("Role metadata dependencies are unsupported; dependencies must be empty")
     author = info.get("author") if isinstance(info, dict) else None
     role_name = info.get("role_name") if isinstance(info, dict) else None
     if not isinstance(author, str) or not author.strip() or not isinstance(role_name, str) or not role_name.strip():
@@ -310,7 +319,7 @@ def _load_mappings(root: Path) -> dict[str, str]:
 
 
 def _static_role_references(role_dir: Path) -> tuple[str, ...]:
-    """Read only static include/import and metadata dependency identities."""
+    """Read static include/import identities; installer dependencies are unsupported."""
     references: list[str] = []
     metadata_paths = (role_dir / "meta/main.yml", role_dir / "meta/main.yaml")
     metadata_path = next((path for path in metadata_paths if path.is_file()), None)
@@ -321,14 +330,8 @@ def _static_role_references(role_dir: Path) -> tuple[str, ...]:
         dependencies = metadata.get("dependencies", [])
         if not isinstance(dependencies, list):
             raise SourceError(f"metadata dependencies must be a list in role {role_dir.name}")
-        for dependency in dependencies:
-            if isinstance(dependency, str):
-                identity = dependency
-            elif isinstance(dependency, dict) and isinstance(dependency.get("role"), str):
-                identity = dependency["role"]
-            else:
-                raise SourceError(f"metadata dependency must have a static role identity in {role_dir.name}")
-            references.append(_safe_identity(identity))
+        if dependencies:
+            raise SourceError("Role metadata dependencies are unsupported")
 
     tasks_root = role_dir / "tasks"
     if tasks_root.exists():
@@ -476,23 +479,9 @@ def resolve_roles(checkout: Checkout, config: ActiveConfig, capabilities: Capabi
 
     # Validate references from only the selected role sources. Do not traverse
     # unrelated role metadata or infer identities from variables/templates.
-    pending = list(configured)
-    checked: set[str] = set()
-    while pending:
-        name = pending.pop()
-        if name in checked:
-            continue
-        checked.add(name)
-        folder, _ = selected.get(name, (None, False))
-        if folder is None:
-            folder, _ = select(name)
-            if folder is None:
-                missing.add(name)
-                continue
-            manifest(folder)
-            _metadata(folder)
-            selected[name] = (folder, False)
-        pending.extend(ref for ref in _static_role_references(folder) if ref not in checked)
+    for name in configured:
+        folder, _ = selected[name]
+        missing.update(ref for ref in _static_role_references(folder) if ref not in configured)
     if missing:
         raise MissingRolesError(tuple(sorted(missing)), roles_root)
     return tuple(resolved)
@@ -591,3 +580,21 @@ def stage_roles(roles: tuple[ResolvedRole, ...], stage_root: Path) -> tuple[Stag
             raise
         staged.append(StagedRole(role=role, directory=destination, manifest=copied))
     return tuple(staged)
+
+
+def validate_staged_roles(staged: tuple[StagedRole, ...], configured_identities: tuple[str, ...]) -> None:
+    """Validate the entire authoritative snapshot scope before any upload."""
+    configured = set(configured_identities)
+    identities = [item.role.identity for item in staged]
+    if len(identities) != len(set(identities)) or set(identities) != configured:
+        raise SourceError("Staged roles do not match the configured scope")
+    for item in staged:
+        if item.directory.name != item.role.identity or manifest(item.directory) != item.manifest:
+            raise SourceError("Staged role integrity changed")
+    for item in staged:
+        _metadata(item.directory)
+        if set(_static_role_references(item.directory)) - configured:
+            raise SourceError("Internal role references must already be configured")
+    for item in staged:
+        if manifest(item.directory) != item.manifest:
+            raise SourceError("Staged role integrity changed during validation")

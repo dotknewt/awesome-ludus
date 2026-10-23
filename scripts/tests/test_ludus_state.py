@@ -13,6 +13,7 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 try:
     from scripts.ludus_deployment import models, source
@@ -82,6 +83,63 @@ class LudusStateTests(unittest.TestCase):
         for unsafe in ("../escape", "/absolute", "", "a/b"):
             with self.subTest(unsafe=unsafe), self.assertRaises((ValueError, OSError)):
                 self.store.stage_root(unsafe)
+
+    def observe_real_fsync(self, events):
+        actual_fsync = os.fsync
+
+        def observed(fd):
+            info = os.fstat(fd)
+            path = Path(os.readlink(f"/proc/self/fd/{fd}"))
+            actual_fsync(fd)
+            events.append(("directory" if stat.S_ISDIR(info.st_mode) else "file", path))
+
+        return patch.object(state.os, "fsync", side_effect=observed)
+
+    def test_new_state_root_ancestors_are_durably_linked(self):
+        events = []
+        base = Path(self.temp.name)
+        root = base / "new-parent" / "nested" / "state"
+        with self.observe_real_fsync(events):
+            state.StateStore(root)
+        parents = [base, base / "new-parent", root.parent]
+        positions = []
+        for parent in parents:
+            self.assertIn(("directory", parent), events)
+            positions.append(events.index(("directory", parent)))
+        self.assertEqual(positions, sorted(positions))
+
+    def test_first_upload_reservation_syncs_new_directory_before_record(self):
+        events = []
+        with self.observe_real_fsync(events), self.store.mutation_lock():
+            self.store.begin_upload(self.upload(status="in-flight"))
+        self.assertIn(("directory", self.root), events)
+        file_sync = next(index for index, (kind, path) in enumerate(events)
+                         if kind == "file" and path.parent == self.root / "uploads")
+        self.assertLess(events.index(("directory", self.root)), file_sync)
+        self.assertIn(("directory", self.root / "uploads"), events[file_sync + 1:])
+        self.assertEqual(self.store.load_entry(self.server_a, "web").status, "unknown")
+
+    def test_run_and_observation_directories_sync_each_new_parent(self):
+        events = []
+        with self.observe_real_fsync(events):
+            run = self.store.new_run(self.target_a, "roles", self.checkout, "digest")
+            observation = self.store.new_observation(self.target_a, None, None)
+        for parent in (self.root, self.root / "stages", self.root / "evidence"):
+            self.assertIn(("directory", parent), events)
+        self.assertTrue(self.store.stage_root(run.run_id).is_dir())
+        self.assertTrue(self.store.evidence_dir(observation.observation_id).is_dir())
+
+    def test_new_journal_syncs_file_then_parent_before_return(self):
+        run = self.store.new_run(self.target_a, "roles", self.checkout, "digest")
+        events = []
+        with self.store.run_lock(run.run_id), self.observe_real_fsync(events):
+            self.store.write_event(run.run_id, {"type": "phase", "phase": "preflight"})
+        parent = self.store.evidence_dir(run.run_id)
+        self.assertIn(("file", parent / "events.jsonl"), events)
+        self.assertIn(("directory", parent), events)
+        self.assertLess(events.index(("file", parent / "events.jsonl")),
+                        events.index(("directory", parent)))
+        self.assertEqual(json.loads((parent / "events.jsonl").read_text())["phase"], "preflight")
 
     def test_scope_partition_and_lock_domain(self):
         # A key includes both server identity and access scope; endpoint alone

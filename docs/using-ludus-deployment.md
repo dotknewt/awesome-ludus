@@ -31,12 +31,20 @@ and role reads, and freezes that context privately for the operation. Secrets
 are not persisted or passed in argv; this is not a guarantee of Python memory
 zeroization. See the [pinned source research and transport contract](research/reusable-ludus-deployment-compatibility.md).
 
+Local settings support a single `~/.config/ludus/config.yml` or `config.yaml`,
+with case-insensitive keys. Duplicate keys (including case collisions), multiple
+config files, and other `config.*` formats block instead of silently selecting
+default endpoint/TLS settings. Environment overrides still apply.
+
 ## Choose sources and scope before launching
 
 Role sources come from the Git checkout/worktree containing the **current
 working directory**, never the script's installation path. `--checkout PATH`
 explicitly selects another checkout. The server's active range config determines
 the required role set; a local blueprint is not substituted.
+Initial active-config support accepts only the top-level keys `defaults`,
+`global_role_vars`, `ludus`, and `router`. Other schema fields fail closed;
+this utility does not yet support every valid Ludus configuration.
 
 Each configured identity first resolves to its exact directory basename under
 `ansible/roles/`. For example, `example.web` needs `ansible/roles/example.web`,
@@ -57,10 +65,26 @@ All required roles must resolve locally before any upload, even if installed
 remotely; missing-role diagnostics list the missing configured identities and
 search root when safe to display.
 
+Internal `include_role`/`import_role` references must already be in the active
+configured role set. Local unconfigured sibling roles do not broaden upload
+scope. All nonempty metadata `dependencies` are unsupported, even when they name
+configured local roles; absent dependencies or `dependencies: []` are allowed.
+The supported metadata top-level subset is `galaxy_info`, `dependencies`
+(empty only), and boolean `allow_duplicates`. Other fields block: `collections`
+is currently unsupported even when empty.
+The utility does not strip metadata, rewrite role bytes, or fetch dependencies.
+Existing repository roles may contain unsupported metadata and therefore block;
+local verification does not establish universal role/configuration readiness.
+
 Private staging includes uncommitted and untracked uploadable content (even
 gitignored content), excluding `.git`, `__pycache__`, and `*.pyc`. Symlinks and
 special files are rejected. Content manifests hash the staged bytes, rather
 than relying on Git revision alone.
+Every staged role's metadata and internal references are revalidated against the
+configured set, with manifest integrity checks, before any upload. Later edits
+to original source files do not change this run's authoritative snapshots.
+Screened identity/source/metadata resolution evidence is retained before upload;
+unsafe fields may be omitted or suppressed.
 
 Replace `RANGE` below with the approved range. Execute only the requested choice:
 
@@ -128,7 +152,8 @@ that a particular repaired task or production sanitization path passed.
 Default observation is one-shot. `--wait` polls reads, with `--interval 30` and
 `--timeout 10800` defaults (positive finite seconds). The deadline includes
 discovery and is checked around observations; it is not a hard wall-clock kill.
-An in-flight bounded CLI operation can overrun it. Waiting on `--run` cannot
+An in-flight bounded CLI operation can overrun it; even terminal results returned
+after the deadline are classified unknown. Waiting on `--run` cannot
 create attribution and will still remain unknown. Timeout never authorizes
 redeployment.
 
@@ -149,6 +174,9 @@ the exact credential-free endpoint, authenticated user and role identity, not
 range. Endpoint aliases are not merged. One global local mutation lock spans
 all keys; an upload invalidates same-role entries across other endpoint/user
 keys conservatively. Lock contention blocks; never steal a live lock.
+New state directory entries and journal creation are parent-directory synced,
+in addition to record data and atomic replacement. Durability errors stop the
+operation; a source blocker after earlier uploads does not erase their counts.
 
 This coordinates only processes sharing that state root. External overwrites,
 other machines/state roots and server replacement are not automatically
@@ -174,13 +202,15 @@ local cleanup; do not remove active state/locks or discard recovery evidence.
 
 ## Verification boundary
 
-**PASS WITH WARNINGS — NOT VERIFIED.** Parent's final local validation on
-2026-10-23 passed all 96 tests, compilation of all 10 selected Python files,
-all four explicit-argv CLI help checks, and diff checking; local-link checking
-found zero broken links. Runtime: Python 3.14.8 and PyYAML 6.0.3. Evidence:
-`.superpowers/sdd/2026-10-23-reusable-ludus-deployment/final-local-validation.txt`.
-These results precede this evidence-summary documentation update; fresh review
-remains parent-owned.
+**Local implementation and review complete; live verification pending.** Parent's
+2026-10-23 aggregate-fix validation passed all **113 tests**, compilation of the
+seven changed Python files, all four explicit-argv CLI help checks, documentation
+diff checking and local links (zero broken). Evidence:
+`.superpowers/sdd/2026-10-23-reusable-ludus-deployment/final-fix-green.txt`.
+The recorded validation environment is Python **3.14.8**, PyYAML **6.0.3**
+(runtime inventory in `final-local-validation.txt`). Parent reports whole-wave
+re-review cleared all five important and two minor findings with no new findings.
+The checks precede this documentation-only status update.
 Selected-server read-only facts are reused Task 1 evidence, not execution of
 this utility. No live upload, deployment, monitoring, failure/recovery or
 production-canary sanitization has been verified. Python 3.11 minimum and other

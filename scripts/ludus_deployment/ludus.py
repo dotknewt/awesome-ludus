@@ -121,6 +121,7 @@ def _endpoint(value: Any) -> str:
 
 
 def _resolve_settings(environ: dict[str, str], config: dict[str, Any]) -> tuple[str, str, bool]:
+    config = _normalize_config_keys(config)
     configured_user = config.get("user", "")
     if configured_user or environ.get("LUDUS_USER", ""):
         raise LudusAdapterError("Ludus user impersonation is unsupported", 2, "blocked")
@@ -254,30 +255,47 @@ def _register_config_secrets(context: ResolvedContext, config: Any) -> None:
 
 
 def _register_role_secrets(context: ResolvedContext, role: models.StagedRole) -> None:
-    defaults = role.directory / "defaults" / "main.yml"
-    if defaults.is_file():
-        try:
-            with defaults.open("r", encoding="utf-8") as stream:
-                parsed = yaml.safe_load(stream)
-        except Exception:
-            # Uncertain defaults make response sanitization unsafe; fail before mutation.
-            raise LudusAdapterError("Staged role defaults cannot be safely inspected", 2, "blocked") from None
-        for secret in _collect_sensitive_values(parsed):
-            context._secrets.add(secret)
+    for filename in ("main.yml", "main.yaml"):
+        defaults = role.directory / "defaults" / filename
+        if defaults.is_file():
+            try:
+                with defaults.open("r", encoding="utf-8") as stream:
+                    parsed = yaml.safe_load(stream)
+            except Exception:
+                # Uncertain defaults make response sanitization unsafe; fail before mutation.
+                raise LudusAdapterError("Staged role defaults cannot be safely inspected", 2, "blocked") from None
+            for secret in _collect_sensitive_values(parsed):
+                context._secrets.add(secret)
+
+
+def _normalize_config_keys(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
+        raise LudusAdapterError("Ludus configuration shape is unsupported", 2, "blocked")
+    normalized = {key.lower(): item for key, item in value.items()}
+    if len(normalized) != len(value):
+        raise LudusAdapterError("Ludus configuration keys are ambiguous", 2, "blocked")
+    return normalized
 
 
 def _load_config() -> dict[str, Any]:
-    config_path = Path.home() / ".config" / "ludus" / "config.yml"
-    if not config_path.exists():
-        return {}
     try:
+        from .source import _UniqueKeyLoader
+
+        directory = Path.home() / ".config" / "ludus"
+        candidates = [path for path in directory.iterdir()
+                      if path.name.lower() == "config" or path.name.lower().startswith("config.")] if directory.exists() else []
+        if not candidates:
+            return {}
+        if len(candidates) != 1 or candidates[0].name not in {"config.yml", "config.yaml"}:
+            raise LudusAdapterError("Ludus configuration files are unsupported or ambiguous", 2, "blocked")
+        config_path = candidates[0]
         with config_path.open("r", encoding="utf-8") as stream:
-            value = yaml.safe_load(stream)
+            value = yaml.load(stream, Loader=_UniqueKeyLoader)
+        return _normalize_config_keys(value)
+    except LudusAdapterError:
+        raise
     except Exception:
         raise LudusAdapterError("Ludus configuration is unreadable or malformed", 2, "blocked") from None
-    if not isinstance(value, dict) or any(not isinstance(k, str) for k in value):
-        raise LudusAdapterError("Ludus configuration shape is unsupported", 2, "blocked")
-    return value
 
 
 def resolve_context() -> ResolvedContext:
@@ -554,6 +572,30 @@ class BoundSession:
         identities = tuple(error.identities)
         self.validate_configured_roles(identities)
         return source.safe_missing_roles_message(error, identities, context._secrets.values())
+
+    def register_staged_secrets(self, roles: tuple[models.StagedRole, ...]) -> None:
+        if self._closed or self._context is None:
+            raise LudusAdapterError("Ludus session is closed", 2, "blocked")
+        for role in roles:
+            _register_role_secrets(self._context, role)
+
+    def safe_resolution_evidence(self, role: models.StagedRole) -> tuple[str, ...]:
+        """Screen snapshot metadata and fixed source provenance before retention."""
+        from . import source
+        from .state import sanitize
+
+        context = self._context
+        if self._closed or context is None:
+            raise LudusAdapterError("Ludus session is closed", 2, "blocked")
+        self.validate_configured_roles((role.role.identity,))
+        author, metadata_name = source._metadata(role.directory)
+        values = ("configured:" + role.role.identity, "source:" + str(role.role.source),
+                  *tuple(item for item in role.role.resolution_evidence
+                         if item in {"exact-folder", "explicit-mapping"}),
+                  "metadata-author:" + author, "metadata-role-name:" + metadata_name)
+        secrets = context._secrets.values()
+        return tuple(sanitize(value, frozenset(secrets)) for value in values
+                     if _safe_metadata_text(value, secrets) is not None)
 
 
 class _ReadClient:

@@ -62,6 +62,25 @@ def _validate_component(value: str, label: str) -> str:
     return value
 
 
+def _sync_directory(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _durable_mkdir(path: Path) -> None:
+    """Establish each missing ancestor entry before returning to a writer."""
+    if not path.exists():
+        _durable_mkdir(path.parent)
+        try:
+            path.mkdir(mode=0o700)
+        except FileExistsError:
+            pass
+    _sync_directory(path.parent)
+
+
 def _encode(value: Any) -> Any:
     if dataclasses.is_dataclass(value):
         return {"__type__": type(value).__name__, **{field.name: _encode(getattr(value, field.name)) for field in dataclasses.fields(value)}}
@@ -208,7 +227,7 @@ class StateStore:
     def _ensure_root(self) -> None:
         _reject_symlink_ancestors(self.root)
         try:
-            self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+            _durable_mkdir(self.root)
         except OSError:
             raise
         info = self.root.lstat()
@@ -257,6 +276,7 @@ class StateStore:
                 current.mkdir(mode=0o700)
             except FileExistsError:
                 pass
+            _sync_directory(current.parent)
             info = current.lstat()
             if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
                 raise ValueError(f"insecure private directory: {current.name}")
@@ -529,9 +549,13 @@ class StateStore:
         # Strict allowlist: arbitrary messages, output, URLs, nested payloads,
         # and secret-like fields are never persisted or displayed.
         event_type = event.get("type")
-        allowed_types = {"upload", "phase", "launch", "outcome"}
+        allowed_types = {"upload", "phase", "launch", "outcome", "resolution"}
         safe_type = event_type if isinstance(event_type, str) and event_type in allowed_types else "unknown"
         safe_event: dict[str, str] = {"type": safe_type}
+        if safe_type == "resolution":
+            evidence = event.get("evidence")
+            if isinstance(evidence, (tuple, list)) and all(isinstance(item, str) for item in evidence):
+                safe_event["evidence"] = sanitize("; ".join(evidence), frozenset())
         role = event.get("role")
         if isinstance(role, str) and self._is_run_role(record_id, role):
             safe_event["role"] = role
@@ -626,6 +650,7 @@ class StateStore:
                 raise ValueError("insecure evidence journal")
             os.write(fd, data)
             os.fsync(fd)
+            _sync_directory(path.parent)
         finally:
             os.close(fd)
 

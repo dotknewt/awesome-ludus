@@ -1,7 +1,7 @@
 # Reusable Ludus deployment utility
 
 Date: 2026-10-23  
-Status: design approved by user; implementation pending. Implementation planning authorized; live activity remains separately gated.
+Status: local implementation and whole-wave review complete; live verification pending and separately gated.
 
 ## Intent and authority
 

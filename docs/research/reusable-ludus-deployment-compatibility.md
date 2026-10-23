@@ -54,6 +54,32 @@ Resolution order for configured identity R:
 
 Thus configured `linux_splunk_server` resolves to folder `linux_splunk_server` despite metadata `linux_splunk_enterprise`, then stages/uploads as `linux_splunk_server`. A namespaced identity resolves automatically only when its full exact folder exists; otherwise it requires an explicit mapping. This closes the prior metadata mismatch gate using source evidence, not name guessing or metadata edits.
 
+### Final-review scope restriction
+
+The supplied final reviewer finding identifies Galaxy auto-installation of metadata
+dependencies in the pinned installation handler without `--no-deps`. Under the
+parent's approved initial-utility policy, **all nonempty metadata dependencies
+block**, including configured local names. Absent/empty dependencies are allowed;
+unknown or installation-affecting metadata fields are rejected. Internal task
+include/import references must already belong to the active configured role set;
+local existence alone cannot authorize additional uploads or rely on stale remote
+siblings. No metadata rewriting or transitive upload expansion is performed.
+
+The implementation validates metadata/references from every authoritative staged
+snapshot against that configured set, checks manifests around validation, and
+finishes this gate before any upload. Original source edits after staging belong
+to a later invocation. Retained resolution evidence uses bound-session screening
+and sanitization; unsafe metadata/path fields may be omitted. These are local
+utility restrictions and implementation contracts, not claims of live verification.
+
+The allowed metadata top-level subset is exactly `galaxy_info`, `dependencies`
+(empty only), and boolean `allow_duplicates`. `collections` is unsupported even
+when empty; role bytes are never silently rewritten to remove it. Existing
+repository roles can therefore block. The initial active-config parser accepts
+only `defaults`, `global_role_vars`, `ludus`, and `router` at the root; other
+schema fields fail closed. Neither full Ludus configuration support nor universal
+readiness of current repository roles is established.
+
 ## Exact command arrays
 
 These are argv arrays, not shell strings. `range`, `stage`, and `history_id` below are single validated string arguments. E arrays used range `dev1`. Mutation arrays are source-verified contracts only and were not executed.
@@ -83,6 +109,12 @@ Default `deploy --range RANGE` resolves ambient endpoint/proxy/verify once witho
 - `enable_deploy(session: BoundSession) -> DeployClient` is called explicitly by the deploy workflow after preflight under the global lock; monitor receives only `session.read` and never this mutating capability. DeployClient and ReadClient share the same frozen context, never re-resolve environment/config/keyring. `BoundSession.close()` releases transient references on all exit paths; no claim of guaranteed Python memory zeroization.
 - Child argv is each base array above plus `["--config", "/dev/null", "--url", context.endpoint, "--verify=" + ("true" if context.verify else "false"), "--user", ""]`. `/dev/null` prevents mutable ambient config from re-entering resolution. Initial resolution mirrors root defaults/env/config for URL/proxy/verify; unsupported/malformed config blocks rather than guesses. Reject nonempty ambient LUDUS_USER or config user; there is no utility impersonation option. Explicit empty --user also prevents a query userID.
 - Child env is a frozen allowlisted snapshot, not os.environ at call time: retain required process basics (PATH/HOME/locale/temp and approved certificate settings) and captured standard proxy variables if used; remove all ambient LUDUS_* then inject only captured LUDUS_API_KEY and LUDUS_PROXY. URL/verify/user are fixed by argv; empty proxy falls back only to the already snapshotted standard proxy settings. Suppress raw verbose output. Never dump env/config/context in errors. All calls, including version discovery, use this transport; no keyring fallback can occur with the required nonempty env key.
+
+Final-review settings correction: Viper's case-insensitive keys and alternate YAML
+filename cannot be silently ignored. The utility supports one `config.yml` or
+`config.yaml` under `~/.config/ludus`, normalizes keys, and rejects duplicate/case-
+colliding keys, multiple candidates, and unsupported `config.*` formats. This is
+a conservative supported subset rather than full Viper format interoperability.
 
 ### Upload response boundary
 
@@ -175,14 +207,15 @@ CLI/source implementation. Task 1 statements above retain their historical
 research provenance; selected-server facts are reused evidence, not an actual
 deployment/monitor invocation of the new utility.
 
-Parent's final local validation on **2026-10-23**, using **Python 3.14.8 and
-PyYAML 6.0.3**, passed all **96 tests**, compilation of all 10 selected Python
-files, all four explicit-argv CLI help checks and diff checking; local-link
-checking found zero broken links. Evidence:
-`.superpowers/sdd/2026-10-23-reusable-ludus-deployment/final-local-validation.txt`.
-These results precede this evidence-summary documentation update. Fresh review
-remains parent-owned. Task 7 documentation writer performed no command or server
-execution.
+Parent's aggregate-fix validation on **2026-10-23** passed all **113 tests**,
+compilation of the seven changed Python files, all four explicit-argv CLI help
+checks, documentation diff checking and local links (zero broken). Evidence:
+`.superpowers/sdd/2026-10-23-reusable-ludus-deployment/final-fix-green.txt`.
+Recorded environment: **Python 3.14.8 and PyYAML 6.0.3**, with runtime inventory
+in `final-local-validation.txt`. Parent reports whole-wave re-review cleared all
+five important and two minor findings with no new findings. Local implementation
+and review are complete; these checks precede this documentation-only status
+update. This fix writer performed no commands or server execution.
 
 No live mutation, selected-history monitoring, failure/recovery path or
 production-canary sanitization is verified. No deployment readiness follows
@@ -194,3 +227,9 @@ overrun an in-flight bounded CLI operation. Automatic attribution remains
 unknown-only, history is metadata-only and subject to retention, and local
 locking/ledger evidence cannot attest remote bytes or detect external overwrites
 or server replacement. Reset after replacement remains explicit and local-only.
+
+Post-observation deadline checks now take precedence over terminal classification:
+a late success/failure/aborted observation remains unknown. Local durability now
+includes parent fsync for directory ancestry and journals as well as record data
+and replacement. Filesystem ordering checks do not demonstrate power-loss recovery
+or server-side behavior; actual failure/recovery verification remains unperformed.

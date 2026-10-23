@@ -341,7 +341,6 @@ class LudusSourceTests(unittest.TestCase):
         for reference_file, contents in (
             ("tasks/main.yml", "- ansible.builtin.include_role:\n    name: absent_role\n"),
             ("tasks/imports.yml", "- ansible.builtin.import_role:\n    name: absent_role\n"),
-            ("meta/main.yml", "galaxy_info:\n  author: example\n  role_name: primary\ndependencies:\n  - absent_role\n"),
         ):
             with self.subTest(reference_file=reference_file):
                 role_dir = self.role("primary")
@@ -397,9 +396,91 @@ class LudusSourceTests(unittest.TestCase):
             "    module: ansible.builtin.include_role\n"
             "    name: existing_role\n"
         )
-        config = models.ActiveConfig(digest="0" * 64, roles=("primary",))
+        config = models.ActiveConfig(digest="0" * 64, roles=("primary", "existing_role"))
         resolved = resolve(models.Checkout(self.root, None), config, self.capabilities)
-        self.assertEqual(tuple(role.identity for role in resolved), ("primary",))
+        self.assertEqual(tuple(role.identity for role in resolved), config.roles)
+
+    def test_local_but_unconfigured_internal_reference_blocks(self):
+        primary = self.role("primary")
+        self.role("unconfigured")
+        (primary / "tasks").mkdir()
+        (primary / "tasks/main.yml").write_text("- import_role: {name: unconfigured}\n")
+        config = models.ActiveConfig("digest", ("primary",))
+        with self.assertRaises(source.SourceError):
+            source.resolve_roles(models.Checkout(self.root, None), config, self.capabilities)
+
+    def test_metadata_installation_dependencies_and_unknown_forms_block(self):
+        primary = self.role("primary")
+        self.role("configured")
+        header = "galaxy_info:\n  author: example\n  role_name: primary\n"
+        config = models.ActiveConfig("digest", ("primary", "configured"))
+        for declaration in (
+            "dependencies: [configured]\n",
+            "dependencies: [{role: configured}]\n",
+            "dependencies: [{role: configured, src: 'https://example.invalid/role', version: main}]\n",
+            "dependencies: null\n", "dependencies: {}\n",
+            "collections: [example.collection]\n", "unknown_install_field: true\n",
+        ):
+            with self.subTest(declaration=declaration):
+                (primary / "meta/main.yml").write_text(header + declaration)
+                with self.assertRaises(source.SourceError):
+                    source.resolve_roles(models.Checkout(self.root, None), config, self.capabilities)
+        (primary / "meta/main.yml").write_text(header + "dependencies: []\n")
+        self.assertEqual(len(source.resolve_roles(models.Checkout(self.root, None), config, self.capabilities)), 2)
+
+    def test_staged_validation_uses_snapshot_not_later_source_edits(self):
+        validate = api(source, "validate_staged_roles")
+        primary = self.role("primary")
+        config = models.ActiveConfig("digest", ("primary",))
+        resolved = source.resolve_roles(models.Checkout(self.root, None), config, self.capabilities)
+        staged = source.stage_roles(resolved, self.root / "stage")
+        (primary / "meta/main.yml").write_text("invalid later source\n")
+        validate(staged, config.roles)
+        self.assertEqual(staged[0].manifest, source.manifest(staged[0].directory))
+
+    def test_staged_validation_rejects_edits_between_resolution_and_snapshot(self):
+        validate = api(source, "validate_staged_roles")
+        primary = self.role("primary")
+        secondary = self.role("secondary")
+        config = models.ActiveConfig("digest", ("primary", "secondary"))
+        resolved = source.resolve_roles(models.Checkout(self.root, None), config, self.capabilities)
+        for index, contents in enumerate((
+            "galaxy_info: {author: example, role_name: secondary}\ndependencies: [primary]\n",
+            "galaxy_info: {author: '', role_name: secondary}\n",
+        )):
+            (secondary / "meta/main.yml").write_text(contents)
+            staged = source.stage_roles(resolved, self.root / f"stage-{index}")
+            with self.assertRaises(source.SourceError):
+                validate(staged, config.roles)
+        (secondary / "meta/main.yml").write_text("galaxy_info: {author: example, role_name: secondary}\n")
+        (primary / "tasks").mkdir()
+        (primary / "tasks/main.yml").write_text("- include_role: {name: unconfigured}\n")
+        staged = source.stage_roles(resolved, self.root / "stage-reference")
+        with self.assertRaises(source.SourceError):
+            validate(staged, config.roles)
+
+    def test_staged_validation_rejects_manifest_drift_during_validation(self):
+        validate = api(source, "validate_staged_roles")
+        role = self.role("primary")
+        staged = source.stage_roles((models.ResolvedRole("primary", role, ()),), self.root / "stage")
+        original = source._static_role_references
+
+        def inspect_then_change(directory):
+            result = original(directory)
+            (directory / "payload").write_text("changed during validation\n")
+            return result
+
+        with patch.object(source, "_static_role_references", side_effect=inspect_then_change):
+            with self.assertRaises(source.SourceError):
+                validate(staged, ("primary",))
+
+    def test_staged_validation_requires_exact_complete_configured_scope(self):
+        validate = api(source, "validate_staged_roles")
+        role = self.role("primary")
+        staged = source.stage_roles((models.ResolvedRole("primary", role, ()),), self.root / "stage")
+        for identities in ((), ("primary", "missing"), ("other",)):
+            with self.subTest(identities=identities), self.assertRaises(source.SourceError):
+                validate(staged, identities)
 
     def test_action_mapping_top_level_name_reports_missing_role(self):
         resolve = api(source, "resolve_roles")
