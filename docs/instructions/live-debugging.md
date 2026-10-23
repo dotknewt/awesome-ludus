@@ -1,94 +1,86 @@
 # Live Ludus deployment debugging and retries
 
-Use this workflow for a live Ludus deployment or retry explicitly requested by
-the user, or invoked with `/live` and a range and scope. That request authorizes
-the one requested cycle below.
-It complements the static/live evidence and authorization rules in
-[`ludus-authoring.md`](ludus-authoring.md) and
-[`AGENTS.md`](../../AGENTS.md#behavioral-verification).
+Use this workflow for one explicitly requested **observed** live cycle, including
+`/live RANGE roles` or `/live RANGE full`. It complements the
+[authoring policy](ludus-authoring.md) and [behavioral verification rules](../../AGENTS.md#behavioral-verification).
+The reusable utility's ordinary `deploy` command remains launch-only.
 
-## Approval boundary
+## Approval and scope
 
-One explicit live/deploy request or `/live` invocation with a range and scope
-authorizes exactly one force-upload → server verification → deploy → monitor →
-report cycle for the identified range and deployment scope.
-The scope may be the changed role(s), deployed with `user-defined-roles`, or
-`full`, deployed for the complete range. Start with the existing changes; a new
-fix is not a required first step. Do not ask for duplicate approval for the
-requested cycle.
-Approval is not blanket permission for
-guest probes, destructive actions, unrelated roles, broader deployment flags,
-or testing-mode overrides; obtain separate authorization for those actions.
+One request authorizes one preflight → changed configured-role uploads → server
+presence verification → launch → explicit observation → report cycle. Start with
+existing changes; no new fix or duplicate approval is required for the approved
+cycle. Use [the utility](../using-ludus-deployment.md), not ad hoc scripts or
+direct-command substitutes. If it cannot satisfy a requirement, stop and ask.
 
-If a cycle fails, stop before any further fix, upload, or redeploy. Report the
-redacted error and affected host/role/task, what passed, confirmed cause versus
-unknowns, and the proposed next fix or diagnostics with risks. The request
-authorizes only its requested cycle; wait for an explicit request or approval
-before another fix, upload, or deploy. Do not ask for duplicate approval to
-perform a cycle already explicitly requested.
+`roles` authorizes upload of the range-wide changed/unknown configured-role set
+and deployment of the entire `user-defined-roles` phase. It does **not** select
+individual roles. `full` explicitly authorizes all deployment phases, with the
+same changed-role upload selection. Role replacements are user-scoped and can
+affect other ranges using those identities.
+
+For an older invocation naming particular changed roles, do not silently upload
+other configured roles or pretend the phase is a named-role filter. Clarify and
+obtain authorization for the utility's range-wide changed set before invoking.
+Missing range/scope requires clarification. `--force-upload` replaces all
+configured roles and needs authorization for that set; it is not required for
+ordinary changed uploads, which already use forced replacement internally.
+
+Approval excludes additional cycles, guest probes, destructive setup/cleanup,
+failure injection, unrelated role changes, broader flags and testing overrides.
+Each needs its own authorization. A destroyed range blocks roles scope before
+uploads: ask for explicit full scope, never widen it automatically.
 
 ## One requested cycle
 
-1. **Force-upload only changed role(s).** The directory basename must be
-   the exact installed namespaced role identity (for example,
-   `dotknewt.ludus_splunk_collector`), not merely the source directory name.
-   Use the CLI form:
+1. **Confirm target, scope and local source checkout.** Follow the setup and
+   source-resolution rules in the [usage guide](../using-ludus-deployment.md).
+   Use existing secure environment injection for `LUDUS_API_KEY`; never print
+   credentials. All configured sources must resolve before any upload.
+2. **Invoke deploy once**, substituting the approved range and scope:
 
    ```sh
-   ludus ansible role add -d <directory-with-exact-role-name> -f
+   python scripts/ludus_deploy.py deploy --range RANGE --scope roles
    ```
 
-   The `--force`/`-f` flag is mandatory when uploading an updated role: without
-   it the server retains the already-installed role version instead of
-   overwriting it, so a subsequent deploy can silently run old role content.
-   Never upload an update without it.
-
-2. **Verify the server has each changed role** with `ludus ansible role list`
-   and confirm that the installed identity/version (and uploaded content, where
-   the output permits) is the changed role. Do not treat a successful upload
-   command alone as proof that the server has the intended role update.
-
-3. **Deploy the requested scope** for the requested range. For changed roles
-   only:
+   Use `--scope full` only when explicitly requested. The utility stages and
+   hashes sources, force-replaces selected changed/unknown roles, checks exact
+   structured responses and installed user-role presence, and rechecks the
+   config/status before one launch. Presence does not attest uploaded bytes.
+   Record sanitized output, run ID, evidence path and launch disposition.
+3. **Observe without guessing attribution.** If a run ID exists, use:
 
    ```sh
-   ludus range deploy -r <range-id> -t user-defined-roles
+   python scripts/ludus_deploy.py monitor --run RUN_ID
    ```
 
-   For the complete range, when `full` was explicitly requested:
-
-    ```sh
-    ludus range deploy -r <range-id>
-    ```
-
-   `full` does not remove the changed-role upload and server verification
-   requirements above. It means the deploy is not restricted to the changed
-   roles; it may run all configured deployment phases.
-
-   `dev` may be used as an example range ID. Do not add other broader flags or
-   testing-mode overrides without approval. A successful command launch does
-   not mean deployment completed.
-4. **Monitor the actual deployment** until terminal status using both logs and
-   range status:
+   This may identify candidates but cannot bind them to the launch. If
+   attribution is unknown, stop/report and ask the user to explicitly select
+   an ID; never pick the newest or a timestamp-near candidate. With an explicitly
+   approved history ID, continue the same cycle's read-only observation:
 
    ```sh
-   ludus range logs -r <range-id> -f
-   ludus range status -r <range-id> --json
+   python scripts/ludus_deploy.py monitor --range RANGE --history-id ID --wait --timeout 10800
    ```
 
-   An observation timeout is unknown, not terminal success or failure; never
-   redeploy solely because monitoring timed out. Establish the result from the
-   deployment recap/status and confirm the actual fixed task passed before
-   reporting success.
-5. **Report the result.** Separate any static validation from live evidence,
-   state what passed and what remains unknown, and identify any remaining
-   fresh-bootstrap or convergence gaps. If terminal failure occurs, diagnose
-   from the available authorized evidence and propose the next fix or
-   diagnostics using the stop-and-wait-for-next-request rule above. Do not make
-   another fix before that request or approval.
+   Selection reports only that record's outcome, not launch provenance.
+   Metadata-only monitoring cannot establish a specific task fix or sanitized
+   production output. Additional diagnostic/log or guest evidence requires
+   appropriate authorization. Missing/pruned IDs, interrupted observation and
+   timeout remain unknown. Timeout includes deadline checks but may overrun an
+   in-flight bounded CLI operation; never redeploy because observation timed out.
+4. **Report and stop.** Separate static evidence, reused evidence, launch
+   acceptance, selected-record outcome and unresolved launch attribution.
+   Report what is actually known, fresh-bootstrap/convergence gaps and any
+   unavailable task-level evidence. On failure/unknown, report sanitized
+   diagnostics, affected host/role/task only when known, confirmed cause versus
+   unknowns, and proposed next diagnostics/fix with risks. Do not perform another
+   fix, upload or deploy until separately requested/approved. Keep private
+   recovery evidence; do not automatically resume mutations or clean up external
+   resources.
 
 ## References
 
-- [Ludus roles](https://docs.ludus.cloud/docs/using-ludus/roles)
-- [Ludus CLI](https://docs.ludus.cloud/docs/cli)
+- [Pinned official-source research and compatibility limits](../research/reusable-ludus-deployment-compatibility.md)
+- [Utility usage and exit codes](../using-ludus-deployment.md)
 - [Repository Ludus authoring and verification policy](ludus-authoring.md)

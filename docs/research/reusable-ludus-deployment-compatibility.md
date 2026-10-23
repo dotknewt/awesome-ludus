@@ -166,3 +166,31 @@ Static/public-source verification and reused authorized read-only server evidenc
 [design]: ../superpowers/specs/2026-10-23-reusable-ludus-deployment-design.md
 [plan]: ../superpowers/plans/2026-10-23-reusable-ludus-deployment.md
 [policy]: ../instructions/ludus-authoring.md
+
+## Task 7 implementation documentation status (2026-10-23)
+
+**PASS WITH WARNINGS — NOT VERIFIED.** The [usage guide](../using-ludus-deployment.md)
+and [live-cycle policy](../instructions/live-debugging.md) describe the current
+CLI/source implementation. Task 1 statements above retain their historical
+research provenance; selected-server facts are reused evidence, not an actual
+deployment/monitor invocation of the new utility.
+
+Parent's final local validation on **2026-10-23**, using **Python 3.14.8 and
+PyYAML 6.0.3**, passed all **96 tests**, compilation of all 10 selected Python
+files, all four explicit-argv CLI help checks and diff checking; local-link
+checking found zero broken links. Evidence:
+`.superpowers/sdd/2026-10-23-reusable-ludus-deployment/final-local-validation.txt`.
+These results precede this evidence-summary documentation update. Fresh review
+remains parent-owned. Task 7 documentation writer performed no command or server
+execution.
+
+No live mutation, selected-history monitoring, failure/recovery path or
+production-canary sanitization is verified. No deployment readiness follows
+from static checks. Python >=3.11/PyYAML >=6.0,<7 is a declared target, not a
+tested minimum; the Python 3.11 minimum and other allowed runtime combinations
+remain unverified. Kernel-backed local locking requires a suitable POSIX host.
+Monitoring deadlines include discovery and checks around observations but can
+overrun an in-flight bounded CLI operation. Automatic attribution remains
+unknown-only, history is metadata-only and subject to retention, and local
+locking/ledger evidence cannot attest remote bytes or detect external overwrites
+or server replacement. Reset after replacement remains explicit and local-only.

@@ -2,6 +2,20 @@
 Add: `ludus source add https://github.com/dotknewt/awesome-ludus-sauce.git --id awesome-ludus-sauce --force` 
 Apply a blueprint: `ludus blueprint apply awesome-ludus-sauce/constructing-defense --target-range condef`
 
+## Deploy local role changes
+
+Use the [reusable deployment utility](docs/using-ludus-deployment.md) for changed
+configured-role uploads, one launch, and explicit history observation:
+
+```sh
+python scripts/ludus_deploy.py deploy --range RANGE
+```
+
+Follow the guide's dependency and secure environment setup first. Default scope
+is the range's user-defined roles; acceptance is not completion. Agents must
+reuse this utility and follow the [one-cycle live policy](docs/instructions/live-debugging.md).
+Live compatibility remains **PASS WITH WARNINGS — NOT VERIFIED**.
+
 ## Submodule checklist
 
 When adding an upstream Ansible role:
