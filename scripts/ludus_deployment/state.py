@@ -493,6 +493,13 @@ class StateStore:
             raise ValueError("run record id mismatch")
         return record
 
+    def load_observation(self, observation_id: str) -> models.ObservationRecord:
+        raw = self._read_envelope(self._record_path("observations", observation_id), "observation")
+        record = _decode(raw["payload"], models.ObservationRecord)
+        if record.observation_id != observation_id:
+            raise ValueError("observation record id mismatch")
+        return record
+
     def new_observation(self, target: models.Target, source_run_id: str | None, history_id: str | None) -> models.ObservationRecord:
         record = models.ObservationRecord(str(uuid.uuid4()), target, source_run_id, history_id, "unknown", "unknown")
         self._ensure_dir(self._path("observations"))

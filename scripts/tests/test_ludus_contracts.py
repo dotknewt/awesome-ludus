@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import ast
+from dataclasses import replace
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout, redirect_stderr
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
+from scripts import ludus_deploy
 from scripts.ludus_deployment import ludus, state
 from scripts.ludus_deployment import models
 from scripts.ludus_deployment import workflow
@@ -15,6 +20,7 @@ from scripts.ludus_deployment import workflow
 ROOT = Path(__file__).resolve().parents[2]
 ADAPTER = ROOT / "scripts" / "ludus_deployment" / "ludus.py"
 WORKFLOW = ROOT / "scripts" / "ludus_deployment" / "workflow.py"
+CLI = ROOT / "scripts" / "ludus_deploy.py"
 
 
 def adapter_tree() -> ast.Module:
@@ -41,6 +47,12 @@ def workflow_tree() -> ast.Module:
     return ast.parse(WORKFLOW.read_text(encoding="utf-8"), filename=str(WORKFLOW))
 
 
+def cli_tree() -> ast.Module:
+    if not CLI.is_file():
+        raise AssertionError("required CLI scripts/ludus_deploy.py is missing")
+    return ast.parse(CLI.read_text(encoding="utf-8"), filename=str(CLI))
+
+
 def function_node(tree: ast.Module, name: str) -> ast.FunctionDef:
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
@@ -49,6 +61,199 @@ def function_node(tree: ast.Module, name: str) -> ast.FunctionDef:
 
 
 class LudusContractTests(unittest.TestCase):
+    def test_deploy_cli_contract_and_safe_help(self):
+        """Parser exposes the pinned deploy defaults and help is local-only."""
+        tree = cli_tree()
+        source = CLI.read_text(encoding="utf-8")
+        self.assertIn('"--range"', source)
+        self.assertIn('required=True', source)
+        self.assertIn('choices=("roles", "full")', source)
+        self.assertIn('default="roles"', source)
+        self.assertIn('"--checkout"', source)
+        self.assertIn('"--force-upload"', source)
+        self.assertIn('"reset-upload-history"', source)
+        # Help is explicitly exercised by the parent test run; statically ensure
+        # argparse is available without invoking the entry point on import.
+        self.assertTrue(any(isinstance(node, ast.Import) and any(alias.name == "argparse" for alias in node.names)
+                            for node in tree.body))
+        self.assertTrue(any(isinstance(node, ast.If) and isinstance(node.test, ast.Compare)
+                            and any(isinstance(part, ast.Constant) and part.value == "__main__"
+                                    for part in node.test.comparators)
+                            for node in tree.body), "CLI execution must be guarded on import")
+
+    def test_monitor_cli_requires_one_explicit_selector(self):
+        """Monitor supports run or selected range/history and finite positive limits."""
+        tree = cli_tree()
+        source = CLI.read_text(encoding="utf-8")
+        self.assertIn('"--run"', source)
+        self.assertIn('"--range"', source)
+        self.assertIn('"--history-id"', source)
+        self.assertIn('"--wait"', source)
+        self.assertIn('default=10800', source)
+        self.assertIn('default=30', source)
+        self.assertIn("math.isfinite", source)
+        self.assertTrue(any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                            and node.func.attr == "add_mutually_exclusive_group" for node in ast.walk(tree)))
+
+    def test_monitor_has_only_read_capabilities(self):
+        """Observation never deploys/uploads, edits upload ledger, or auto-attaches candidates."""
+        monitor = function_node(workflow_tree(), "monitor")
+        calls = [node for node in ast.walk(monitor) if isinstance(node, ast.Call)]
+        attrs = {node.func.attr for node in calls if isinstance(node.func, ast.Attribute)}
+        names = {node.func.id for node in calls if isinstance(node.func, ast.Name)}
+        self.assertIn("discover_target", attrs)
+        def attribute_path(node):
+            if isinstance(node, ast.Name):
+                return node.id
+            if isinstance(node, ast.Attribute):
+                return attribute_path(node.value) + "." + node.attr
+            return ""
+        read_calls = {attribute_path(call.func) for call in calls if isinstance(call.func, ast.Attribute)}
+        self.assertTrue(any(path.endswith(".read.observe_run") for path in read_calls)
+                        or any(path.endswith(".read.observe_history") for path in read_calls),
+                        "monitor must use BoundSession.read observation methods")
+        self.assertFalse(attrs & {"enable_deploy", "upload", "launch", "begin_upload", "save_entry", "reset_upload_history"})
+        self.assertFalse(attrs & {"mutation_lock", "save_run"}, "monitor must not take deploy lock or rewrite source runs")
+        self.assertFalse(names & {"correlate", "attach_history", "auto_attach"})
+        self.assertIn("save_observation", attrs)
+        self.assertIn("observation_lock", attrs)
+
+    def test_monitor_requires_explicit_history_selection(self):
+        """History mode observes the exact user-selected ID and never takes a recap shortcut."""
+        monitor = function_node(workflow_tree(), "monitor")
+        selected = function_node(workflow_tree(), "selected_history_outcome")
+        source = ast.get_source_segment(WORKFLOW.read_text(encoding="utf-8"), monitor) or ""
+        selected_source = ast.get_source_segment(WORKFLOW.read_text(encoding="utf-8"), selected) or ""
+        self.assertIn("history_id", source)
+        self.assertIn("observe_history", source)
+        self.assertIn("selected_history_outcome", source)
+        self.assertNotIn("recap", source.lower())
+        self.assertIn("history_id", selected_source)
+        self.assertIn("observation.history_id", selected_source)
+        self.assertNotIn("candidates", selected_source)
+
+    def test_interrupted_monitor_persists_only_observed_screened_history_id(self):
+        """Keyboard interruption cannot persist the raw CLI selector as history metadata."""
+        monitor = function_node(workflow_tree(), "monitor")
+        interrupt = next(node for node in ast.walk(monitor) if isinstance(node, ast.ExceptHandler)
+                         and isinstance(node.type, ast.Name) and node.type.id == "KeyboardInterrupt")
+        source = ast.get_source_segment(WORKFLOW.read_text(encoding="utf-8"), interrupt) or ""
+        self.assertIn("_persistable_history_id", source)
+        self.assertNotIn("history_id if history_id else None", source)
+        self.assertIsNone(workflow._persistable_history_id(None))
+        target = models.Target(models.ServerKey("server", "user-scope"), "range",
+                               models.Capabilities("client", "server", {}, "unknown-only"))
+        safe_observation = models.Observation(target, "safe-history-1", "running", "user-selected", None, ())
+        self.assertEqual(workflow._persistable_history_id(safe_observation), "safe-history-1")
+        untrusted = replace(safe_observation, attribution="unknown")
+        self.assertIsNone(workflow._persistable_history_id(untrusted))
+
+    def test_monitor_deadline_budget_and_check_before_each_read(self):
+        """The overall wait budget begins before discovery and no read starts after expiry."""
+        self.assertEqual(workflow._remaining_budget(110.0, 100.0), 10.0)
+        self.assertEqual(workflow._remaining_budget(100.0, 100.0), 0.0)
+        self.assertEqual(workflow._remaining_budget(90.0, 100.0), 0.0)
+        monitor = function_node(workflow_tree(), "monitor")
+        calls = [node for node in ast.walk(monitor) if isinstance(node, ast.Call)]
+        discovery = next(node for node in calls if isinstance(node.func, ast.Attribute)
+                         and node.func.attr == "discover_target")
+        observation_reads = [node for node in calls if isinstance(node.func, ast.Attribute)
+                             and node.func.attr in {"observe_run", "observe_history"}]
+        deadline = next(node for node in ast.walk(monitor) if isinstance(node, ast.Assign)
+                        and any(isinstance(target, ast.Name) and target.id == "deadline" for target in node.targets))
+        checks = [node for node in calls if isinstance(node.func, ast.Name)
+                  and node.func.id == "_remaining_budget"]
+        self.assertLess(deadline.lineno, discovery.lineno)
+        self.assertTrue(observation_reads)
+        self.assertTrue(checks)
+        self.assertLess(min(node.lineno for node in checks), min(node.lineno for node in observation_reads))
+
+    def test_selected_history_outcomes_require_exact_user_selection(self):
+        """Only exact-ID explicit observations map terminal selected history status."""
+        target = models.Target(models.ServerKey("server", "scope"), "range",
+                               models.Capabilities("client", "server", {}, "unknown-only"))
+        for status, expected in (("success", "success"), ("failure", "failure"), ("aborted", "failure"),
+                                 ("running", "unknown"), (None, "unknown")):
+            observation = models.Observation(target, "history-7", status, "user-selected", None, ())
+            self.assertEqual(workflow.selected_history_outcome("history-7", observation), expected)
+        mismatched = models.Observation(target, "history-other", "success", "user-selected", None, ())
+        self.assertEqual(workflow.selected_history_outcome("history-7", mismatched), "unknown")
+        unattributed = replace(mismatched, history_id="history-7", attribution="unknown")
+        self.assertEqual(workflow.selected_history_outcome("history-7", unattributed), "unknown")
+
+    def test_reset_has_no_remote_capability(self):
+        """Reset only clears local upload history and needs no client/target/credentials."""
+        reset = function_node(workflow_tree(), "reset_upload_history")
+        calls = [node for node in ast.walk(reset) if isinstance(node, ast.Call)]
+        attrs = {node.func.attr for node in calls if isinstance(node.func, ast.Attribute)}
+        self.assertEqual(attrs & {"discover_target", "enable_deploy", "upload", "launch"}, set())
+        self.assertIn("mutation_lock", attrs)
+        self.assertIn("reset_upload_history", attrs)
+        with tempfile.TemporaryDirectory() as directory:
+            store = state.StateStore(Path(directory) / "state")
+            summary = workflow.reset_upload_history(store)
+            self.assertEqual(summary.invalidated_entries, 0)
+            self.assertEqual(summary.exit_code, 0)
+
+    def test_cli_report_suppresses_unverified_identifiers(self):
+        """Only canonical run IDs and adapter-safe selected history IDs are displayed."""
+        self.assertIsNone(ludus_deploy._safe_display_id("12345678-1234-5678-1234-567812345678", "run"))
+        self.assertEqual(ludus_deploy._safe_display_id("12345678-1234-5678-1234-567812345678", "run", verified=True),
+                         "12345678-1234-5678-1234-567812345678")
+        self.assertIsNone(ludus_deploy._safe_display_id("not-a-run\nsecret", "run", verified=True))
+        self.assertIsNone(ludus_deploy._safe_display_id("history\nsecret", "history", verified=True))
+        summary = models.Summary("not-a-run\nsecret", None, "history\nsecret", "unknown", 4,
+                                 "Outcome unknown", Path("/tmp/evidence"))
+        output = StringIO()
+        with redirect_stdout(output):
+            ludus_deploy._report(summary, command="Monitor")
+        self.assertNotIn("secret", output.getvalue())
+        self.assertNotIn("not-a-run", output.getvalue())
+
+    def test_cli_report_formats_verified_observation_and_candidate_guidance(self):
+        """Persisted safe observations report target/attribution and distinguish history from provenance."""
+        target = models.Target(models.ServerKey("safe-server", "user:test-scope"), "lab-safe",
+                               models.Capabilities("client", "server", {}, "unknown-only"))
+        with tempfile.TemporaryDirectory() as directory:
+            store = state.StateStore(Path(directory) / "state")
+            record = store.new_observation(target, None, "history-safe-9")
+            record = replace(record, attribution="user-selected", outcome="success")
+            with store.observation_lock(record.observation_id):
+                store.save_observation(record)
+            summary = models.Summary(None, record.observation_id, record.history_id, "success", 0,
+                                     "Selected history record succeeded", store.evidence_dir(record.observation_id))
+            verified, details = ludus_deploy._verified_report_ids(summary, store)
+            output = StringIO()
+            with redirect_stdout(output):
+                ludus_deploy._report(summary, command="Monitor", details=details, verified_ids=verified)
+        rendered = output.getvalue()
+        self.assertIn("safe-server", rendered)
+        self.assertIn("user:test-scope", rendered)
+        self.assertIn("Attribution: user-selected", rendered)
+        self.assertIn("Phase: observation", rendered)
+        self.assertIn("candidate history", rendered.lower())
+        self.assertIn("not launch provenance", rendered.lower())
+
+    def test_monitor_report_explains_explicit_candidate_selection(self):
+        """CLI explains how to select a candidate without claiming launch attribution."""
+        summary = models.Summary(None, None, None, "unknown", 4, "Outcome remains unknown", Path("/tmp"))
+        output = StringIO()
+        with redirect_stdout(output):
+            ludus_deploy._report(summary, command="Monitor")
+        rendered = output.getvalue().lower()
+        self.assertIn("monitor --range range --history-id id", rendered)
+        self.assertIn("not launch provenance", rendered)
+
+    def test_cli_handles_local_state_initialization_failure_safely(self):
+        """Private-state setup failures become a fixed blocker instead of a traceback."""
+        output, errors = StringIO(), StringIO()
+        with patch.object(ludus_deploy, "StateStore", side_effect=OSError("credential=canary")), \
+             redirect_stdout(output), redirect_stderr(errors):
+            code = ludus_deploy.main(["reset-upload-history"])
+        self.assertEqual(code, 2)
+        self.assertNotIn("canary", output.getvalue() + errors.getvalue())
+        self.assertNotIn("Traceback", errors.getvalue())
+
     def test_changed_selection(self):
         """Only exact trusted manifest/policy history plus installed presence skips upload."""
         manifest = models.Manifest(1, "digest-a", (("tasks/main.yml", "file", 0, "abc"),))

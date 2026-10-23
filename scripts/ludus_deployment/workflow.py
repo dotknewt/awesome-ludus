@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from contextlib import contextmanager
 from pathlib import Path
 import sys
+import time
+import math
 
 from . import ludus, models, source
 from .state import StateStore
@@ -279,3 +281,132 @@ def deploy(
                 except Exception:
                     # Cleanup must not mask the deployment result or mutation ambiguity.
                     pass
+
+
+def correlate(run: models.RunRecord, observation: models.Observation) -> models.Outcome:
+    """Automatic history attribution is unsupported; never infer a launch match."""
+    return "unknown"
+
+
+def selected_history_outcome(history_id: str, observation: models.Observation) -> models.Outcome:
+    """Classify only the exact explicitly selected history record."""
+    if observation.attribution != "user-selected" or observation.history_id != history_id:
+        return "unknown"
+    if observation.history_status == "success":
+        return "success"
+    if observation.history_status in {"failure", "aborted"}:
+        return "failure"
+    return "unknown"
+
+
+def _observation_summary(store: StateStore, record: models.ObservationRecord,
+                         outcome: models.Outcome, code: int, message: str) -> models.Summary:
+    return models.Summary(record.source_run_id, record.observation_id, record.history_id,
+                          outcome, code, message, store.evidence_dir(record.observation_id))
+
+
+def _remaining_budget(deadline: float, now: float) -> float:
+    """Return a nonnegative remaining monotonic-time budget."""
+    return max(0.0, deadline - now)
+
+
+def _persistable_history_id(observation: models.Observation | None) -> str | None:
+    """Only retain a history ID returned through the adapter's screened observation."""
+    if observation is None or observation.attribution != "user-selected":
+        return None
+    return observation.history_id
+
+
+def monitor(*, run_id: str | None, range_id: str | None, history_id: str | None,
+            wait: bool, timeout: float, store: StateStore, interval: float = 30) -> models.Summary:
+    """Read-only, one-shot by default observation; no automatic history attachment."""
+    valid_run = isinstance(run_id, str) and bool(run_id) and range_id is None and history_id is None
+    valid_history = run_id is None and isinstance(range_id, str) and bool(range_id) and isinstance(history_id, str) and bool(history_id)
+    if (not (valid_run or valid_history) or not isinstance(timeout, (int, float)) or isinstance(timeout, bool)
+            or not math.isfinite(timeout) or timeout <= 0
+            or not isinstance(interval, (int, float)) or isinstance(interval, bool)
+            or not math.isfinite(interval) or interval <= 0):
+        return models.Summary(run_id, None, history_id, "blocked", 2,
+                              "Monitor selection or timeout is invalid", store.root)
+    try:
+        run = store.load_run(run_id) if valid_run else None
+    except Exception:
+        return models.Summary(run_id, None, None, "unknown", 4, "Saved run could not be read safely", store.root)
+    selected_range = run.target.range_id if run is not None else range_id
+    session = None
+    record = None
+    observation = None
+    try:
+        deadline = time.monotonic() + timeout
+        session = ludus.discover_target(selected_range)
+        if run is not None and session.target != run.target:
+            return models.Summary(run.run_id, None, None, "unknown", 4,
+                                  "Discovered target does not match the saved run target", store.root)
+        while True:
+            if _remaining_budget(deadline, time.monotonic()) <= 0:
+                outcome = "unknown"
+                break
+            observation = (session.read.observe_run(run) if run is not None
+                           else session.read.observe_history(history_id))
+            if observation.target != session.target:
+                outcome = "unknown"
+            elif run is not None:
+                # Operation correlation is unknown-only for this adapter contract.
+                outcome = "unknown"
+            else:
+                outcome = selected_history_outcome(history_id, observation)
+            terminal = outcome in {"success", "failure"}
+            remaining = _remaining_budget(deadline, time.monotonic())
+            if not wait or terminal or remaining <= 0:
+                break
+            time.sleep(min(interval, remaining))
+        record = store.new_observation(session.target, run.run_id if run else None,
+                                       _persistable_history_id(observation))
+        attribution = observation.attribution if observation is not None else "unknown"
+        record = replace(record, attribution=attribution, outcome=outcome)
+        with store.observation_lock(record.observation_id):
+            store.save_observation(record)
+            store.write_event(record.observation_id, {"type": "outcome", "disposition": outcome})
+        if outcome == "success":
+            code, message = 0, "Selected history record succeeded"
+        elif outcome == "failure":
+            code, message = 5, "Selected history record failed or was aborted"
+        else:
+            candidates = tuple(entry.history_id for entry in observation.candidates) if observation is not None else ()
+            candidate_note = ("; candidate history IDs: " + ", ".join(candidates)) if candidates else ""
+            code, message = 4, "Outcome remains unknown" + candidate_note + "; no history was attached to the run"
+        return _observation_summary(store, record, outcome, code, message)
+    except KeyboardInterrupt:
+        if record is None and session is not None:
+            try:
+                record = store.new_observation(session.target, run.run_id if run else None,
+                                               _persistable_history_id(observation))
+                attribution = observation.attribution if observation is not None else "unknown"
+                with store.observation_lock(record.observation_id):
+                    store.save_observation(replace(record, attribution=attribution, outcome="unknown"))
+            except Exception:
+                pass
+        if record is not None:
+            return _observation_summary(store, record, "unknown", 4, "Observation interrupted; outcome is unknown")
+        return models.Summary(None, None, None, "unknown", 4, "Observation interrupted; outcome is unknown", store.root)
+    except Exception:
+        if record is not None:
+            return _observation_summary(store, record, "unknown", 4, "Observation stopped safely; outcome is unknown")
+        return models.Summary(None, None, None, "unknown", 4,
+                              "Observation stopped safely; outcome is unknown", store.root)
+    finally:
+        if session is not None:
+            try:
+                session.close()
+            except Exception:
+                pass
+
+
+def reset_upload_history(store: StateStore) -> models.ResetSummary:
+    """Invalidate the local upload ledger under the global mutation lock."""
+    try:
+        with store.mutation_lock():
+            count = store.reset_upload_history()
+        return models.ResetSummary(count, 0)
+    except Exception:
+        return models.ResetSummary(0, 2)
