@@ -27,6 +27,40 @@ class SourceError(ValueError):
     """Invalid, ambiguous, or changing local role source."""
 
 
+class MissingRolesError(SourceError):
+    """Structured missing-role result; callers must sanitize before display."""
+
+    def __init__(self, identities: tuple[str, ...], search_root: Path, label: str = "missing role identities"):
+        self.identities = tuple(identities)
+        self.search_root = Path(search_root)
+        super().__init__(
+            label + " " + ", ".join(self.identities)
+            + f"; searched {self.search_root}"
+        )
+
+
+def safe_missing_roles_message(
+    error: MissingRolesError,
+    safe_identities: tuple[str, ...],
+    known_secrets: tuple[str, ...],
+) -> str:
+    """Format only structured, pre-screened role identities and a safe local path."""
+    if not isinstance(error, MissingRolesError):
+        return "Configured roles could not be resolved safely"
+    secrets = tuple(secret for secret in known_secrets if isinstance(secret, str) and secret)
+    visible = tuple(
+        identity for identity in safe_identities
+        if isinstance(identity, str)
+        and identity in error.identities
+        and not any(secret in identity for secret in secrets)
+    )
+    path = str(error.search_root)
+    if any(secret in path for secret in secrets) or any(ord(char) < 32 for char in path):
+        path = "[path suppressed]"
+    names = ", ".join(visible) if visible else "[role names suppressed]"
+    return f"missing configured roles {names}; searched {path}"
+
+
 class _UniqueKeyLoader(yaml.SafeLoader):
     pass
 
@@ -428,9 +462,7 @@ def resolve_roles(checkout: Checkout, config: ActiveConfig, capabilities: Capabi
         selected[name] = (folder, is_exact)
 
     if missing:
-        raise SourceError(
-            "missing configured roles " + ", ".join(sorted(missing)) + f"; searched {roles_root}"
-        )
+        raise MissingRolesError(tuple(sorted(missing)), roles_root, "missing configured roles")
 
     resolved: list[ResolvedRole] = []
     for name in configured:
@@ -462,7 +494,7 @@ def resolve_roles(checkout: Checkout, config: ActiveConfig, capabilities: Capabi
             selected[name] = (folder, False)
         pending.extend(ref for ref in _static_role_references(folder) if ref not in checked)
     if missing:
-        raise SourceError("missing role identities " + ", ".join(sorted(missing)) + f"; searched {roles_root}")
+        raise MissingRolesError(tuple(sorted(missing)), roles_root)
     return tuple(resolved)
 
 

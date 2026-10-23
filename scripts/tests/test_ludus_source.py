@@ -227,6 +227,20 @@ class LudusSourceTests(unittest.TestCase):
         self.assertIn("second_missing", str(raised.exception))
         self.assertIn(str(self.root / "ansible/roles"), str(raised.exception))
 
+    def test_missing_roles_has_structured_safe_diagnostic_boundary(self):
+        error_type = api(source, "MissingRolesError")
+        diagnostic = api(source, "safe_missing_roles_message")
+        root = self.root / "ansible/roles"
+        error = error_type(("credential-canary-role", "safe_missing"), root)
+        self.assertEqual(error.identities, ("credential-canary-role", "safe_missing"))
+        self.assertEqual(error.search_root, root)
+        safe = diagnostic(error, ("safe_missing",), ("credential-canary",))
+        self.assertIn("safe_missing", safe)
+        self.assertIn(str(root), safe)
+        self.assertNotIn("credential-canary", safe)
+        self.assertNotIn("credential-canary-role", safe)
+        self.assertNotIn("Traceback", safe)
+
     def test_archive_suffix_identity_rejected(self):
         resolve = api(source, "resolve_roles")
         for identity in ("role.tar.gz", "role.zip", "role.TGZ"):

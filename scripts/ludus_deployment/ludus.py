@@ -530,6 +530,31 @@ class BoundSession:
         self._deploy_clients.clear()
         object.__setattr__(self, "_context", None)
 
+    def validate_configured_roles(self, identities: tuple[str, ...]) -> None:
+        """Reject configured identities containing credentials or unsafe text."""
+        context = self._context
+        if self._closed or context is None:
+            raise LudusAdapterError("Ludus session is closed", 2, "blocked")
+        secrets = context._secrets.values()
+        if not isinstance(identities, (tuple, list)):
+            raise LudusAdapterError("Configured role identities are unsupported", 2, "blocked")
+        for identity in identities:
+            if _safe_metadata_text(identity, secrets) is None:
+                raise LudusAdapterError("Configured role identity contains unsafe data", 2, "blocked")
+
+    def safe_missing_roles_message(self, error: Exception) -> str:
+        """Render a structured source diagnostic without exposing registered secrets."""
+        context = self._context
+        if self._closed or context is None:
+            return "Configured roles could not be resolved safely"
+        from . import source
+
+        if not isinstance(error, source.MissingRolesError):
+            return "Configured roles could not be resolved safely"
+        identities = tuple(error.identities)
+        self.validate_configured_roles(identities)
+        return source.safe_missing_roles_message(error, identities, context._secrets.values())
+
 
 class _ReadClient:
     def __init__(self, context: ResolvedContext, target: models.Target):

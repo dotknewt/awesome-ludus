@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import ast
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.ludus_deployment import ludus
+from scripts.ludus_deployment import ludus, state
+from scripts.ludus_deployment import models
+from scripts.ludus_deployment import workflow
 
 ROOT = Path(__file__).resolve().parents[2]
 ADAPTER = ROOT / "scripts" / "ludus_deployment" / "ludus.py"
+WORKFLOW = ROOT / "scripts" / "ludus_deployment" / "workflow.py"
 
 
 def adapter_tree() -> ast.Module:
@@ -31,7 +35,257 @@ def source_segment(node: ast.AST) -> str:
     return ast.get_source_segment(ADAPTER.read_text(encoding="utf-8"), node) or ""
 
 
+def workflow_tree() -> ast.Module:
+    if not WORKFLOW.is_file():
+        raise AssertionError("required production workflow scripts/ludus_deployment/workflow.py is missing")
+    return ast.parse(WORKFLOW.read_text(encoding="utf-8"), filename=str(WORKFLOW))
+
+
+def function_node(tree: ast.Module, name: str) -> ast.FunctionDef:
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            return node
+    raise AssertionError(f"required workflow function {name} is missing")
+
+
 class LudusContractTests(unittest.TestCase):
+    def test_changed_selection(self):
+        """Only exact trusted manifest/policy history plus installed presence skips upload."""
+        manifest = models.Manifest(1, "digest-a", (("tasks/main.yml", "file", 0, "abc"),))
+        changed = models.Manifest(1, "digest-b", (("tasks/main.yml", "file", 0, "def"),))
+        role = models.ResolvedRole("alpha", Path("ansible/roles/alpha"), ())
+        staged = (models.StagedRole(role, Path("/private/alpha"), manifest),)
+        server = models.ServerKey("server", "user-scope")
+        checkout = models.Checkout(Path("/checkout"), "rev")
+        versions = ("client", "server")
+
+        def entry(status="success", saved=manifest):
+            return models.UploadEntry(server, "alpha", status, saved, "run", "now", checkout, versions, ())
+
+        cases = (
+            ({"alpha": entry(saved=changed)}, frozenset({"alpha"}), "manifest or policy changed"),
+            ({"alpha": entry(saved=models.Manifest(2, manifest.digest, manifest.entries))}, frozenset({"alpha"}), "manifest or policy changed"),
+            ({"alpha": entry()}, frozenset(), "missing presence"),
+            ({"alpha": entry(status="unknown")}, frozenset({"alpha"}), "untrusted history"),
+            ({"alpha": entry(status="in-flight")}, frozenset({"alpha"}), "untrusted history"),
+            ({}, frozenset({"alpha"}), "missing history"),
+        )
+        for history, installed, reason in cases:
+            with self.subTest(history=history, installed=installed):
+                self.assertEqual(workflow.select_changed(staged, history, installed, False), {"alpha": reason})
+        self.assertEqual(workflow.select_changed(staged, {"alpha": entry()}, frozenset({"alpha"}), False), {})
+        self.assertEqual(workflow.select_changed(staged, {"alpha": entry()}, frozenset({"alpha"}), True), {"alpha": "forced"})
+
+    def test_destroyed_requires_explicit_full(self):
+        snapshot = models.RangeSnapshot("DESTROYED", False, False, None, None, "now")
+        with self.assertRaises(models.DeploymentError) as caught:
+            workflow.check_scope("roles", snapshot)
+        self.assertEqual(getattr(caught.exception, "exit_code", None), 2)
+        self.assertIn("Full scope required; explicitly request --scope full.", str(caught.exception))
+        workflow.check_scope("full", snapshot)
+
+    def test_scope_allows_pinned_error_and_aborted_states(self):
+        for state in ("ERROR", "ABORTED"):
+            with self.subTest(state=state):
+                workflow.check_scope("roles", models.RangeSnapshot(state, False, False, None, None, "now"))
+
+    def test_scope_blockers_have_precise_exit_codes(self):
+        for snapshot in (
+            models.RangeSnapshot("SUCCESS", True, False, None, None, "now"),
+            models.RangeSnapshot("SUCCESS", False, True, None, None, "now"),
+        ):
+            with self.subTest(snapshot=snapshot), self.assertRaises(models.DeploymentError) as caught:
+                workflow.check_scope("roles", snapshot)
+            self.assertEqual(caught.exception.exit_code, 2)
+        with self.assertRaises(models.DeploymentError) as caught:
+            workflow.check_scope("roles", models.RangeSnapshot("UNRECOGNIZED", False, False, None, None, "now"))
+        self.assertEqual(caught.exception.exit_code, 2)
+
+    def test_launch_has_one_callsite_outside_upload_loop(self):
+        tree = workflow_tree()
+        deploy = function_node(tree, "deploy")
+        calls = [node for node in ast.walk(deploy) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Attribute) and node.func.attr == "launch"]
+        self.assertEqual(len(calls), 1, "deploy must have exactly one reserved launch callsite")
+        for parent in ast.walk(deploy):
+            if isinstance(parent, (ast.For, ast.AsyncFor, ast.While)) and calls[0] in ast.walk(parent):
+                self.fail("launch must not be inside an upload loop")
+        self.assertFalse(any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                             and node.func.id in {"sleep", "monitor", "observe_run"} for node in ast.walk(deploy)))
+
+    def test_preflight_precedes_upload(self):
+        tree = workflow_tree()
+        deploy = function_node(tree, "deploy")
+        top = list(deploy.body)
+        positions = {name: min((node.lineno for node in ast.walk(deploy) if isinstance(node, ast.Call)
+                                and ((isinstance(node.func, ast.Name) and node.func.id == name)
+                                     or (isinstance(node.func, ast.Attribute) and node.func.attr == name))),
+                               default=None) for name in ("check_scope", "upload")}
+        self.assertIsNotNone(positions["check_scope"])
+        self.assertIsNotNone(positions["upload"])
+        self.assertLess(positions["check_scope"], positions["upload"])
+        self.assertFalse(any(isinstance(node, ast.Return) and isinstance(node.value, ast.Constant)
+                             and node.value.value is None for node in ast.walk(deploy)),
+                         "empty changed selection must not return before launch")
+
+    def test_launch_timestamps_bracket_launch_and_acceptance_is_not_completion(self):
+        deploy = function_node(workflow_tree(), "deploy")
+        launch_call = next(node for node in ast.walk(deploy) if isinstance(node, ast.Call)
+                           and isinstance(node.func, ast.Attribute) and node.func.attr == "launch")
+        source = WORKFLOW.read_text(encoding="utf-8")
+        calls = [node for node in ast.walk(deploy) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Name) and node.func.id == "replace"]
+        start_lines = [node.lineno for node in calls if any(arg.arg == "launch_started_at" for arg in node.keywords)]
+        finish_lines = [node.lineno for node in calls if any(arg.arg == "launch_finished_at" for arg in node.keywords)]
+        self.assertTrue(start_lines)
+        self.assertTrue(finish_lines)
+        self.assertLess(max(start_lines), launch_call.lineno)
+        self.assertGreater(min(finish_lines), launch_call.lineno)
+        self.assertIn('phase="launched"', source)
+        self.assertIn('outcome="accepted"', source)
+        self.assertNotIn('phase="complete", outcome="accepted"', source)
+
+    def test_launch_result_is_classified_before_first_post_launch_write(self):
+        """Each mutually-exclusive disposition is classified before its own writes."""
+        deploy = function_node(workflow_tree(), "deploy")
+        launch_call = next(node for node in ast.walk(deploy) if isinstance(node, ast.Call)
+                           and isinstance(node.func, ast.Attribute) and node.func.attr == "launch")
+        launch_statement = next(node for node in ast.walk(deploy) if isinstance(node, ast.Assign)
+                                and launch_call in ast.walk(node))
+
+        def containing_sequence(parent):
+            for _field, value in ast.iter_fields(parent):
+                if isinstance(value, list):
+                    if launch_statement in value:
+                        return value
+                    for item in value:
+                        if isinstance(item, ast.AST):
+                            found = containing_sequence(item)
+                            if found is not None:
+                                return found
+                elif isinstance(value, ast.AST):
+                    found = containing_sequence(value)
+                    if found is not None:
+                        return found
+            return None
+
+        statements = containing_sequence(deploy)
+        self.assertIsNotNone(statements, "launch must be in an inspectable statement sequence")
+        launch_index = statements.index(launch_statement)
+        decisions = [node for node in statements[launch_index + 1:]
+                     if isinstance(node, ast.If) and isinstance(node.test, ast.Compare)
+                     and isinstance(node.test.left, ast.Attribute)
+                     and node.test.left.attr == "accepted"]
+        self.assertEqual(len(decisions), 2, "accepted and rejected launch results need explicit branches")
+        first_decision_index = statements.index(min(decisions, key=lambda item: item.lineno))
+
+        def disposition_branch(value):
+            return next(node for node in decisions if node.test.comparators
+                        and isinstance(node.test.comparators[0], ast.Constant)
+                        and node.test.comparators[0].value is value)
+
+        def calls_in(node, names):
+            return [call for call in ast.walk(node) if isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Name) and call.func.id in names]
+
+        self.assertFalse(any(calls_in(statement, {"_persist", "_durable_write"})
+                             for statement in statements[launch_index + 1:first_decision_index]),
+                         "do not write an unresolved launch response before branching")
+
+        for disposition, branch_value in (("launched", True), ("launch-rejected", False)):
+            branch = disposition_branch(branch_value)
+            matching = [call for call in calls_in(branch, {"replace"})
+                        if {key.arg: key.value.value for key in call.keywords
+                            if key.arg in {"phase", "outcome"} and isinstance(key.value, ast.Constant)}
+                        == {"phase": disposition,
+                            "outcome": "accepted" if branch_value else "failure"}]
+            writes = calls_in(branch, {"_persist", "_durable_write"})
+            self.assertTrue(matching, f"{disposition} needs an in-memory transition")
+            self.assertTrue(writes, f"{disposition} must be recorded")
+            self.assertLess(min(call.lineno for call in matching), min(call.lineno for call in writes))
+
+        unknown = next((call for call in calls_in(deploy, {"replace"})
+                        if {keyword.arg: keyword.value.value for keyword in call.keywords
+                            if keyword.arg in {"phase", "outcome"} and isinstance(keyword.value, ast.Constant)}
+                        == {"phase": "launch-unknown", "outcome": "unknown"}), None)
+        self.assertIsNotNone(unknown, "ambiguous launch needs an in-memory transition")
+        later_writes = [call for call in calls_in(deploy, {"_persist", "_durable_write"})
+                        if call.lineno > unknown.lineno]
+        self.assertTrue(later_writes, "ambiguous launch must be recorded after classification")
+        self.assertEqual(disposition_branch(False).lineno < unknown.lineno, True,
+                         "ambiguous response must be classified after the explicit rejection check")
+
+    def test_upload_reservation_does_not_claim_verified_identity(self):
+        deploy = function_node(workflow_tree(), "deploy")
+        source = ast.get_source_segment(WORKFLOW.read_text(encoding="utf-8"), deploy) or ""
+        self.assertIn('None, checkout, (session.target.capabilities.client_version,', source)
+        self.assertIn('identity_evidence=("user-scoped installed-role presence",)', source)
+        self.assertIn('outcome="failure"', source)
+        self.assertIn("if launch.accepted is False:", source)
+        self.assertIn("source.manifest(item.directory)", source)
+        self.assertNotIn("source.manifest(item.role.source)", source)
+
+    def test_mutation_lock_contention_returns_blocker_before_discovery(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = state.StateStore(Path(directory) / "state")
+            with store.mutation_lock():
+                summary = workflow.deploy("range", "roles", None, False, store)
+            self.assertEqual(summary.exit_code, 2)
+            self.assertEqual(summary.outcome, "blocked")
+
+    def test_known_launch_acceptance_survives_later_exception_transition(self):
+        target = models.Target(
+            models.ServerKey("server", "scope"), "range",
+            models.Capabilities("client", "server", {}, "unknown-only"),
+        )
+        checkout = models.Checkout(Path("/checkout"), "revision")
+        accepted = models.RunRecord(
+            "run-id", target, "roles", checkout, "digest", "launched", 0, 1,
+            None, (), "started", "finished", None, "accepted",
+        )
+        transition = getattr(workflow, "failure_transition", None)
+        self.assertIsNotNone(transition, "workflow must expose a pure exception transition")
+        result = transition(accepted, "unknown")
+        self.assertEqual(result.outcome, "accepted")
+        self.assertEqual(result.phase, "launched")
+        self.assertEqual(result.launch_started_at, "started")
+        self.assertEqual(result.launch_finished_at, "finished")
+        self.assertEqual(accepted.outcome, "accepted", "transition must not mutate the original record")
+
+    def test_exception_paths_apply_and_persist_failure_transition(self):
+        deploy = function_node(workflow_tree(), "deploy")
+        handlers = [node for node in ast.walk(deploy) if isinstance(node, ast.ExceptHandler)]
+        generic = next((handler for handler in handlers
+                        if isinstance(handler.type, ast.Name) and handler.type.id == "Exception"), None)
+        self.assertIsNotNone(generic)
+        self.assertTrue(any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                            and node.func.id == "_exception_summary" for node in ast.walk(generic)),
+                        "caught exceptions must use safe terminal reporting")
+        terminal = function_node(workflow_tree(), "_exception_summary")
+        self.assertTrue(any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                            and node.func.id == "failure_transition" for node in ast.walk(terminal)),
+                        "caught exceptions must transition run state")
+        self.assertTrue(any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                            and node.func.id == "_persist" for node in ast.walk(terminal)),
+                        "failure transition must be durably recorded when possible")
+
+    def test_configured_identity_validation_precedes_resolution_and_persistence(self):
+        tree = workflow_tree()
+        deploy = function_node(tree, "deploy")
+        calls = [node for node in ast.walk(deploy) if isinstance(node, ast.Call)]
+        validation = next((node for node in calls if isinstance(node.func, ast.Attribute)
+                           and node.func.attr == "validate_configured_roles"), None)
+        self.assertIsNotNone(validation, "bound session must screen configured identities against secrets")
+        resolve = next(node for node in calls if isinstance(node.func, ast.Attribute)
+                       and node.func.attr == "resolve_roles")
+        persist = next(node for node in calls if isinstance(node.func, ast.Attribute)
+                       and node.func.attr == "new_run")
+        self.assertLess(validation.lineno, resolve.lineno)
+        self.assertLess(validation.lineno, persist.lineno)
+        session = class_node(adapter_tree(), "BoundSession")
+        self.assertTrue(any(isinstance(node, ast.FunctionDef) and node.name == "validate_configured_roles"
+                            for node in session.body))
+
     def test_adapter_command_shapes_match_research(self):
         """Require literal argv construction matching the pinned CLI contract."""
         tree = adapter_tree()
