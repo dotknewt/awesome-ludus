@@ -7,15 +7,36 @@
       - not splunk_server_hec_validate or splunk_server_hec_enabled
     fail_msg: HEC switches must be boolean, and validation requires HEC management to be enabled.
 
+- name: Validate HEC listener port type
+  ansible.builtin.assert:
+    that:
+      - splunk_server_hec_port is not boolean
+      - >-
+        splunk_server_hec_port is integer or
+        (splunk_server_hec_port is string and
+         splunk_server_hec_port is match('^[0-9]+\Z'))
+    fail_msg: >-
+      HEC port must be a non-boolean integer or an ASCII-decimal string;
+      value={{ splunk_server_hec_port | to_json }}, type={{ splunk_server_hec_port | type_debug }}.
+  when: splunk_server_hec_enabled
+
+- name: Validate normalized HEC listener port range
+  ansible.builtin.assert:
+    that:
+      - (splunk_server_hec_port | int) >= 1
+      - (splunk_server_hec_port | int) <= 65535
+    fail_msg: >-
+      HEC port must be between 1 and 65535 inclusive;
+      value={{ splunk_server_hec_port | to_json }}, type={{ splunk_server_hec_port | type_debug }},
+      normalized={{ splunk_server_hec_port | int }}.
+  when: splunk_server_hec_enabled
+
 - name: Validate enabled HEC inputs
   ansible.builtin.assert:
     that:
       - splunk_server_hec_app is string
       - splunk_server_hec_app is match('^[A-Za-z][A-Za-z0-9_-]*$')
       - splunk_version == '10.6.1.1'
-      - splunk_server_hec_port is integer
-      - splunk_server_hec_port >= 1
-      - splunk_server_hec_port <= 65535
       - splunk_server_hec_ssl_enabled is boolean
       - splunk_server_hec_server_cert is string
       - splunk_server_hec_server_cert | length == 0 or splunk_server_hec_ssl_enabled
@@ -44,23 +65,58 @@
     fail_msg: >-
       HEC requires a safe app/token name, nonempty token, valid port, and a
       unique nonempty index list containing the default index.
+      app={{ splunk_server_hec_app | to_json }} ({{ splunk_server_hec_app | type_debug }}),
+      token_name={{ splunk_server_hec_token_name | to_json }} ({{ splunk_server_hec_token_name | type_debug }}),
+      lab_token={{ splunk_server_hec_token | to_json }} ({{ splunk_server_hec_token | type_debug }}),
+      indexes={{ splunk_server_hec_indexes | to_json }} ({{ splunk_server_hec_indexes | type_debug }}),
+      default_index={{ splunk_server_hec_default_index | to_json }} ({{ splunk_server_hec_default_index | type_debug }}),
+      ssl={{ splunk_server_hec_ssl_enabled | to_json }} ({{ splunk_server_hec_ssl_enabled | type_debug }}),
+      server_cert={{ splunk_server_hec_server_cert | to_json }} ({{ splunk_server_hec_server_cert | type_debug }}),
+      version={{ splunk_version | to_json }}.
   when: splunk_server_hec_enabled
-  no_log: true
 
 - name: Validate HEC validation endpoint inputs
-  ansible.builtin.assert:
-    that:
-      - splunk_server_hec_validation_endpoint is string
-      - >-
-        splunk_server_hec_validation_endpoint is
-        match('^https?://[^/]+(?::[0-9]+)?/services/collector/event$')
-      - (splunk_server_hec_ssl_enabled and splunk_server_hec_validation_endpoint is match('^https://')) or
-        (not splunk_server_hec_ssl_enabled and splunk_server_hec_validation_endpoint is match('^http://'))
-    fail_msg: >-
-      Validation requires an explicit event endpoint whose scheme matches the
-      managed HEC listener.
   when: splunk_server_hec_validate
-  no_log: true
+  block:
+    - name: Check endpoint syntax and listener agreement privately
+      ansible.builtin.assert:
+        that:
+          - splunk_server_hec_validation_endpoint is string
+          - >-
+            splunk_server_hec_validation_endpoint is
+            match('^https?://(?:' ~
+                  '[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?' ~
+                  '(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*' ~
+                  '|\[(?=[0-9A-Fa-f:]*[0-9A-Fa-f])' ~
+                  '(?=[0-9A-Fa-f:]*:)(?![0-9A-Fa-f:]*:::)' ~
+                  '(?![0-9A-Fa-f:]*::[0-9A-Fa-f:]*::)' ~
+                  '[0-9A-Fa-f:]+\]):[0-9]+' ~
+                  '/services/collector/event\Z')
+          - >-
+            (splunk_server_hec_validation_endpoint | urlsplit('port') | int) ==
+            (splunk_server_hec_port | int)
+          - >-
+            splunk_server_hec_validation_endpoint | urlsplit('path') ==
+            '/services/collector/event'
+          - splunk_server_hec_validation_endpoint | urlsplit('query') | length == 0
+          - splunk_server_hec_validation_endpoint | urlsplit('fragment') | length == 0
+          - splunk_server_hec_validation_endpoint | urlsplit('username') is none
+          - splunk_server_hec_validation_endpoint | urlsplit('password') is none
+          - (splunk_server_hec_ssl_enabled and splunk_server_hec_validation_endpoint is match('^https://')) or
+            (not splunk_server_hec_ssl_enabled and splunk_server_hec_validation_endpoint is match('^http://'))
+      # Invalid endpoints can contain external URL credentials before validation.
+      no_log: true
+  rescue:
+    - name: Report invalid HEC validation endpoint without exposing URL credentials
+      ansible.builtin.fail:
+        msg: >-
+          HEC validation endpoint is invalid or could not be parsed. Require a
+          string HTTP(S) URL with an explicit listener port, path
+          /services/collector/event, no userinfo/query/fragment, and scheme
+          matching HEC TLS. Invalid URL and parser text remain protected because
+          they may contain external credentials.
+          expected_port={{ splunk_server_hec_port | int }},
+          expected_tls={{ splunk_server_hec_ssl_enabled | to_json }}.
 
 - name: Inspect explicit HEC server certificate
   ansible.builtin.stat:
@@ -157,7 +213,6 @@
       token_name: "{{ splunk_server_hec_token_name }}"
       indexes: "{{ splunk_server_hec_indexes | sort }}"
   when: splunk_server_hec_enabled
-  no_log: true
 
 - name: Verify Splunk service can read explicit server certificate
   ansible.builtin.command:
@@ -395,6 +450,7 @@
   loop_control:
     label: "{{ item.path }}"
   register: splunk_server_hec_conf_contents  # noqa: var-naming[no-role-prefix]
+  # Unrelated raw configuration can contain real external credentials.
   no_log: true
   when: splunk_server_hec_enabled
 
@@ -403,7 +459,37 @@
     splunk_server_hec_raw_parse: >-
       {{ splunk_server_hec_conf_contents.results |
          splunk_hec_parse_raw_files }}
+  # Parsed records still contain unrelated raw credential values.
   no_log: true
+  when: splunk_server_hec_enabled
+
+- name: Verify selected vendor input bytes  # noqa: var-naming[no-role-prefix]
+  ansible.builtin.set_fact:
+    splunk_server_hec_verified_vendor_inputs: >-
+      {{ splunk_server_hec_raw_parse |
+         splunk_hec_verified_vendor_sources({
+           (splunk_server_home ~ '/etc/apps/splunk_httpinput/default/inputs.conf'):
+             '524100c61a7f1640366d86b78ead077f03a5c09e83dd2a60a74ce11cbf155f3d',
+           (splunk_server_home ~ '/etc/system/default/inputs.conf'):
+             'fcb600230352a948926eca671905bb5a4218b927340f5242e30d2dd842a3c9fe'
+         }) }}
+  when: splunk_server_hec_enabled
+
+- name: Require exact selected vendor input provenance
+  ansible.builtin.assert:
+    that:
+      - >-
+        splunk_server_hec_verified_vendor_inputs ==
+        [splunk_server_home ~ '/etc/apps/splunk_httpinput/default/inputs.conf',
+         splunk_server_home ~ '/etc/system/default/inputs.conf']
+    fail_msg: >-
+      A selected Splunk vendor input is absent or differs from its
+      checksum-verified 10.6.1.1 package member.
+      verified={{ splunk_server_hec_verified_vendor_inputs | to_json }};
+      expected={{ [splunk_server_home ~ '/etc/apps/splunk_httpinput/default/inputs.conf',
+                   splunk_server_home ~ '/etc/system/default/inputs.conf'] | to_json }};
+      file_checksums={{ splunk_server_hec_raw_parse.files | to_json }};
+      parser_errors={{ splunk_server_hec_raw_parse.errors | to_json }}.
   when: splunk_server_hec_enabled
 
 - name: Classify all raw HEC ownership conflicts  # noqa: var-naming[no-role-prefix]
@@ -417,10 +503,10 @@
            splunk_server_hec_token_name,
            splunk_server_hec_token,
            splunk_server_hec_indexes,
-           splunk_server_hec_port,
+           (splunk_server_hec_port | int),
            splunk_server_hec_ssl_enabled,
-           splunk_server_hec_server_cert) }}
-  no_log: true
+           splunk_server_hec_server_cert,
+           splunk_server_hec_verified_vendor_inputs) }}
   when: splunk_server_hec_enabled
 
 - name: Reject malformed, conflicting, or shadowed raw HEC definitions
@@ -428,9 +514,12 @@
     that:
       - splunk_server_hec_raw_conflicts | length == 0
     fail_msg: >-
-      Raw Splunk configuration has malformed or conflicting HEC definitions;
-      review redacted task details and on-host provenance before retrying.
-  no_log: true
+      Failed expression: splunk_server_hec_raw_conflicts | length == 0;
+      count={{ splunk_server_hec_raw_conflicts | length }};
+      conflicts={{ splunk_server_hec_raw_conflicts | to_json }};
+      parser_errors={{ splunk_server_hec_raw_parse.errors | to_json }};
+      owned_inputs={{ splunk_server_hec_app_path }}/local/inputs.conf;
+      owned_indexes={{ splunk_server_hec_app_path }}/local/indexes.conf.
   when: splunk_server_hec_enabled
 
 - name: Inspect listener ownership on the requested HEC port
@@ -441,7 +530,7 @@
       - -ltnp
       - sport
       - "="
-      - ":{{ splunk_server_hec_port }}"
+      - ":{{ splunk_server_hec_port | int }}"
   register: splunk_server_hec_port_owner  # noqa: var-naming[no-role-prefix]
   changed_when: false
   check_mode: false
@@ -466,8 +555,16 @@
       - --debug
   register: splunk_server_hec_pre_inputs  # noqa: var-naming[no-role-prefix]
   changed_when: false
+  failed_when: false
   check_mode: false
   no_log: true
+  when: splunk_server_hec_enabled
+
+- name: Check current HEC input collection status  # noqa: var-naming[no-role-prefix]
+  ansible.builtin.import_tasks: hec-btool-status.yml
+  vars:
+    splunk_server_hec_btool_result: "{{ splunk_server_hec_pre_inputs }}"
+    splunk_server_hec_btool_label: inputs list --debug (pre-write)
   when: splunk_server_hec_enabled
 
 - name: Read current effective index provenance
@@ -480,8 +577,16 @@
       - --debug
   register: splunk_server_hec_pre_indexes  # noqa: var-naming[no-role-prefix]
   changed_when: false
+  failed_when: false
   check_mode: false
   no_log: true
+  when: splunk_server_hec_enabled
+
+- name: Check current index collection status  # noqa: var-naming[no-role-prefix]
+  ansible.builtin.import_tasks: hec-btool-status.yml
+  vars:
+    splunk_server_hec_btool_result: "{{ splunk_server_hec_pre_indexes }}"
+    splunk_server_hec_btool_label: indexes list --debug (pre-write)
   when: splunk_server_hec_enabled
 
 - name: Read current effective Splunk management listener provenance
@@ -495,8 +600,16 @@
       - --debug
   register: splunk_server_hec_pre_server  # noqa: var-naming[no-role-prefix]
   changed_when: false
+  failed_when: false
   check_mode: false
   no_log: true
+  when: splunk_server_hec_enabled
+
+- name: Check management listener collection status  # noqa: var-naming[no-role-prefix]
+  ansible.builtin.import_tasks: hec-btool-status.yml
+  vars:
+    splunk_server_hec_btool_result: "{{ splunk_server_hec_pre_server }}"
+    splunk_server_hec_btool_label: server list httpServer --debug
   when: splunk_server_hec_enabled
 
 - name: Read current effective Splunk web listener provenance
@@ -510,8 +623,16 @@
       - --debug
   register: splunk_server_hec_pre_web  # noqa: var-naming[no-role-prefix]
   changed_when: false
+  failed_when: false
   check_mode: false
   no_log: true
+  when: splunk_server_hec_enabled
+
+- name: Check web listener collection status  # noqa: var-naming[no-role-prefix]
+  ansible.builtin.import_tasks: hec-btool-status.yml
+  vars:
+    splunk_server_hec_btool_result: "{{ splunk_server_hec_pre_web }}"
+    splunk_server_hec_btool_label: web list settings --debug
   when: splunk_server_hec_enabled
 
 - name: Parse pre-write btool stanza and provenance records  # noqa: var-naming[no-role-prefix]
@@ -534,11 +655,10 @@
          splunk_hec_non_hec_listener_conflicts(
            splunk_server_hec_pre_server_parse,
            splunk_server_hec_pre_web_parse,
-           splunk_server_hec_port,
+           (splunk_server_hec_port | int),
            splunk_receiver_port,
            splunk_server_mgmt_port,
            splunk_server_web_port) }}
-  no_log: true
   when: splunk_server_hec_enabled
 
 - name: Reject known non-HEC listener collisions before HEC writes
@@ -546,9 +666,14 @@
     that:
       - splunk_server_hec_listener_conflicts | length == 0
     fail_msg: >-
-      The requested HEC port conflicts with a declared or effective Splunk
-      receiving, management, or web listener; inspect redacted provenance.
-  no_log: true
+      Failed expression: splunk_server_hec_listener_conflicts | length == 0;
+      count={{ splunk_server_hec_listener_conflicts | length }};
+      conflicts={{ splunk_server_hec_listener_conflicts | to_json }};
+      HEC port={{ splunk_server_hec_port | to_json }} ({{ splunk_server_hec_port | type_debug }}),
+      normalized={{ splunk_server_hec_port | int }};
+      receiving={{ splunk_receiver_port | to_json }} ({{ splunk_receiver_port | type_debug }}),
+      management={{ splunk_server_mgmt_port | to_json }} ({{ splunk_server_mgmt_port | type_debug }}),
+      web={{ splunk_server_web_port | to_json }} ({{ splunk_server_web_port | type_debug }}).
   when: splunk_server_hec_enabled
 
 - name: Classify pre-write effective HEC provenance  # noqa: var-naming[no-role-prefix]
@@ -563,10 +688,10 @@
            splunk_server_hec_token_name,
            splunk_server_hec_token,
            splunk_server_hec_indexes,
-           splunk_server_hec_port,
+           (splunk_server_hec_port | int),
            splunk_server_hec_ssl_enabled,
-           splunk_server_hec_server_cert) }}
-  no_log: true
+           splunk_server_hec_server_cert,
+           splunk_server_hec_verified_vendor_inputs) }}
   when: splunk_server_hec_enabled
 
 - name: Reject incompatible pre-write effective HEC provenance
@@ -574,9 +699,42 @@
     that:
       - splunk_server_hec_preflight_conflicts | length == 0
     fail_msg: >-
-      Effective pre-write HEC provenance is malformed or conflicts with the
-      owned contract; inspect redacted btool and raw-definition evidence.
-  no_log: true
+      Failed expression: splunk_server_hec_preflight_conflicts | length == 0;
+      count={{ splunk_server_hec_preflight_conflicts | length }};
+      conflicts={{ splunk_server_hec_preflight_conflicts | to_json }};
+      parser_errors={{ (splunk_server_hec_pre_inputs_parse.errors +
+                         splunk_server_hec_pre_indexes_parse.errors) | to_json }};
+      owned_inputs={{ splunk_server_hec_app_path }}/local/inputs.conf;
+      owned_indexes={{ splunk_server_hec_app_path }}/local/indexes.conf;
+      token_name={{ splunk_server_hec_token_name | to_json }} ({{ splunk_server_hec_token_name | type_debug }});
+      lab_token={{ splunk_server_hec_token | to_json }} ({{ splunk_server_hec_token | type_debug }});
+      indexes={{ splunk_server_hec_indexes | to_json }} ({{ splunk_server_hec_indexes | type_debug }});
+      port={{ splunk_server_hec_port | to_json }} ({{ splunk_server_hec_port | type_debug }}),
+      normalized={{ splunk_server_hec_port | int }};
+      ssl={{ splunk_server_hec_ssl_enabled | to_json }} ({{ splunk_server_hec_ssl_enabled | type_debug }});
+      verified_vendor_inputs={{ splunk_server_hec_verified_vendor_inputs | to_json }};
+      raw_explicit_headers={{ splunk_server_hec_raw_parse.stanzas |
+        selectattr('stanza', 'in', ['http', 'http://' ~ splunk_server_hec_token_name] + splunk_server_hec_indexes) | list | to_json }};
+      effective_parser_stanzas={{ (splunk_server_hec_pre_inputs_parse.stanzas + splunk_server_hec_pre_indexes_parse.stanzas) |
+        selectattr('stanza', 'in', ['http', 'http://' ~ splunk_server_hec_token_name] + splunk_server_hec_indexes) | list | to_json }}.
+      Parser stanzas may include inherited setting sources; raw_explicit_headers records actual raw declarations.
+      Focused effective records (source, stanza, key, value, line):
+      {% for record in splunk_server_hec_pre_inputs_parse.records %}
+      {% if (record.stanza == 'http' and record.key_lower in ['disabled', 'port', 'enablessl', 'servercert']) or
+            (record.stanza == 'http://' ~ splunk_server_hec_token_name and record.key_lower in ['disabled', 'token', 'index', 'indexes']) %}
+      {% if record.key_lower != 'token' or record.source == splunk_server_hec_app_path ~ '/local/inputs.conf' or
+            record.value == splunk_server_hec_token %}
+      {{ record | to_json }}
+      {% else %}
+      {{ (record | combine({'value': '<unowned token withheld: external credential boundary unknown>'})) | to_json }}
+      {% endif %}
+      {% endif %}
+      {% endfor %}
+      {% for record in splunk_server_hec_pre_indexes_parse.records %}
+      {% if record.stanza in splunk_server_hec_indexes and record.key_lower in ['homepath', 'coldpath', 'thawedpath'] %}
+      {{ record | to_json }}
+      {% endif %}
+      {% endfor %}
   when: splunk_server_hec_enabled
 
 - name: Reject Splunk cluster peer configuration
@@ -590,8 +748,16 @@
       - --debug
   register: splunk_server_hec_clustering  # noqa: var-naming[no-role-prefix]
   changed_when: false
+  failed_when: false
   check_mode: false
   no_log: true
+  when: splunk_server_hec_enabled
+
+- name: Check cluster configuration collection status  # noqa: var-naming[no-role-prefix]
+  ansible.builtin.import_tasks: hec-btool-status.yml
+  vars:
+    splunk_server_hec_btool_result: "{{ splunk_server_hec_clustering }}"
+    splunk_server_hec_btool_label: server list clustering --debug
   when: splunk_server_hec_enabled
 
 - name: Read effective Splunk management TLS configuration
@@ -605,8 +771,16 @@
       - --debug
   register: splunk_server_hec_management_tls  # noqa: var-naming[no-role-prefix]
   changed_when: false
+  failed_when: false
   check_mode: false
   no_log: true
+  when: splunk_server_hec_enabled
+
+- name: Check management TLS collection status  # noqa: var-naming[no-role-prefix]
+  ansible.builtin.import_tasks: hec-btool-status.yml
+  vars:
+    splunk_server_hec_btool_result: "{{ splunk_server_hec_management_tls }}"
+    splunk_server_hec_btool_label: server list sslConfig --debug
   when: splunk_server_hec_enabled
 
 - name: Require standalone Splunk context for owned HEC app
@@ -614,7 +788,6 @@
     that:
       - splunk_server_hec_clustering.stdout is not regex('(?i)mode\\s*=\\s*(slave|peer)')
     fail_msg: Cluster peers have a different precedence tier and are not supported by this owned HEC path.
-  no_log: true
   when: splunk_server_hec_enabled
 
 - name: Require management TLS when HEC TLS is enabled
@@ -623,5 +796,4 @@
       - not splunk_server_hec_ssl_enabled or
         splunk_server_hec_management_tls.stdout is regex('(?i)enableSplunkdSSL\\s*=\\s*(true|1)')
     fail_msg: Splunk HEC TLS cannot be enabled while effective management TLS is disabled.
-  no_log: true
   when: splunk_server_hec_enabled

@@ -1,0 +1,116 @@
+---
+- name: Create the dedicated Python root
+  ansible.builtin.file:
+    path: "{{ ludus_k3s_bootstrap_python_root }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: ludus_k3s_bootstrap_install_state == 'fresh'
+
+- name: Create the isolated Python environment with Ubuntu system packages visible
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -m
+      - venv
+      - --system-site-packages
+      - "{{ ludus_k3s_bootstrap_python_root }}/python"
+    creates: "{{ ludus_k3s_bootstrap_python }}"
+  when: ludus_k3s_bootstrap_install_state == 'fresh'
+
+- name: Install the complete hash-locked Kubernetes client requirements
+  ansible.builtin.copy:
+    src: kubernetes-requirements.txt
+    dest: "{{ ludus_k3s_bootstrap_requirements }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: ludus_k3s_bootstrap_install_state == 'fresh'
+
+- name: Install the Python lock verifier
+  ansible.builtin.copy:
+    src: verify_python_lock.py
+    dest: "{{ ludus_k3s_bootstrap_python_lock_verifier }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: ludus_k3s_bootstrap_install_state == 'fresh'
+
+- name: Install only hash-verified wheels into the dedicated environment
+  ansible.builtin.command:
+    argv:
+      - "{{ ludus_k3s_bootstrap_python }}"
+      - -m
+      - pip
+      - install
+      - --isolated
+      - --require-hashes
+      - "--only-binary=:all:"
+      - --ignore-installed
+      - --requirement
+      - "{{ ludus_k3s_bootstrap_requirements }}"
+  changed_when: true
+  when: ludus_k3s_bootstrap_install_state in ['fresh', 'resume_pre_service']
+  environment:
+    PIP_CONFIG_FILE: /dev/null
+    PIP_TARGET: ""
+    PIP_PREFIX: ""
+    PIP_USER: ""
+    PIP_ROOT: ""
+    PYTHONUSERBASE: ""
+
+- name: Verify the dedicated environment dependency graph
+  ansible.builtin.command:
+    argv:
+      - "{{ ludus_k3s_bootstrap_python }}"
+      - -m
+      - pip
+      - check
+  changed_when: false
+
+- name: Inventory every venv-local distribution against the hash lock
+  ansible.builtin.command:
+    argv:
+      - "{{ ludus_k3s_bootstrap_python }}"
+      - "{{ ludus_k3s_bootstrap_python_lock_verifier }}"
+      - "{{ ludus_k3s_bootstrap_requirements }}"
+  register: ludus_k3s_bootstrap_python_lock_check
+  changed_when: false
+
+- name: Require the exact locked Python distribution set
+  ansible.builtin.set_fact:
+    ludus_k3s_bootstrap_python_lock_result: >-
+      {{ ludus_k3s_bootstrap_python_lock_check.stdout | from_json }}
+
+- name: Reject missing mismatched or unexpected venv-local distributions
+  ansible.builtin.assert:
+    that:
+      - ludus_k3s_bootstrap_python_lock_result.missing | length == 0
+      - ludus_k3s_bootstrap_python_lock_result.mismatched | length == 0
+      - ludus_k3s_bootstrap_python_lock_result.unexpected | length == 0
+      - "'pip' in ludus_k3s_bootstrap_python_lock_result.bootstrap"
+      - >-
+        ludus_k3s_bootstrap_python_lock_result.bootstrap.keys() |
+        difference(['pip', 'setuptools']) | length == 0
+    fail_msg: The dedicated venv does not exactly match the hash-locked package set.
+
+- name: Verify exact Kubernetes client imports before service setup
+  ansible.builtin.command:
+    argv:
+      - "{{ ludus_k3s_bootstrap_python }}"
+      - -B
+      - -c
+      - >-
+        import json, jsonpatch, kubernetes, yaml;
+        print(json.dumps([kubernetes.__version__, yaml.__version__, jsonpatch.__version__]))
+  register: ludus_k3s_bootstrap_python_import_versions
+  changed_when: false
+  when: ludus_k3s_bootstrap_install_state in ['fresh', 'resume_pre_service']
+
+- name: Require exact Kubernetes client versions before service setup
+  ansible.builtin.assert:
+    that:
+      - ludus_k3s_bootstrap_python_import_versions.stdout | from_json == ['37.0.1', '6.0.3', '1.36']
+    fail_msg: The installed hash-locked Python client versions do not match the role contract.
+  when: ludus_k3s_bootstrap_install_state in ['fresh', 'resume_pre_service']

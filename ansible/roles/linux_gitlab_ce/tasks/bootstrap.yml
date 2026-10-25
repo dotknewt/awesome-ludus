@@ -9,6 +9,14 @@
 
 - name: (GITLAB-CE) Install bootstrap credential Rails helper
   ansible.builtin.copy:
+    src: bootstrap_api_token_rails.rb
+    dest: /usr/local/sbin/ludus-gitlab-bootstrap-api-token-rails.rb
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: (GITLAB-CE) Install root bootstrap credential wrapper
+  ansible.builtin.copy:
     src: bootstrap_api_token.rb
     dest: /usr/local/sbin/ludus-gitlab-bootstrap-api-token.rb
     owner: root
@@ -18,8 +26,7 @@
 - name: (GITLAB-CE) Generate or validate delegated bootstrap credential
   ansible.builtin.command:
     argv:
-      - gitlab-rails
-      - runner
+      - /opt/gitlab/embedded/bin/ruby
       - /usr/local/sbin/ludus-gitlab-bootstrap-api-token.rb
       - "{{ ludus_gitlab.bootstrap.token_file | default('/var/lib/ludus/gitlab/bootstrap-api-token') }}"
   become: true
@@ -31,7 +38,16 @@
 - name: (GITLAB-CE) Report bootstrap credential recovery requirement
   ansible.builtin.fail:
     msg: >-
-      GitLab bootstrap credential setup failed. Check that the persisted root-owned 0600
+      GitLab bootstrap credential setup failed
+      ({{ (linux_gitlab_ce_bootstrap_result.stderr
+      | regex_findall('^LUDUS_BOOTSTRAP_ERROR ([a-z_]+)$')
+      | select('in', [
+          'arguments', 'not_root', 'unsafe_path', 'invalid_credential_file',
+          'storage_lock', 'destination_exists', 'runner_timeout', 'runner_output',
+          'runner_failed', 'runner_protocol', 'runner_io', 'internal',
+          'root_identity', 'token_input', 'root_user', 'token_validation',
+          'named_pat_exists'
+        ]) | list | first) | default('unknown', true) }}). Check that the persisted root-owned 0600
       credential is valid and unexpired. If it is missing or invalid, restore the credential
       or perform explicit operator recovery; this role will not rotate or delete PATs.
   when: linux_gitlab_ce_bootstrap_result.rc != 0

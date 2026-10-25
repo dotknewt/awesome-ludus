@@ -64,7 +64,6 @@
       {{ lookup('ansible.builtin.template', 'hec-inputs.conf.j2') }}
     splunk_server_hec_check_indexes_candidate: >-
       {{ lookup('ansible.builtin.template', 'hec-indexes.conf.j2') }}
-  no_log: true
   when:
     - splunk_server_hec_enabled
     - ansible_check_mode
@@ -96,7 +95,6 @@
     group: "{{ splunk_server_hec_service_group }}"
     mode: '0600'
   diff: false
-  no_log: true
   when:
     - splunk_server_hec_enabled
     - not ansible_check_mode
@@ -109,7 +107,6 @@
     group: "{{ splunk_server_hec_service_group }}"
     mode: '0600'
   diff: false
-  no_log: true
   when:
     - splunk_server_hec_enabled
     - not ansible_check_mode
@@ -124,7 +121,6 @@
     - "{{ splunk_server_hec_state_path }}/candidates/inputs.conf"
     - "{{ splunk_server_hec_state_path }}/candidates/indexes.conf"
   register: splunk_server_hec_write_stats  # noqa: var-naming[no-role-prefix]
-  no_log: true
   when:
     - splunk_server_hec_enabled
     - not ansible_check_mode
@@ -138,8 +134,7 @@
     fail_msg: An active HEC configuration path is not a regular owned file.
   loop: "{{ splunk_server_hec_write_stats.results[0:2] }}"
   loop_control:
-    label: "{{ item.stat.path }}"
-  no_log: true
+    label: "{{ item.item }}"
   when:
     - splunk_server_hec_enabled
     - not ansible_check_mode
@@ -164,7 +159,6 @@
          splunk_server_hec_service_user or
          splunk_server_hec_write_stats.results[1].stat.gr_name !=
          splunk_server_hec_service_group }}
-  no_log: true
   when:
     - splunk_server_hec_enabled
     - not ansible_check_mode
@@ -178,7 +172,6 @@
     owner: "{{ splunk_server_hec_service_user }}"
     group: "{{ splunk_server_hec_service_group }}"
     mode: '0600'
-  no_log: true
   when:
     - splunk_server_hec_enabled
     - not ansible_check_mode
@@ -193,7 +186,6 @@
     group: "{{ splunk_server_hec_service_group }}"
     mode: '0600'
   diff: false
-  no_log: true
   when:
     - splunk_server_hec_enabled
     - not ansible_check_mode
@@ -208,7 +200,6 @@
     group: "{{ splunk_server_hec_service_group }}"
     mode: '0600'
   diff: false
-  no_log: true
   when:
     - splunk_server_hec_enabled
     - not ansible_check_mode
@@ -224,8 +215,18 @@
       - --debug
   register: splunk_server_hec_effective_inputs  # noqa: var-naming[no-role-prefix]
   changed_when: false
+  failed_when: false
   check_mode: false
   no_log: true
+  when:
+    - splunk_server_hec_enabled
+    - not ansible_check_mode
+
+- name: Check post-write HEC input collection status  # noqa: var-naming[no-role-prefix]
+  ansible.builtin.import_tasks: hec-btool-status.yml
+  vars:
+    splunk_server_hec_btool_result: "{{ splunk_server_hec_effective_inputs }}"
+    splunk_server_hec_btool_label: inputs list --debug (post-write)
   when:
     - splunk_server_hec_enabled
     - not ansible_check_mode
@@ -240,8 +241,18 @@
       - --debug
   register: splunk_server_hec_effective_indexes  # noqa: var-naming[no-role-prefix]
   changed_when: false
+  failed_when: false
   check_mode: false
   no_log: true
+  when:
+    - splunk_server_hec_enabled
+    - not ansible_check_mode
+
+- name: Check post-write index collection status  # noqa: var-naming[no-role-prefix]
+  ansible.builtin.import_tasks: hec-btool-status.yml
+  vars:
+    splunk_server_hec_btool_result: "{{ splunk_server_hec_effective_indexes }}"
+    splunk_server_hec_btool_label: indexes list --debug (post-write)
   when:
     - splunk_server_hec_enabled
     - not ansible_check_mode
@@ -269,10 +280,9 @@
            splunk_server_hec_token,
            splunk_server_hec_indexes,
            splunk_server_hec_default_index,
-           splunk_server_hec_port,
+           (splunk_server_hec_port | int),
            splunk_server_hec_ssl_enabled,
            splunk_server_hec_server_cert) }}
-  no_log: true
   when:
     - splunk_server_hec_enabled
     - not ansible_check_mode
@@ -284,7 +294,21 @@
     fail_msg: >-
       Post-write HEC values lack exact stanza/value/source correlation; the
       protected pending marker and partial owned app remain for review.
-  no_log: true
+      Failed expression: splunk_server_hec_effective_conflicts | length == 0;
+      count={{ splunk_server_hec_effective_conflicts | length }};
+      conflicts={{ splunk_server_hec_effective_conflicts | to_json }};
+      parser_errors={{ (splunk_server_hec_effective_inputs_parse.errors +
+                         splunk_server_hec_effective_indexes_parse.errors) | to_json }};
+      owned_inputs={{ splunk_server_hec_app_path }}/local/inputs.conf;
+      owned_indexes={{ splunk_server_hec_app_path }}/local/indexes.conf;
+      lab_token={{ splunk_server_hec_token | to_json }};
+      owned_token_records={{ splunk_server_hec_effective_inputs_parse.records |
+        selectattr('source', 'equalto', splunk_server_hec_app_path ~ '/local/inputs.conf') |
+        selectattr('stanza', 'equalto', 'http://' ~ splunk_server_hec_token_name) |
+        selectattr('key_lower', 'in', ['disabled', 'token', 'index', 'indexes']) | list | to_json }};
+      port={{ splunk_server_hec_port | to_json }} ({{ splunk_server_hec_port | type_debug }}),
+      normalized={{ splunk_server_hec_port | int }};
+      ssl={{ splunk_server_hec_ssl_enabled | to_json }} ({{ splunk_server_hec_ssl_enabled | type_debug }}).
   when:
     - splunk_server_hec_enabled
     - not ansible_check_mode
@@ -314,6 +338,9 @@
       - status
       - --run-as-root
   register: splunk_server_hec_status  # noqa: var-naming[no-role-prefix]
+  until: splunk_server_hec_status.rc == 0
+  retries: 30
+  delay: 2
   changed_when: false
   check_mode: false
   when:
@@ -323,7 +350,7 @@
 - name: Check HEC listener TCP readiness
   ansible.builtin.wait_for:
     host: 127.0.0.1
-    port: "{{ splunk_server_hec_port }}"
+    port: "{{ splunk_server_hec_port | int }}"
     state: started
     timeout: 60
   when:

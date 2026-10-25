@@ -13,23 +13,22 @@
     status_code: 200
     return_content: true
   register: ludus_gitlab_runner_current_page
-  no_log: true
 
 - name: Save runner page
   ansible.builtin.set_fact:
     ludus_gitlab_runner_pages: "{{ ludus_gitlab_runner_pages + [ludus_gitlab_runner_current_page.json] }}"
     ludus_gitlab_runner_next_page: >-
-      {% set page_header = ludus_gitlab_runner_current_page.headers.get('x-next-page') %}
-      {{ page_header if page_header is not none else
-         (ludus_gitlab_runner_page | int + 1
-         if ludus_gitlab_runner_current_page.json | length == 100 else '') }}
-  no_log: true
+      {{ (ludus_gitlab_runner_current_page.get('x_next_page')
+      if 'x_next_page' in ludus_gitlab_runner_current_page
+      else (ludus_gitlab_runner_page | int + 1
+      if ludus_gitlab_runner_current_page.json | length == 100 else ''))
+      | string | trim }}
 
 - name: Increment runner page
   ansible.builtin.set_fact:
     ludus_gitlab_runner_page: "{{ ludus_gitlab_runner_page | int + 1 }}"
-  when: ludus_gitlab_runner_next_page | length > 0
+  when: ludus_gitlab_runner_next_page | string | trim | length > 0
 
 - name: Fetch subsequent page when pagination continues
   ansible.builtin.include_tasks: runner-page.yml
-  when: ludus_gitlab_runner_next_page | length > 0
+  when: ludus_gitlab_runner_next_page | string | trim | length > 0

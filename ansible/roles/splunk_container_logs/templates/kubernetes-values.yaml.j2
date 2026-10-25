@@ -26,19 +26,10 @@ splunkPlatform:
   sendingQueue:
     enabled: true
     numConsumers: 10
-    queueSize: {{ splunk_container_logs_queue_size }}
+    queueSize: {{ splunk_container_logs_queue_size | splunk_container_queue_size }}
     persistentQueue:
       enabled: true
       storagePath: {{ splunk_container_logs_k8s_queue_path | to_json }}
-
-splunkObservability:
-  realm: ""
-  accessToken: ""
-  metricsEnabled: false
-  tracesEnabled: false
-  infrastructureMonitoringEventsEnabled: false
-  profilingEnabled: false
-  secureAppEnabled: false
 
 agent:
   enabled: true
@@ -78,7 +69,7 @@ agent:
       file_storage/persistent_queue:
         directory: {{ (splunk_container_logs_k8s_queue_path ~ '/agent') | to_json }}
         timeout: 0
-        max_size: {{ splunk_container_logs_queue_max_disk_mib * 1024 * 1024 }}
+        max_size: {{ (splunk_container_logs_queue_max_disk_mib | splunk_container_queue_disk_mib) * 1048576 }}
         fsync: true
         compaction:
           on_rebound: true
@@ -105,7 +96,7 @@ agent:
           enabled: true
           storage: file_storage/persistent_queue
           sizer: requests
-          queue_size: {{ splunk_container_logs_queue_size }}
+          queue_size: {{ splunk_container_logs_queue_size | splunk_container_queue_size }}
           num_consumers: 10
           block_on_overflow: true
     service:

@@ -23,6 +23,7 @@ executor jobs are not privileged.
 | `ludus_gitlab_runner_project_name` | `ludus-runner-demo` | Bootstrap project display name |
 | `ludus_gitlab_runner_project_namespace` | `root` | Project namespace path |
 | `ludus_gitlab_runner_project_path` | `root/ludus-runner-demo` | Full namespace/project path |
+| `ludus_gitlab_runner_smoke_ci_enabled` | `true` | Manage the sample CI file; set `false` to provision only the project and runner |
 | `ludus_gitlab_runner_ci_file` | `.gitlab-ci.yml` | CI configuration path in the project |
 | `ludus_gitlab_runner_allow_ci_file_replace` | `false` | Explicitly permit replacing an existing CI file |
 | `ludus_gitlab_runner_state_path` | `/var/lib/ludus/gitlab-runner/runner.json` | Protected runner credential recovery state |
@@ -34,6 +35,11 @@ in the same Ansible execution context. If Ludus separates role execution so
 delegation cannot read the server, provide an API token explicitly or provide
 an existing runner auth token. The latter only registers; it cannot provision
 the project, CI file, or runner through the API.
+
+This role is intended for disposable lab credentials and data. Task inputs,
+GitLab API responses, and failure details may appear in Ansible diagnostics,
+output, and controller logs. Do not use it with production credentials or other
+externally provisioned secrets.
 
 The role calls `POST /api/v4/user/runners` with `runner_type=project_type`.
 GitLab does not return existing runner authentication tokens; a matching
@@ -48,6 +54,19 @@ Immediately after API creation the runner id and authentication token are saved
 to the root-owned state file mode `0600`; config tokens take precedence over
 state tokens so a locally rotated credential is not overwritten with stale data.
 
+When the project is absent, bootstrap resolves the requested namespace with
+`GET /api/v4/namespaces/:url_encoded_full_path` and the protected API token.
+Nested namespace `/` separators are explicitly escaped as `%2F` in that path
+parameter.
+It fails closed unless GitLab returns HTTP 200, exact `full_path`, a `kind` of
+`user` or `group`, and a positive namespace ID. Only that namespace ID is sent
+when creating the project; user IDs are not substituted for namespace IDs.
+
+Set `ludus_gitlab_runner_smoke_ci_enabled: false` to keep project and runner
+provisioning enabled without managing the sample pipeline. In that mode the
+role does not read or write the CI file and launches no pipeline. The default is
+`true` for backward compatibility.
+
 ## Compatibility and references
 
 Supported target families: Debian and Ubuntu with apt and systemd. This role
@@ -61,5 +80,6 @@ Official references:
 - [GitLab Runner Linux installation](https://docs.gitlab.com/runner/install/linux-repository/)
 - [Runner authentication token registration](https://docs.gitlab.com/runner/register/)
 - [Create a runner API](https://docs.gitlab.com/api/runners/#create-a-runner)
+- [Namespaces API](https://docs.gitlab.com/api/namespaces/)
 - [Projects API](https://docs.gitlab.com/api/projects/)
 - [Repository files API](https://docs.gitlab.com/api/repository_files/)

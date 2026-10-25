@@ -95,6 +95,11 @@ rotate or reissue it, or delete unrelated tokens. Project creation, runner creat
 management are owned by the separate runner role, not this CE role. Enabling this option does
 not establish that the remote runner host or runner API workflow is configured or operational.
 
+The root-only wrapper validates and atomically publishes the credential file without replacing an
+existing destination; its readable Rails helper performs PAT operations through the normal GitLab
+launcher as `git`. The token is passed to that subprocess only over a private stdin pipe, never in
+process arguments.
+
 ## Example Ludus Range Config
 
 ```yaml

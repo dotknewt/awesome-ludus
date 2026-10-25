@@ -20,6 +20,14 @@ When authoring or reviewing Ludus sources, blueprints, range configs, or roles, 
 - Refresh only after a known external update, a restart, or an observed contradiction. After your own successful patch, use the resulting state without a verification reread.
 - If an identical read returns unchanged content, take the next substantive action or await the completion hook; stop the read loop.
 - After a restart, reconcile existing child IDs and saved results before resuming unfinished work. Reuse completed evidence; preserve interrupted edits and resume the original session.
+- Keep recovery state concise and durable: current phase, exact next action,
+  blockers, active child/monitor IDs and terminal state, and whether the latest
+  cycle's authorization was consumed. Keep historical entries in the ledger,
+  not the router head; update terminal closure once observed. Persist
+  non-sensitive, repository-permitted evidence manifests (commands, exits,
+  hashes, artifact locations) in an ignored durable workspace, not only `/tmp`.
+  Never commit external credentials or raw private configuration. If evidence
+  is lost, mark it unavailable; do not recreate claims.
 
 ## Behavioral verification
 
@@ -29,4 +37,8 @@ When authoring or reviewing Ludus sources, blueprints, range configs, or roles, 
 - Verify sanitization using representative canary-bearing events through production processing. Rendered configuration alone does not prove sanitized output.
 - Report separately what static and live verification was executed, what evidence was reused, and what remains unverified. Static evidence does not establish selected-version compatibility or deployment readiness.
 - Reuse validation only while the reviewed artifact and relevant dependencies remain unchanged. Record a scoped diff and exact evidence provenance for each re-review.
+- Batch scoped checks under one owner; reuse evidence only with valid hash,
+  environment, and dependency scope. The controller centrally finalizes report
+  status; do not spawn docs-only report-correction rounds or retest unchanged
+  files. Real code fixes still receive proportionate review.
 - Live deployment, guest probes, and destructive cleanup require their own authorization; verification gaps do not authorize those actions.

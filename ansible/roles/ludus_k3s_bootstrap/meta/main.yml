@@ -1,0 +1,17 @@
+---
+galaxy_info:
+  author: dotknewt
+  role_name: ludus_k3s_bootstrap
+  description: Install a pinned native single-node K3s prerequisite
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+  galaxy_tags:
+    - kubernetes
+    - k3s
+    - ludus
+
+dependencies: []

@@ -1,0 +1,591 @@
+---
+- name: Require Ubuntu 24.04 amd64 with systemd
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution == 'Ubuntu'
+      - ansible_distribution_version is version('24.04', '>=')
+      - ansible_distribution_version is version('25.04', '<')
+      - ansible_architecture == 'x86_64'
+      - ansible_service_mgr == 'systemd'
+    fail_msg: This role supports only Ubuntu 24.04 amd64 with systemd.
+
+- name: Require bounded readiness controls
+  ansible.builtin.assert:
+    that:
+      - ludus_k3s_bootstrap_service_retries is integer
+      - ludus_k3s_bootstrap_service_retries >= 1
+      - ludus_k3s_bootstrap_service_retries <= 120
+      - ludus_k3s_bootstrap_service_delay is integer
+      - ludus_k3s_bootstrap_service_delay >= 1
+      - ludus_k3s_bootstrap_service_delay <= 10
+      - ludus_k3s_bootstrap_api_retries is integer
+      - ludus_k3s_bootstrap_api_retries >= 1
+      - ludus_k3s_bootstrap_api_retries <= 120
+      - ludus_k3s_bootstrap_api_delay is integer
+      - ludus_k3s_bootstrap_api_delay >= 1
+      - ludus_k3s_bootstrap_api_delay <= 10
+    fail_msg: Readiness retries and delays must remain positive and bounded.
+
+- name: Inspect the ownership marker
+  ansible.builtin.stat:
+    path: "{{ ludus_k3s_bootstrap_owner_marker }}"
+  register: ludus_k3s_bootstrap_marker_status
+
+- name: Inspect protected K3s destinations before any write
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    checksum_algorithm: sha256
+  loop:
+    - "{{ ludus_k3s_bootstrap_k3s_binary }}"
+    - "{{ ludus_k3s_bootstrap_helm_binary }}"
+    - "{{ ludus_k3s_bootstrap_unit_path }}"
+    - "{{ ludus_k3s_bootstrap_config_dir }}"
+    - "{{ ludus_k3s_bootstrap_kubeconfig }}"
+    - "{{ ludus_k3s_bootstrap_data_dir }}"
+    - "{{ ludus_k3s_bootstrap_root_helm_plugins }}/diff"
+    - "{{ ludus_k3s_bootstrap_helm_diff_binary }}"
+    - "{{ ludus_k3s_bootstrap_helm_diff_manifest }}"
+    - "{{ ludus_k3s_bootstrap_python_root }}"
+    - "{{ ludus_k3s_bootstrap_requirements }}"
+    - "{{ ludus_k3s_bootstrap_python_lock_verifier }}"
+    - "{{ ludus_k3s_bootstrap_cache_dir }}"
+    - "{{ ludus_k3s_bootstrap_cached_k3s }}"
+    - "{{ ludus_k3s_bootstrap_helm_archive }}"
+    - "{{ ludus_k3s_bootstrap_helm_diff_archive }}"
+    - "{{ ludus_k3s_bootstrap_owner_dir }}"
+  register: ludus_k3s_bootstrap_protected_status
+
+- name: Refuse symbolic links at protected destinations
+  ansible.builtin.assert:
+    that:
+      - not item.stat.islnk
+    fail_msg: "Protected destination is a symbolic link: {{ item.item }}"
+  loop: "{{ ludus_k3s_bootstrap_protected_status.results }}"
+  when: item.stat.exists
+
+- name: Inspect the effective K3s systemd identity
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - show
+      - k3s.service
+      - --property=LoadState
+      - --property=ActiveState
+      - --property=SubState
+      - --property=FragmentPath
+      - --property=DropInPaths
+      - --property=Environment
+      - --property=EnvironmentFiles
+      - --no-pager
+  register: ludus_k3s_bootstrap_systemd_identity
+  changed_when: false
+  failed_when: false
+
+- name: Classify the owned installation shape without publishing install state
+  ansible.builtin.set_fact:
+    ludus_k3s_bootstrap_candidate_state: >-
+      {{ 'fresh'
+         if not ludus_k3s_bootstrap_marker_status.stat.exists and
+            ludus_k3s_bootstrap_existing_protected_paths | length == 0
+         else 'complete'
+         if ludus_k3s_bootstrap_marker_status.stat.exists and
+            ludus_k3s_bootstrap_existing_protected_paths | length ==
+            ludus_k3s_bootstrap_protected_status.results | length
+         else 'resume_pre_service'
+         if ludus_k3s_bootstrap_marker_status.stat.exists and
+            ludus_k3s_bootstrap_pre_service_paths |
+              difference(ludus_k3s_bootstrap_existing_protected_paths) | length == 0 and
+            ludus_k3s_bootstrap_existing_protected_paths |
+              difference(ludus_k3s_bootstrap_pre_service_paths) | length == 0 and
+            ludus_k3s_bootstrap_service_paths |
+              difference(ludus_k3s_bootstrap_existing_protected_paths) | length ==
+              ludus_k3s_bootstrap_service_paths | length and
+            ludus_k3s_bootstrap_systemd_resume_safe
+         else 'invalid' }}
+  vars:
+    ludus_k3s_bootstrap_pre_service_paths:
+      - "{{ ludus_k3s_bootstrap_k3s_binary }}"
+      - "{{ ludus_k3s_bootstrap_helm_binary }}"
+      - "{{ ludus_k3s_bootstrap_root_helm_plugins }}/diff"
+      - "{{ ludus_k3s_bootstrap_helm_diff_binary }}"
+      - "{{ ludus_k3s_bootstrap_helm_diff_manifest }}"
+      - "{{ ludus_k3s_bootstrap_python_root }}"
+      - "{{ ludus_k3s_bootstrap_requirements }}"
+      - "{{ ludus_k3s_bootstrap_python_lock_verifier }}"
+      - "{{ ludus_k3s_bootstrap_cache_dir }}"
+      - "{{ ludus_k3s_bootstrap_cached_k3s }}"
+      - "{{ ludus_k3s_bootstrap_helm_archive }}"
+      - "{{ ludus_k3s_bootstrap_helm_diff_archive }}"
+      - "{{ ludus_k3s_bootstrap_owner_dir }}"
+    ludus_k3s_bootstrap_service_paths:
+      - "{{ ludus_k3s_bootstrap_unit_path }}"
+      - "{{ ludus_k3s_bootstrap_config_dir }}"
+      - "{{ ludus_k3s_bootstrap_kubeconfig }}"
+      - "{{ ludus_k3s_bootstrap_data_dir }}"
+    ludus_k3s_bootstrap_existing_protected_paths: >-
+      {{ ludus_k3s_bootstrap_protected_status.results |
+         selectattr('stat.exists') | map(attribute='item') | list }}
+    ludus_k3s_bootstrap_systemd_resume_safe: >-
+      {{ ludus_k3s_bootstrap_systemd_identity.rc == 0 and
+         'LoadState=not-found' in ludus_k3s_bootstrap_systemd_identity.stdout and
+         'ActiveState=inactive' in ludus_k3s_bootstrap_systemd_identity.stdout and
+         'SubState=dead' in ludus_k3s_bootstrap_systemd_identity.stdout and
+         (ludus_k3s_bootstrap_systemd_identity.stdout |
+          regex_search('(?m)^FragmentPath=$')) is not none and
+         (ludus_k3s_bootstrap_systemd_identity.stdout |
+          regex_search('(?m)^DropInPaths=$')) is not none and
+         (ludus_k3s_bootstrap_systemd_identity.stdout |
+          regex_search('(?m)^Environment=$')) is not none and
+          (ludus_k3s_bootstrap_systemd_identity.stdout |
+           regex_search('(?m)^EnvironmentFiles=.+$')) is none }}
+
+- name: Require one supported owned installation shape
+  ansible.builtin.assert:
+    that:
+      - ludus_k3s_bootstrap_candidate_state in ['fresh', 'complete', 'resume_pre_service']
+    fail_msg: >-
+      Existing K3s bootstrap state is not an exact fresh, complete, or supported
+      pre-service partial installation. Nothing was changed.
+
+- name: Refuse unowned K3s destinations
+  ansible.builtin.assert:
+    that:
+      - >-
+        ludus_k3s_bootstrap_marker_status.stat.exists or
+        (ludus_k3s_bootstrap_protected_status.results |
+         selectattr('stat.exists') | list | length == 0)
+      - >-
+        ludus_k3s_bootstrap_marker_status.stat.exists or
+        'FragmentPath=' + ludus_k3s_bootstrap_unit_path not in
+        ludus_k3s_bootstrap_systemd_identity.stdout
+      - >-
+        ludus_k3s_bootstrap_marker_status.stat.exists or
+        'LoadState=loaded' not in ludus_k3s_bootstrap_systemd_identity.stdout
+      - >-
+        ludus_k3s_bootstrap_marker_status.stat.exists or
+        (ludus_k3s_bootstrap_systemd_identity.stdout |
+         regex_search('(?m)^DropInPaths=(.+)$')) is none
+    fail_msg: >-
+      Existing K3s, Helm, plugin, Python, cache, config, state, or service
+      destinations are not owned by ludus_k3s_bootstrap. Nothing was changed.
+
+- name: Refuse incomplete marked ownership state
+  ansible.builtin.assert:
+    that:
+      - >-
+        (ludus_k3s_bootstrap_protected_status.results |
+         selectattr('stat.exists') | list | length) ==
+        (ludus_k3s_bootstrap_protected_status.results | length)
+    fail_msg: >-
+      The ownership marker exists but one or more protected destinations are
+      missing. Refusing automatic repair or adoption.
+  when:
+    - ludus_k3s_bootstrap_marker_status.stat.exists
+    - ludus_k3s_bootstrap_candidate_state == 'complete'
+
+- name: Require exact types modes and ownership on protected destinations
+  ansible.builtin.assert:
+    that:
+      - item.stat.pw_name == 'root'
+      - item.stat.gr_name == 'root'
+      - item.stat.mode == ludus_k3s_bootstrap_expected_modes[item.item]
+      - >-
+        (item.item in ludus_k3s_bootstrap_expected_directories and item.stat.isdir) or
+        (item.item not in ludus_k3s_bootstrap_expected_directories and item.stat.isreg)
+    fail_msg: "Protected destination type, mode, or ownership differs: {{ item.item }}"
+  loop: "{{ ludus_k3s_bootstrap_protected_status.results }}"
+  vars:
+    ludus_k3s_bootstrap_expected_directories:
+      - "{{ ludus_k3s_bootstrap_config_dir }}"
+      - "{{ ludus_k3s_bootstrap_data_dir }}"
+      - "{{ ludus_k3s_bootstrap_root_helm_plugins }}/diff"
+      - "{{ ludus_k3s_bootstrap_python_root }}"
+      - "{{ ludus_k3s_bootstrap_cache_dir }}"
+      - "{{ ludus_k3s_bootstrap_owner_dir }}"
+    ludus_k3s_bootstrap_expected_modes: >-
+      {{ {
+        ludus_k3s_bootstrap_k3s_binary: '0755',
+        ludus_k3s_bootstrap_helm_binary: '0755',
+        ludus_k3s_bootstrap_unit_path: '0644',
+        ludus_k3s_bootstrap_config_dir: '0700',
+        ludus_k3s_bootstrap_kubeconfig: '0600',
+        ludus_k3s_bootstrap_data_dir: '0700',
+        (ludus_k3s_bootstrap_root_helm_plugins ~ '/diff'): '0755',
+        ludus_k3s_bootstrap_helm_diff_binary: '0755',
+        ludus_k3s_bootstrap_helm_diff_manifest: '0644',
+        ludus_k3s_bootstrap_python_root: '0755',
+        ludus_k3s_bootstrap_requirements: '0644',
+        ludus_k3s_bootstrap_python_lock_verifier: '0644',
+        ludus_k3s_bootstrap_cache_dir: '0700',
+        ludus_k3s_bootstrap_cached_k3s: '0500',
+        ludus_k3s_bootstrap_helm_archive: '0600',
+        ludus_k3s_bootstrap_helm_diff_archive: '0600',
+        ludus_k3s_bootstrap_owner_dir: '0700'
+      } }}
+  when:
+    - ludus_k3s_bootstrap_marker_status.stat.exists
+    - item.stat.exists
+
+- name: Inventory the exact K3s configuration directory
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/find
+      - "{{ ludus_k3s_bootstrap_config_dir }}"
+      - -mindepth
+      - "1"
+      - -maxdepth
+      - "1"
+      - -printf
+      - "%f\n"
+  register: ludus_k3s_bootstrap_config_entries
+  changed_when: false
+  when:
+    - ludus_k3s_bootstrap_marker_status.stat.exists
+    - ludus_k3s_bootstrap_candidate_state == 'complete'
+
+- name: Reject K3s config files and every unmanaged config entry
+  ansible.builtin.assert:
+    that:
+      - ludus_k3s_bootstrap_config_entries.stdout_lines == ['k3s.yaml']
+    fail_msg: >-
+      Only the owned generated k3s.yaml may exist in /etc/rancher/k3s;
+      config.yaml, config.yaml.d, and every other entry are rejected.
+  when:
+    - ludus_k3s_bootstrap_marker_status.stat.exists
+    - ludus_k3s_bootstrap_candidate_state == 'complete'
+
+- name: Require a safe ownership marker before reading it
+  ansible.builtin.assert:
+    that:
+      - ludus_k3s_bootstrap_marker_status.stat.isreg
+      - not ludus_k3s_bootstrap_marker_status.stat.islnk
+      - ludus_k3s_bootstrap_marker_status.stat.pw_name == 'root'
+      - ludus_k3s_bootstrap_marker_status.stat.gr_name == 'root'
+      - ludus_k3s_bootstrap_marker_status.stat.mode == '0600'
+    fail_msg: Existing ownership marker is not a protected root-owned regular file.
+  when: ludus_k3s_bootstrap_marker_status.stat.exists
+
+- name: Read an existing ownership marker
+  ansible.builtin.slurp:
+    src: "{{ ludus_k3s_bootstrap_owner_marker }}"
+  register: ludus_k3s_bootstrap_marker_content
+  when: ludus_k3s_bootstrap_marker_status.stat.exists
+
+- name: Decode the existing ownership marker
+  ansible.builtin.set_fact:
+    ludus_k3s_bootstrap_existing_owner: >-
+      {{ ludus_k3s_bootstrap_marker_content.content | b64decode | from_yaml }}
+  when: ludus_k3s_bootstrap_marker_status.stat.exists
+
+- name: Require the exact owned identity
+  ansible.builtin.assert:
+    that:
+      - ludus_k3s_bootstrap_marker_status.stat.isreg
+      - not ludus_k3s_bootstrap_marker_status.stat.islnk
+      - ludus_k3s_bootstrap_marker_status.stat.pw_name == 'root'
+      - ludus_k3s_bootstrap_marker_status.stat.gr_name == 'root'
+      - ludus_k3s_bootstrap_marker_status.stat.mode == '0600'
+      - >-
+        ludus_k3s_bootstrap_existing_owner.keys() | list | sort ==
+        ['helm_diff_version', 'helm_version', 'k3s_version', 'kubeconfig', 'owner', 'python']
+      - ludus_k3s_bootstrap_existing_owner.owner == 'ludus_k3s_bootstrap'
+      - ludus_k3s_bootstrap_existing_owner.k3s_version == ludus_k3s_bootstrap_k3s_version
+      - ludus_k3s_bootstrap_existing_owner.helm_version == ludus_k3s_bootstrap_helm_version
+      - ludus_k3s_bootstrap_existing_owner.helm_diff_version == ludus_k3s_bootstrap_helm_diff_version
+      - ludus_k3s_bootstrap_existing_owner.kubeconfig == ludus_k3s_bootstrap_kubeconfig
+      - ludus_k3s_bootstrap_existing_owner.python == ludus_k3s_bootstrap_python
+    fail_msg: The existing ownership marker does not match this immutable role contract.
+  when: ludus_k3s_bootstrap_marker_status.stat.exists
+
+- name: Require an exact existing K3s binary
+  ansible.builtin.assert:
+    that:
+      - item.stat.isreg
+      - not item.stat.islnk
+      - item.stat.checksum == ludus_k3s_bootstrap_k3s_sha256
+    fail_msg: Existing owned K3s binary is not the pinned release; refusing replacement.
+  loop: "{{ ludus_k3s_bootstrap_protected_status.results }}"
+  when:
+    - item.item in [ludus_k3s_bootstrap_k3s_binary, ludus_k3s_bootstrap_cached_k3s]
+    - item.stat.exists
+
+- name: Read an existing K3s service unit
+  ansible.builtin.slurp:
+    src: "{{ ludus_k3s_bootstrap_unit_path }}"
+  register: ludus_k3s_bootstrap_existing_unit
+  when: >-
+    ludus_k3s_bootstrap_protected_status.results |
+    selectattr('item', 'equalto', ludus_k3s_bootstrap_unit_path) |
+    selectattr('stat.exists') | list | length == 1
+
+- name: Require the exact existing K3s service unit
+  ansible.builtin.assert:
+    that:
+      - >-
+        (ludus_k3s_bootstrap_existing_unit.content | b64decode | trim | hash('sha256')) ==
+        (lookup('ansible.builtin.template', 'k3s.service.j2') | trim | hash('sha256'))
+      - >-
+        'FragmentPath=' + ludus_k3s_bootstrap_unit_path in
+        ludus_k3s_bootstrap_systemd_identity.stdout
+      - >-
+        (ludus_k3s_bootstrap_systemd_identity.stdout |
+         regex_search('(?m)^DropInPaths=(.+)$')) is none
+      - >-
+        (ludus_k3s_bootstrap_systemd_identity.stdout |
+         regex_search('(?m)^Environment=$')) is not none
+      - >-
+        (ludus_k3s_bootstrap_systemd_identity.stdout |
+         regex_search('(?m)^EnvironmentFiles=.+$')) is none
+    fail_msg: Existing owned k3s.service differs or is shadowed; refusing replacement.
+  when: ludus_k3s_bootstrap_existing_unit is not skipped
+
+- name: Verify existing Helm and diff bytes from pinned archives
+  ansible.builtin.include_tasks: tool-integrity.yml
+  when: ludus_k3s_bootstrap_marker_status.stat.exists
+
+- name: Read an existing Helm version
+  ansible.builtin.command:
+    argv:
+      - "{{ ludus_k3s_bootstrap_helm_binary }}"
+      - version
+      - --short
+  environment:
+    HOME: /root
+  register: ludus_k3s_bootstrap_existing_helm
+  changed_when: false
+  when: >-
+    ludus_k3s_bootstrap_protected_status.results |
+    selectattr('item', 'equalto', ludus_k3s_bootstrap_helm_binary) |
+    selectattr('stat.exists') | list | length == 1
+
+- name: Require the exact existing Helm version
+  ansible.builtin.assert:
+    that:
+      - ludus_k3s_bootstrap_existing_helm.stdout is match('^v3\\.20\\.0(?:\\+.*)?$')
+    fail_msg: Existing owned Helm is not v3.20.0; refusing replacement.
+  when: ludus_k3s_bootstrap_existing_helm is not skipped
+
+- name: Read existing root Helm plugins
+  ansible.builtin.command:
+    argv:
+      - "{{ ludus_k3s_bootstrap_helm_binary }}"
+      - plugin
+      - list
+  environment:
+    HOME: /root
+  register: ludus_k3s_bootstrap_existing_plugins
+  changed_when: false
+  when:
+    - ludus_k3s_bootstrap_existing_helm is not skipped
+    - >-
+      ludus_k3s_bootstrap_protected_status.results |
+      selectattr('item', 'equalto', ludus_k3s_bootstrap_root_helm_plugins + '/diff') |
+      selectattr('stat.exists') | list | length == 1
+
+- name: Refuse an unverifiable existing helm-diff destination
+  ansible.builtin.assert:
+    that:
+      - >-
+        ludus_k3s_bootstrap_protected_status.results |
+        selectattr('item', 'equalto', ludus_k3s_bootstrap_root_helm_plugins + '/diff') |
+        selectattr('stat.exists') | list | length == 0
+    fail_msg: Existing owned helm-diff cannot be verified without the pinned Helm binary.
+  when: ludus_k3s_bootstrap_existing_helm is skipped
+
+- name: Require the exact existing root Helm diff plugin
+  ansible.builtin.assert:
+    that:
+      - ludus_k3s_bootstrap_existing_plugins.stdout is regex('(?m)^diff\\s+3\\.15\\.15(?:\\s|$)')
+    fail_msg: Existing owned root Helm diff plugin is not 3.15.15; refusing replacement.
+  when: ludus_k3s_bootstrap_existing_plugins is not skipped
+
+- name: Verify an existing dedicated Python environment before mutation
+  ansible.builtin.command:
+    argv:
+      - "{{ ludus_k3s_bootstrap_python }}"
+      - -B
+      - -c
+      - >-
+        import json, jsonpatch, kubernetes, yaml;
+        print(json.dumps([kubernetes.__version__, yaml.__version__, jsonpatch.__version__]))
+  register: ludus_k3s_bootstrap_existing_python
+  changed_when: false
+  when: >-
+    ludus_k3s_bootstrap_candidate_state == 'complete' and
+    ludus_k3s_bootstrap_protected_status.results |
+    selectattr('item', 'equalto', ludus_k3s_bootstrap_python_root) |
+    selectattr('stat.exists') | list | length == 1
+
+- name: Read the existing Python lock and verifier sources
+  ansible.builtin.slurp:
+    src: "{{ item.path }}"
+  loop:
+    - path: "{{ ludus_k3s_bootstrap_requirements }}"
+      source: kubernetes-requirements.txt
+    - path: "{{ ludus_k3s_bootstrap_python_lock_verifier }}"
+      source: verify_python_lock.py
+  register: ludus_k3s_bootstrap_existing_python_sources
+  when: ludus_k3s_bootstrap_marker_status.stat.exists
+
+- name: Require exact existing Python lock and verifier sources
+  ansible.builtin.assert:
+    that:
+      - >-
+        (item.content | b64decode | trim | hash('sha256')) ==
+        (lookup('ansible.builtin.file', item.item.source) | trim | hash('sha256'))
+    fail_msg: "Existing Python contract source differs: {{ item.item.path }}"
+  loop: "{{ ludus_k3s_bootstrap_existing_python_sources.results }}"
+  when: ludus_k3s_bootstrap_marker_status.stat.exists
+
+- name: Inspect a pre-service Python environment with trusted system Python
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -I
+      - -S
+      - -B
+      - "-"
+      - "{{ ludus_k3s_bootstrap_python_root }}/python"
+    stdin: "{{ lookup('ansible.builtin.file', role_path ~ '/files/inspect_python_venv.py') }}"
+    stdin_add_newline: false
+  register: ludus_k3s_bootstrap_resume_python_inspection
+  changed_when: false
+  when: ludus_k3s_bootstrap_candidate_state == 'resume_pre_service'
+
+- name: Require the exact bootstrap-only Python environment for resume
+  ansible.builtin.assert:
+    that:
+      - (ludus_k3s_bootstrap_resume_python_inspection.stdout | from_json).ok
+      - (ludus_k3s_bootstrap_resume_python_inspection.stdout | from_json).python_version is match('^3\.12\.')
+      - (ludus_k3s_bootstrap_resume_python_inspection.stdout | from_json).local_distributions == ['pip==24.0']
+    fail_msg: >-
+      Existing Python environment is not an exact verified bootstrap-only venv:
+      {{ (ludus_k3s_bootstrap_resume_python_inspection.stdout | from_json).details | to_nice_json }}
+  when: ludus_k3s_bootstrap_candidate_state == 'resume_pre_service'
+
+- name: Inventory every existing venv-local distribution against the hash lock
+  ansible.builtin.command:
+    argv:
+      - "{{ ludus_k3s_bootstrap_python }}"
+      - -B
+      - "{{ ludus_k3s_bootstrap_python_lock_verifier }}"
+      - "{{ ludus_k3s_bootstrap_requirements }}"
+  register: ludus_k3s_bootstrap_existing_python_lock
+  changed_when: false
+  when:
+    - ludus_k3s_bootstrap_marker_status.stat.exists
+    - ludus_k3s_bootstrap_candidate_state == 'complete'
+
+- name: Require the exact existing locked Python distribution set
+  ansible.builtin.set_fact:
+    ludus_k3s_bootstrap_existing_python_lock_result: >-
+      {{ ludus_k3s_bootstrap_existing_python_lock.stdout | from_json }}
+  when:
+    - ludus_k3s_bootstrap_marker_status.stat.exists
+    - ludus_k3s_bootstrap_candidate_state == 'complete'
+
+- name: Reject existing Python package-set drift
+  ansible.builtin.assert:
+    that:
+      - ludus_k3s_bootstrap_existing_python_lock_result.missing | length == 0
+      - ludus_k3s_bootstrap_existing_python_lock_result.mismatched | length == 0
+      - ludus_k3s_bootstrap_existing_python_lock_result.unexpected | length == 0
+      - "'pip' in ludus_k3s_bootstrap_existing_python_lock_result.bootstrap"
+      - >-
+        ludus_k3s_bootstrap_existing_python_lock_result.bootstrap.keys() |
+        difference(['pip', 'setuptools']) | length == 0
+    fail_msg: Existing dedicated venv does not exactly match the hash lock.
+  when:
+    - ludus_k3s_bootstrap_marker_status.stat.exists
+    - ludus_k3s_bootstrap_candidate_state == 'complete'
+
+- name: Require exact existing Python client imports
+  ansible.builtin.assert:
+    that:
+      - ludus_k3s_bootstrap_existing_python.stdout | from_json == ['37.0.1', '6.0.3', '1.36']
+    fail_msg: Existing owned Python environment differs; refusing replacement or adoption.
+  when:
+    - ludus_k3s_bootstrap_candidate_state == 'complete'
+    - ludus_k3s_bootstrap_existing_python is not skipped
+
+- name: Inspect an existing kubeconfig without contacting the API
+  ansible.builtin.command:
+    argv:
+      - "{{ ludus_k3s_bootstrap_k3s_binary }}"
+      - kubectl
+      - --kubeconfig={{ ludus_k3s_bootstrap_kubeconfig }}
+      - --request-timeout=10s
+      - config
+      - view
+      - --output=json
+  register: ludus_k3s_bootstrap_existing_kubeconfig
+  changed_when: false
+  when: >-
+    ludus_k3s_bootstrap_marker_status.stat.exists and
+    ludus_k3s_bootstrap_protected_status.results |
+    selectattr('item', 'equalto', ludus_k3s_bootstrap_kubeconfig) |
+    selectattr('stat.exists') | list | length == 1
+
+- name: Require exact existing kubeconfig names when present
+  ansible.builtin.assert:
+    that:
+      - >-
+        (ludus_k3s_bootstrap_existing_kubeconfig.stdout | from_json).clusters |
+        map(attribute='name') | list == [ludus_k3s_bootstrap_cluster_name]
+      - >-
+        (ludus_k3s_bootstrap_existing_kubeconfig.stdout | from_json).contexts |
+        map(attribute='name') | list == [ludus_k3s_bootstrap_kube_context]
+      - >-
+        (ludus_k3s_bootstrap_existing_kubeconfig.stdout | from_json).users |
+        map(attribute='name') | list == [ludus_k3s_bootstrap_kube_user]
+      - >-
+        (ludus_k3s_bootstrap_existing_kubeconfig.stdout | from_json)['current-context'] ==
+        ludus_k3s_bootstrap_kube_context
+      - >-
+        (ludus_k3s_bootstrap_existing_kubeconfig.stdout |
+         from_json).contexts[0].context.cluster == ludus_k3s_bootstrap_cluster_name
+      - >-
+        (ludus_k3s_bootstrap_existing_kubeconfig.stdout |
+         from_json).contexts[0].context.user == ludus_k3s_bootstrap_kube_user
+      - >-
+        (ludus_k3s_bootstrap_existing_kubeconfig.stdout |
+         from_json).clusters[0].cluster.server == ludus_k3s_bootstrap_api_server
+      - >-
+        (ludus_k3s_bootstrap_existing_kubeconfig.stdout |
+         from_json).clusters[0].cluster['certificate-authority-data'] is defined
+      - >-
+        (ludus_k3s_bootstrap_existing_kubeconfig.stdout |
+         from_json).clusters[0].cluster['certificate-authority-data'] | length > 0
+      - >-
+        (ludus_k3s_bootstrap_existing_kubeconfig.stdout |
+         from_json).users[0].user['client-certificate-data'] is defined
+      - >-
+        (ludus_k3s_bootstrap_existing_kubeconfig.stdout |
+         from_json).users[0].user['client-certificate-data'] | length > 0
+      - >-
+        (ludus_k3s_bootstrap_existing_kubeconfig.stdout |
+         from_json).users[0].user['client-key-data'] is defined
+      - >-
+        (ludus_k3s_bootstrap_existing_kubeconfig.stdout |
+         from_json).users[0].user['client-key-data'] | length > 0
+      - >-
+        'token' not in (ludus_k3s_bootstrap_existing_kubeconfig.stdout |
+        from_json).users[0].user
+      - >-
+        'password' not in (ludus_k3s_bootstrap_existing_kubeconfig.stdout |
+        from_json).users[0].user
+      - >-
+        'exec' not in (ludus_k3s_bootstrap_existing_kubeconfig.stdout |
+        from_json).users[0].user
+      - >-
+        'auth-provider' not in (ludus_k3s_bootstrap_existing_kubeconfig.stdout |
+        from_json).users[0].user
+    fail_msg: Existing owned kubeconfig names differ; refusing replacement or adoption.
+  when:
+    - ludus_k3s_bootstrap_existing_kubeconfig is not skipped
+
+- name: Publish the validated K3s install state
+  ansible.builtin.set_fact:
+    ludus_k3s_bootstrap_install_state: "{{ ludus_k3s_bootstrap_candidate_state }}"
+  when:
+    - ludus_k3s_bootstrap_candidate_state in ['fresh', 'complete', 'resume_pre_service']

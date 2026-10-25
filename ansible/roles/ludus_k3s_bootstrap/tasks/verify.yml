@@ -1,0 +1,238 @@
+---
+- name: Wait boundedly for the K3s service
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - is-active
+      - k3s.service
+  register: ludus_k3s_bootstrap_service_state
+  changed_when: false
+  retries: "{{ ludus_k3s_bootstrap_service_retries }}"
+  delay: "{{ ludus_k3s_bootstrap_service_delay }}"
+  until: ludus_k3s_bootstrap_service_state.stdout == 'active'
+
+- name: Read the effective K3s service command
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - show
+      - k3s.service
+      - --property=ExecStart
+      - --property=DropInPaths
+      - --property=Environment
+      - --property=EnvironmentFiles
+  register: ludus_k3s_bootstrap_exec_start
+  changed_when: false
+
+- name: Require embedded containerd service configuration
+  ansible.builtin.assert:
+    that:
+      - ludus_k3s_bootstrap_exec_start.stdout is search('/usr/local/bin/k3s server')
+      - ludus_k3s_bootstrap_exec_start.stdout is not search('(?:^|\\s)--docker(?:\\s|=|$)')
+      - ludus_k3s_bootstrap_exec_start.stdout is not search('--container-runtime-endpoint')
+      - >-
+        (ludus_k3s_bootstrap_exec_start.stdout |
+         regex_search('(?m)^DropInPaths=(.+)$')) is none
+      - >-
+        (ludus_k3s_bootstrap_exec_start.stdout |
+         regex_search('(?m)^Environment=$')) is not none
+      - >-
+        (ludus_k3s_bootstrap_exec_start.stdout |
+         regex_search('(?m)^EnvironmentFiles=.+$')) is none
+    fail_msg: K3s must run as a native server using its embedded containerd.
+
+- name: Wait boundedly for the K3s API ready endpoint
+  ansible.builtin.command:
+    argv:
+      - "{{ ludus_k3s_bootstrap_k3s_binary }}"
+      - kubectl
+      - --kubeconfig={{ ludus_k3s_bootstrap_kubeconfig }}
+      - --context={{ ludus_k3s_bootstrap_kube_context }}
+      - --request-timeout=10s
+      - get
+      - --raw=/readyz
+  register: ludus_k3s_bootstrap_api_ready
+  changed_when: false
+  retries: "{{ ludus_k3s_bootstrap_api_retries }}"
+  delay: "{{ ludus_k3s_bootstrap_api_delay }}"
+  until:
+    - ludus_k3s_bootstrap_api_ready.rc == 0
+    - ludus_k3s_bootstrap_api_ready.stdout == 'ok'
+
+- name: Read the generated kubeconfig
+  ansible.builtin.command:
+    argv:
+      - "{{ ludus_k3s_bootstrap_k3s_binary }}"
+      - kubectl
+      - --kubeconfig={{ ludus_k3s_bootstrap_kubeconfig }}
+      - --request-timeout=10s
+      - config
+      - view
+      - --output=json
+  register: ludus_k3s_bootstrap_kubeconfig_view
+  changed_when: false
+
+- name: Decode the generated kubeconfig
+  ansible.builtin.set_fact:
+    ludus_k3s_bootstrap_kubeconfig_data: "{{ ludus_k3s_bootstrap_kubeconfig_view.stdout | from_json }}"
+
+- name: Require exact kubeconfig names
+  ansible.builtin.assert:
+    that:
+      - ludus_k3s_bootstrap_kubeconfig_data.clusters | map(attribute='name') | list == [ludus_k3s_bootstrap_cluster_name]
+      - ludus_k3s_bootstrap_kubeconfig_data.contexts | map(attribute='name') | list == [ludus_k3s_bootstrap_kube_context]
+      - ludus_k3s_bootstrap_kubeconfig_data.users | map(attribute='name') | list == [ludus_k3s_bootstrap_kube_user]
+      - ludus_k3s_bootstrap_kubeconfig_data['current-context'] == ludus_k3s_bootstrap_kube_context
+      - ludus_k3s_bootstrap_kubeconfig_data.contexts[0].context.cluster == ludus_k3s_bootstrap_cluster_name
+      - ludus_k3s_bootstrap_kubeconfig_data.contexts[0].context.user == ludus_k3s_bootstrap_kube_user
+      - ludus_k3s_bootstrap_kubeconfig_data.clusters[0].cluster.server == ludus_k3s_bootstrap_api_server
+      - ludus_k3s_bootstrap_kubeconfig_data.clusters[0].cluster['certificate-authority-data'] is defined
+      - ludus_k3s_bootstrap_kubeconfig_data.clusters[0].cluster['certificate-authority-data'] | length > 0
+      - ludus_k3s_bootstrap_kubeconfig_data.users[0].user['client-certificate-data'] is defined
+      - ludus_k3s_bootstrap_kubeconfig_data.users[0].user['client-certificate-data'] | length > 0
+      - ludus_k3s_bootstrap_kubeconfig_data.users[0].user['client-key-data'] is defined
+      - ludus_k3s_bootstrap_kubeconfig_data.users[0].user['client-key-data'] | length > 0
+      - "'token' not in ludus_k3s_bootstrap_kubeconfig_data.users[0].user"
+      - "'password' not in ludus_k3s_bootstrap_kubeconfig_data.users[0].user"
+      - "'exec' not in ludus_k3s_bootstrap_kubeconfig_data.users[0].user"
+      - "'auth-provider' not in ludus_k3s_bootstrap_kubeconfig_data.users[0].user"
+
+- name: Inspect the generated kubeconfig metadata
+  ansible.builtin.stat:
+    path: "{{ ludus_k3s_bootstrap_kubeconfig }}"
+  register: ludus_k3s_bootstrap_kubeconfig_status
+
+- name: Require exact generated kubeconfig metadata
+  ansible.builtin.assert:
+    that:
+      - ludus_k3s_bootstrap_kubeconfig_status.stat.exists
+      - ludus_k3s_bootstrap_kubeconfig_status.stat.isreg
+      - not ludus_k3s_bootstrap_kubeconfig_status.stat.islnk
+      - ludus_k3s_bootstrap_kubeconfig_status.stat.pw_name == 'root'
+      - ludus_k3s_bootstrap_kubeconfig_status.stat.gr_name == 'root'
+      - ludus_k3s_bootstrap_kubeconfig_status.stat.mode == '0600'
+    fail_msg: Generated kubeconfig type, owner, or mode differs from the fixed contract.
+
+- name: Wait for the exact single-node runtime contract
+  ansible.builtin.command:
+    argv:
+      - "{{ ludus_k3s_bootstrap_k3s_binary }}"
+      - kubectl
+      - --kubeconfig={{ ludus_k3s_bootstrap_kubeconfig }}
+      - --context={{ ludus_k3s_bootstrap_kube_context }}
+      - --request-timeout=10s
+      - get
+      - nodes
+      - --output=json
+  register: ludus_k3s_bootstrap_nodes
+  changed_when: false
+  failed_when: false
+  retries: "{{ ludus_k3s_bootstrap_api_retries }}"
+  delay: "{{ ludus_k3s_bootstrap_api_delay }}"
+  until: >-
+    ludus_k3s_bootstrap_nodes.rc == 0 and
+    ((ludus_k3s_bootstrap_nodes.stdout | from_json)['items'] | length == 1) and
+    ((ludus_k3s_bootstrap_nodes.stdout | from_json)['items'][0].metadata.labels['kubernetes.io/os'] == 'linux') and
+    ((ludus_k3s_bootstrap_nodes.stdout | from_json)['items'][0].metadata.labels['kubernetes.io/arch'] == 'amd64') and
+    (not ((ludus_k3s_bootstrap_nodes.stdout | from_json)['items'][0].spec.unschedulable | default(false) | bool)) and
+    (((ludus_k3s_bootstrap_nodes.stdout | from_json)['items'][0].spec.taints | default([]) |
+      map(attribute='effect') | intersect(['NoSchedule', 'NoExecute']) | length) == 0) and
+    (((ludus_k3s_bootstrap_nodes.stdout | from_json)['items'][0].status.conditions |
+      selectattr('type', 'equalto', 'Ready') | selectattr('status', 'equalto', 'True') |
+      list | length) == 1) and
+    ((ludus_k3s_bootstrap_nodes.stdout | from_json)['items'][0].status.nodeInfo.containerRuntimeVersion
+      is match('^containerd://'))
+
+- name: Decode the single-node cluster state
+  ansible.builtin.set_fact:
+    ludus_k3s_bootstrap_node_list: "{{ (ludus_k3s_bootstrap_nodes.stdout | from_json)['items'] }}"
+
+- name: Require one Ready schedulable Linux amd64 node
+  ansible.builtin.assert:
+    that:
+      - ludus_k3s_bootstrap_node_list | length == 1
+      - ludus_k3s_bootstrap_node_list[0].metadata.labels['kubernetes.io/os'] == 'linux'
+      - ludus_k3s_bootstrap_node_list[0].metadata.labels['kubernetes.io/arch'] == 'amd64'
+      - not (ludus_k3s_bootstrap_node_list[0].spec.unschedulable | default(false) | bool)
+      - >-
+        ludus_k3s_bootstrap_node_list[0].spec.taints | default([]) |
+        map(attribute='effect') | intersect(['NoSchedule', 'NoExecute']) | length == 0
+      - >-
+        ludus_k3s_bootstrap_node_list[0].status.conditions |
+        selectattr('type', 'equalto', 'Ready') |
+        selectattr('status', 'equalto', 'True') | list | length == 1
+      - >-
+        ludus_k3s_bootstrap_node_list[0].status.nodeInfo.containerRuntimeVersion
+        is match('^containerd://')
+
+- name: Inventory the final K3s configuration directory
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/find
+      - "{{ ludus_k3s_bootstrap_config_dir }}"
+      - -mindepth
+      - "1"
+      - -maxdepth
+      - "1"
+      - -printf
+      - "%f\n"
+  register: ludus_k3s_bootstrap_final_config_entries
+  changed_when: false
+
+- name: Require only the generated kubeconfig in the final config directory
+  ansible.builtin.assert:
+    that:
+      - ludus_k3s_bootstrap_final_config_entries.stdout_lines == ['k3s.yaml']
+    fail_msg: K3s configuration directory contains an unmanaged runtime input.
+
+- name: Read the installed K3s version
+  ansible.builtin.command:
+    argv:
+      - "{{ ludus_k3s_bootstrap_k3s_binary }}"
+      - --version
+  register: ludus_k3s_bootstrap_k3s_version_output
+  changed_when: false
+
+- name: Read the installed Helm version
+  ansible.builtin.command:
+    argv:
+      - "{{ ludus_k3s_bootstrap_helm_binary }}"
+      - version
+      - --short
+  environment:
+    HOME: /root
+  register: ludus_k3s_bootstrap_helm_version_output
+  changed_when: false
+
+- name: Read root Helm plugins
+  ansible.builtin.command:
+    argv:
+      - "{{ ludus_k3s_bootstrap_helm_binary }}"
+      - plugin
+      - list
+  environment:
+    HOME: /root
+  register: ludus_k3s_bootstrap_plugin_output
+  changed_when: false
+
+- name: Read exact dedicated Python import versions
+  ansible.builtin.command:
+    argv:
+      - "{{ ludus_k3s_bootstrap_python }}"
+      - -c
+      - >-
+        import json, jsonpatch, kubernetes, yaml;
+        print(json.dumps([kubernetes.__version__, yaml.__version__, jsonpatch.__version__]))
+  register: ludus_k3s_bootstrap_python_versions
+  changed_when: false
+
+- name: Verify installed Helm and diff bytes from pinned archives
+  ansible.builtin.include_tasks: tool-integrity.yml
+
+- name: Require exact tool and Python versions
+  ansible.builtin.assert:
+    that:
+      - ludus_k3s_bootstrap_k3s_version_output.stdout is search('^k3s version v1\\.37\\.1\\+k3s1(?:\\s|$)')
+      - ludus_k3s_bootstrap_helm_version_output.stdout is match('^v3\\.20\\.0(?:\\+.*)?$')
+      - ludus_k3s_bootstrap_plugin_output.stdout is regex('(?m)^diff\\s+3\\.15\\.15(?:\\s|$)')
+      - ludus_k3s_bootstrap_python_versions.stdout | from_json == ['37.0.1', '6.0.3', '1.36']

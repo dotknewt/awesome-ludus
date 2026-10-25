@@ -17,6 +17,8 @@
     validate_certs: "{{ splunk_server_hec_validate_certs }}"
     ca_path: "{{ splunk_server_hec_ca_path if splunk_server_hec_ca_path | length > 0 else omit }}"
   register: splunk_server_hec_validation_result  # noqa: var-naming[no-role-prefix]
+  failed_when: false
+  # An arbitrary endpoint response is not guaranteed to contain only lab data.
   no_log: true
   when:
     - splunk_server_hec_enabled
@@ -26,10 +28,40 @@
 - name: Require successful parsed HEC acceptance response
   ansible.builtin.assert:
     that:
+      - splunk_server_hec_validation_result.status is defined
       - splunk_server_hec_validation_result.status == 200
+      - splunk_server_hec_validation_result.json is defined
+      - splunk_server_hec_validation_result.json is mapping
+      - splunk_server_hec_validation_result.json.code is defined
+      - splunk_server_hec_validation_result.json.code is number
+      - splunk_server_hec_validation_result.json.code is not boolean
       - splunk_server_hec_validation_result.json.code == 0
-    fail_msg: HEC returned HTTP 200 without JSON code 0; acceptance failed.
-  no_log: true
+    fail_msg: >-
+      HEC acceptance failed: expected HTTP status 200 and JSON code 0;
+      endpoint={{ splunk_server_hec_validation_endpoint | to_json }};
+      {% if splunk_server_hec_validation_result.status is not defined %}
+      category=module failure without HTTP status;
+      {% elif splunk_server_hec_validation_result.status == -1 %}
+      category=transport failure (TLS, DNS, connection or timeout; raw message protected);
+      {% elif splunk_server_hec_validation_result.status != 200 %}
+      category=HTTP status not accepted;
+      {% else %}
+      category=invalid HEC acceptance payload;
+      {% endif %}
+      status={{ splunk_server_hec_validation_result.status
+        if splunk_server_hec_validation_result.status is defined and splunk_server_hec_validation_result.status is number
+        else '<missing or nonnumeric>' }};
+      {% if splunk_server_hec_validation_result.json is defined and splunk_server_hec_validation_result.json is mapping %}
+      code={{ splunk_server_hec_validation_result.json.code
+        if splunk_server_hec_validation_result.json.code is defined and
+           splunk_server_hec_validation_result.json.code is number and
+           splunk_server_hec_validation_result.json.code is not boolean
+        else '<missing or nonnumeric>' }};
+      {% else %}
+      JSON is missing or not a mapping;
+      {% endif %}
+      lab_token={{ splunk_server_hec_token | to_json }},
+      index={{ splunk_server_hec_default_index | to_json }}.
   when:
     - splunk_server_hec_enabled
     - splunk_server_hec_validate

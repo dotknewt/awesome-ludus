@@ -12,47 +12,72 @@
       {{ splunk_container_logs_artifacts.tooling.helm_diff.version }}
 
 - name: Validate the bounded Kubernetes input contract
-  ansible.builtin.assert:
-    that:
-      - splunk_container_logs_kubeconfig | type_debug == 'str'
-      - splunk_container_logs_kubeconfig | length > 0
-      - splunk_container_logs_kube_context | type_debug == 'str'
-      - splunk_container_logs_kube_context | length > 0
-      - splunk_container_logs_k8s_cluster_name | type_debug == 'str'
-      - splunk_container_logs_k8s_cluster_name | length > 0
-      - splunk_container_logs_k8s_namespace is match('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
-      - splunk_container_logs_k8s_release is match('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
-      - splunk_container_logs_k8s_existing_secret | type_debug == 'str'
-      - splunk_container_logs_k8s_existing_secret | length == 0 or
-        splunk_container_logs_k8s_existing_secret is match('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
-      - splunk_container_logs_k8s_existing_secret | length == 0 or
-        splunk_container_logs_hec_token | length == 0
-      - splunk_container_logs_k8s_existing_secret | length == 0 or
-        splunk_container_logs_ca_file | length == 0
-      - splunk_container_logs_k8s_node_selector is mapping
-      - splunk_container_logs_k8s_node_selector | length > 0
-      - splunk_container_logs_k8s_node_selector.get('kubernetes.io/os', 'linux') == 'linux'
-      - splunk_container_logs_k8s_node_selector.get('kubernetes.io/arch', 'amd64') == 'amd64'
-      - splunk_container_logs_k8s_tolerations is sequence
-      - splunk_container_logs_k8s_tolerations is not string
-      - splunk_container_logs_k8s_log_paths is sequence
-      - splunk_container_logs_k8s_log_paths is not string
-      - splunk_container_logs_k8s_log_paths | length > 0
-      - splunk_container_logs_k8s_log_paths | unique | length ==
-        splunk_container_logs_k8s_log_paths | length
-      - "'/var/log/pods' in splunk_container_logs_k8s_log_paths"
-      - splunk_container_logs_k8s_log_paths |
-        difference(['/var/log/pods', '/var/log/containers']) | length == 0
-      - "[splunk_container_logs_k8s_checkpoint_path,
-          splunk_container_logs_k8s_queue_path] | splunk_k8s_persistent_paths_valid"
-      - splunk_container_logs_chart_url | type_debug == 'str'
-      - splunk_container_logs_chart_url.startswith('https://')
-    fail_msg: >-
-      Kubernetes mode requires an explicit existing kubeconfig/context/cluster,
-      mutually exclusive token authorities, a valid positive Linux/amd64 node
-      selector, reviewed pod-log roots, distinct persistent paths, and the
-      reviewed HTTPS chart or same-byte mirror.
-  no_log: true
+  block:
+    - name: Validate the bounded Kubernetes input contract
+      ansible.builtin.assert:
+        that:
+          - splunk_container_logs_kubeconfig is string
+          - splunk_container_logs_kubeconfig | length > 0
+          - splunk_container_logs_kube_context is string
+          - splunk_container_logs_kube_context | length > 0
+          - splunk_container_logs_k8s_cluster_name is string
+          - splunk_container_logs_k8s_cluster_name | length > 0
+          - splunk_container_logs_k8s_namespace is match('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
+          - splunk_container_logs_k8s_release is match('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
+          - splunk_container_logs_k8s_existing_secret is string
+          - splunk_container_logs_k8s_existing_secret | length == 0 or
+            splunk_container_logs_k8s_existing_secret is match('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
+          - splunk_container_logs_k8s_existing_secret | length == 0 or
+            splunk_container_logs_hec_token | length == 0
+          - splunk_container_logs_k8s_existing_secret | length == 0 or
+            splunk_container_logs_ca_file | length == 0
+          - splunk_container_logs_k8s_node_selector is mapping
+          - splunk_container_logs_k8s_node_selector | length > 0
+          - splunk_container_logs_k8s_node_selector.get('kubernetes.io/os', 'linux') == 'linux'
+          - splunk_container_logs_k8s_node_selector.get('kubernetes.io/arch', 'amd64') == 'amd64'
+          - splunk_container_logs_k8s_tolerations is sequence
+          - splunk_container_logs_k8s_tolerations is not string
+          - splunk_container_logs_k8s_log_paths is sequence
+          - splunk_container_logs_k8s_log_paths is not string
+          - splunk_container_logs_k8s_log_paths | length > 0
+          - splunk_container_logs_k8s_log_paths | unique | length ==
+            splunk_container_logs_k8s_log_paths | length
+          - "'/var/log/pods' in splunk_container_logs_k8s_log_paths"
+          - splunk_container_logs_k8s_log_paths |
+            difference(['/var/log/pods', '/var/log/containers']) | length == 0
+          - "[splunk_container_logs_k8s_checkpoint_path,
+              splunk_container_logs_k8s_queue_path] | splunk_k8s_persistent_paths_valid"
+          - splunk_container_logs_chart_url is string
+          - splunk_container_logs_chart_url.startswith('https://')
+        fail_msg: >-
+          Kubernetes mode requires an explicit existing kubeconfig/context/cluster,
+          mutually exclusive token authorities, a valid positive Linux/amd64 node
+          selector, reviewed pod-log roots, distinct persistent paths, and the
+          reviewed HTTPS chart or same-byte mirror.
+      no_log: true
+  rescue:
+    - name: Diagnose rejected Kubernetes inputs without exposing values
+      block:
+        - name: Evaluate fixed Kubernetes input diagnostics
+          action: splunk_container_logs_input_diagnostics
+          args:
+            contract: kubernetes
+          register: splunk_container_logs_kubernetes_input_diagnostics_result
+          no_log: true
+        - name: Publish the sanitized Kubernetes input diagnostic report
+          ansible.builtin.debug:
+            msg: "{{ splunk_container_logs_kubernetes_input_diagnostics_result.report }}"
+          no_log: false
+      rescue:
+        - name: Report fixed Kubernetes diagnostic evaluation error
+          ansible.builtin.debug:
+            msg: Input diagnostics unavailable (evaluation_error).
+          no_log: false
+      always:
+        - name: Fail after reporting rejected Kubernetes inputs
+          ansible.builtin.fail:
+            msg: Kubernetes input validation failed; no role changes were made.
+          no_log: true
 
 - name: Record stable Kubernetes log mount and source identity
   ansible.builtin.set_fact:

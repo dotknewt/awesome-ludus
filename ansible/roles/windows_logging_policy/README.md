@@ -71,7 +71,8 @@ sets Ansible changed/result explicitly, and does not remotely stage scripts.
 [hashtable] Progress)` returns
 `changed`, `planned_changes`, and `policies`. It obtains a read-only context,
 acquires the per-domain writer, rereads the authoritative context under that
-lock, reconciles GPOs and registry settings, publishes audit state, then changes
+lock, handles the narrowly eligible audit-order recovery described below before
+any normal reconciliation, reconciles GPOs and registry settings, publishes audit state, then changes
 links only after content readback. The writer is always disposed in `finally`.
 `Progress` is an optional invocation-local carrier created by the task wrapper;
 on a terminating failure the wrapper reports the affected policy, phase and
@@ -85,10 +86,12 @@ already verified role-owned logging GPO.
 
 `files/LoggingPolicyState.ps1` exports:
 
-- `Get-LoggingPolicyContext([hashtable] Configuration)`: validates settings,
+- `Get-LoggingPolicyContext([hashtable] Configuration, [bool] AllowAuditOrderRecovery = false)`: validates settings,
   resolves and verifies the joined domain and selected writable DC, tests LDAP
   and selected-DC SYSVOL access in the current session, loads protected state,
-  and reconciles state GUIDs with exact role markers. It is read-only.
+  and reconciles state GUIDs with exact role markers. It is read-only. The
+  internal opt-in admits only one logging/audit_publish pending operation with
+  logging enabled; it does not grant mutation permission or bypass ownership.
 - `Enter-LoggingPolicyWriter([hashtable] Context, [bool] PlanOnly)`: acquires a
   fileless per-domain named mutex and returns an `IDisposable`. Plan/check mode
   creates no directory or state/lock file.
@@ -132,6 +135,15 @@ audit rows, not unconditional removal of `audit.csv`: it may carry a nonnull
 desired hash when valid unrelated rows remain, or request file deletion only
 when no supported rows remain. This preserves unrelated CSV content while
 keeping recovery intent unambiguous.
+
+Only logging/audit_publish may additionally contain `order_recovery`, with exact
+keys `schema_version` (1), `kind` (`audit_extension_order`),
+`intended_machine_extensions`, `intended_ad_version`, `intended_gpt_version`.
+This nested successor journal leaves original target, prior/intended ownership
+and audit intent unchanged. Its canonical extensions and successor version are
+recomputed from the original intent when validating state. State remains schema
+1; older binaries reject the extra key. **Do not roll back role binaries while
+this journal is pending.**
 
 ## Native policy and link lifecycle
 
@@ -182,7 +194,8 @@ verifies the payload hash or deletion before any version mutation, sends one
 LDAP modify with replacement values for both attributes, updates GPT, and reads
 everything back again before clearing pending. Only the machine half is
 incremented; zero wrap becomes one and the user half is preserved. Unrelated
-extension tuples are preserved and sorted. Removing the final tuple uses an LDAP
+extension tuples retain their exact raw bytes and are sorted by CSE string keys
+using ordinal-ignore-case comparison, also used by strict parsing. Removing the final tuple uses an LDAP
 replace with zero values, not an empty string.
 
 `audit_delete` removes committed owned rows. If unrelated valid rows remain it
@@ -199,7 +212,7 @@ binds `owner_id`, domain GUID, designated writer, and policy records to exact
 GPO GUIDs. A GPO description marker and matching protected state are both
 required. An unmanaged name, marker/GUID replacement, moved or missing marked
 GPO, owner/domain/writer mismatch, unknown schema, malformed pending record, or
-any unresolved pending operation fails closed. Names/descriptions are never
+any unsupported unresolved pending operation fails closed. Names/descriptions are never
 used to reconstruct or adopt ownership.
 
 The state directory and file reject reparse points and use a non-inherited ACL
@@ -212,14 +225,46 @@ no-op and creates no state. Check mode still performs authorized discovery and
 comparison and acquires the fileless mutex, but creates no GPO/state/backup,
 changes no registry/link/CSV/LDAP/GPT value, and increments no version.
 
-An interruption after pending persistence deliberately blocks an ordinary
-rerun, including when CSV already matches desired while old AD/GPT versions
-still agree. Recovery is not implemented as a blind command. An operator must
-compare the protected prior/intended record with CSV, extensions, AD version,
-and GPT version on the recorded DC, reject any third/intervening state, then
-explicitly complete the missing prescribed steps or restore the protected prior
-payload through a new versioned publication. Clear pending only after complete
-authoritative readback.
+### Narrow audit-extension order recovery
+
+`Resume-LoggingAuditOrderRecovery` handles only the historical publisher defect
+whose recorded audit_publish tuple bytes are correct but unsorted. It strictly
+validates the original prior extensions, proves original intended tuples differ
+only in order from corrected publication, checks exact current configuration,
+owned GUID sets and numeric audit settings, and requires the entire actual CSV
+hash to equal the recorded intended hash. Unrelated valid CSV rows and raw
+extension tuples are preserved, never adopted. Logging must remain enabled.
+
+Let V be the original intended AD/GPT version, Ebad its unsorted extensions,
+Egood their proved canonical order, and R the next machine version after V.
+The only accepted transitions are:
+
+| Protected journal | Actual AD/GPT/extensions | Next action |
+| --- | --- | --- |
+| absent | V/V/Ebad | atomically persist successor journal |
+| present | V/V/Ebad | combined LDAP R/Egood update |
+| present | R/V/Egood | GPT-only update to R |
+| present | R/R/Egood | strict readback, commit intended ownership, clear pending |
+
+The captured recovery is 9→10. Resumes use recorded R, not a new increment of
+the observed version. CSV is never rewritten by recovery. Every other state,
+including manually canonicalized extensions without a journal, fails closed.
+Exceptions/timeouts retain durable intent; no automatic rollback or cleanup.
+State candidates are cloned and caller state is swapped only after atomic
+persistence/readback succeeds. Check/WhatIf reports the pending transition and
+returns before normal reconciliation without writing or claiming completion.
+
+**No concurrent manual GPO edits during recovery.** Identity, protected on-disk
+intent, payload and versions are freshly rechecked before each write and after
+LDAP before GPT. The existing per-domain mutex excludes this local writer; it
+is not distributed compare-and-swap. Observed intervening changes stop recovery.
+All other pending failures still require separately reviewed recovery; do not
+delete a pending marker or recreate the GPO to bypass it.
+
+Implementation static checks do not establish live recovery success. The
+authorized live run must prove strict final readback and state commit. Crash
+resume, injected failures and a subsequent convergence run remain unverified
+until separately exercised; they are not implied by a successful happy path.
 
 ## Provenance and behavior differences
 

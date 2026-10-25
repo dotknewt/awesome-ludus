@@ -1,0 +1,73 @@
+---
+- name: Inspect verified archives and installed tool binaries
+  ansible.builtin.stat:
+    path: "{{ item.path }}"
+    checksum_algorithm: sha256
+  loop:
+    - path: "{{ ludus_k3s_bootstrap_helm_archive }}"
+      mode: "0600"
+      checksum: "{{ ludus_k3s_bootstrap_helm_sha256 }}"
+    - path: "{{ ludus_k3s_bootstrap_helm_binary }}"
+      mode: "0755"
+      checksum: ""
+    - path: "{{ ludus_k3s_bootstrap_helm_diff_archive }}"
+      mode: "0600"
+      checksum: "{{ ludus_k3s_bootstrap_helm_diff_sha256 }}"
+    - path: "{{ ludus_k3s_bootstrap_helm_diff_binary }}"
+      mode: "0755"
+      checksum: ""
+    - path: "{{ ludus_k3s_bootstrap_helm_diff_manifest }}"
+      mode: "0644"
+      checksum: ""
+  register: ludus_k3s_bootstrap_tool_files
+
+- name: Require exact verified archives and regular installed binaries
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg
+      - not item.stat.islnk
+      - item.stat.pw_name == 'root'
+      - item.stat.gr_name == 'root'
+      - item.stat.mode == item.item.mode
+      - item.item.checksum | length == 0 or item.stat.checksum == item.item.checksum
+    fail_msg: "Tool archive or binary metadata differs: {{ item.item.path }}"
+  loop: "{{ ludus_k3s_bootstrap_tool_files.results }}"
+
+- name: Hash installed tool bytes against verified archive members
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - >-
+        import hashlib,json,pathlib,sys,tarfile;
+        archive=tarfile.open(sys.argv[1]);
+        member=archive.extractfile(sys.argv[2]).read();
+        archive.close();
+        installed=pathlib.Path(sys.argv[3]).read_bytes();
+        print(json.dumps({'member_sha256': hashlib.sha256(member).hexdigest(),
+        'destination_sha256': hashlib.sha256(installed).hexdigest()}))
+      - "{{ item.archive }}"
+      - "{{ item.member }}"
+      - "{{ item.destination }}"
+  loop:
+    - archive: "{{ ludus_k3s_bootstrap_helm_archive }}"
+      member: linux-amd64/helm
+      destination: "{{ ludus_k3s_bootstrap_helm_binary }}"
+    - archive: "{{ ludus_k3s_bootstrap_helm_diff_archive }}"
+      member: diff/bin/diff
+      destination: "{{ ludus_k3s_bootstrap_helm_diff_binary }}"
+    - archive: "{{ ludus_k3s_bootstrap_helm_diff_archive }}"
+      member: diff/plugin.yaml
+      destination: "{{ ludus_k3s_bootstrap_helm_diff_manifest }}"
+  register: ludus_k3s_bootstrap_archive_member_hashes
+  changed_when: false
+
+- name: Require installed Helm and diff bytes from verified archives
+  ansible.builtin.assert:
+    that:
+      - >-
+        (item.stdout | from_json).member_sha256 ==
+        (item.stdout | from_json).destination_sha256
+    fail_msg: "Installed tool differs from verified archive member: {{ item.item.destination }}"
+  loop: "{{ ludus_k3s_bootstrap_archive_member_hashes.results }}"

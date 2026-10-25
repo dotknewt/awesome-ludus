@@ -3,6 +3,7 @@ Set-StrictMode -Version 2.0
 $script:LoggingAuditHeader = 'Machine Name,Policy Target,Subcategory,Subcategory GUID,Inclusion Setting,Exclusion Setting,Setting Value'
 $script:LoggingAuditTuple = '[{f3ccc681-b74c-4060-9f26-cd84525dca2a}{0F3F3735-573D-9804-99E4-AB2A69BA5FD4}]'
 $script:LoggingAuditCse = 'f3ccc681-b74c-4060-9f26-cd84525dca2a'
+$script:LoggingAuditExtensionComparer = [System.StringComparer]::OrdinalIgnoreCase
 $script:LoggingAuditSupportedGuids = @{}
 foreach ($supportedGuid in @(
     '{0cce9213-69ae-11d9-bed3-505054503030}', '{0cce9212-69ae-11d9-bed3-505054503030}',
@@ -241,7 +242,7 @@ function Get-LoggingAuditDirectoryState {
         $request = [System.DirectoryServices.Protocols.SearchRequest]::new(
             $Context.gpo_dn, '(objectClass=groupPolicyContainer)',
             [System.DirectoryServices.Protocols.SearchScope]::Base,
-            @('versionNumber', 'gPCMachineExtensionNames', 'gPCFileSysPath'))
+            [string[]] @('versionNumber', 'gPCMachineExtensionNames', 'gPCFileSysPath'))
         $response = [System.DirectoryServices.Protocols.SearchResponse] $connection.SendRequest($request)
         Assert-LoggingPolicyCondition ($response.ResultCode -eq [System.DirectoryServices.Protocols.ResultCode]::Success) 'LDAP GPO read failed'
         Assert-LoggingPolicyCondition ($response.Entries.Count -eq 1) 'LDAP GPO read did not return exactly one entry'
@@ -261,7 +262,9 @@ function Get-LoggingAuditDirectoryState {
     }
 }
 
-function ConvertFrom-LoggingAuditExtensions {
+# Private tokenizer: callers must separately establish ordering or an exact
+# recorded ordering-only recovery proof. Normal reads use the strict parser.
+function Split-LoggingAuditExtensionTuples {
     param([string] $Value)
     if ([string]::IsNullOrEmpty($Value)) {
         return @()
@@ -279,11 +282,25 @@ function ConvertFrom-LoggingAuditExtensions {
         $pairs += ,@{ cse = $cse; raw = $raw }
         $Value = $Value.Substring($match.Length)
     }
+    return $pairs
+}
+
+function Test-LoggingAuditExtensionOrder {
+    param([object[]] $Pairs)
     $previous = ''
-    foreach ($pair in $pairs) {
-        Assert-LoggingPolicyCondition ($previous -eq '' -or [string]::Compare($previous, $pair.cse, $true) -lt 0) 'gPCMachineExtensionNames CSE tuples are not sorted'
-        $previous = $pair.cse
+    foreach ($pair in $Pairs) {
+        if ($previous -ne '' -and $script:LoggingAuditExtensionComparer.Compare($previous, [string] $pair.cse) -ge 0) {
+            return $false
+        }
+        $previous = [string] $pair.cse
     }
+    return $true
+}
+
+function ConvertFrom-LoggingAuditExtensions {
+    param([string] $Value)
+    $pairs = @(Split-LoggingAuditExtensionTuples $Value)
+    Assert-LoggingPolicyCondition (Test-LoggingAuditExtensionOrder $pairs) 'gPCMachineExtensionNames CSE tuples are not sorted'
     return $pairs
 }
 
@@ -298,8 +315,40 @@ function Get-LoggingAuditIntendedExtensions {
     if ($AuditDataRemains) {
         $result += ,@{ cse = $script:LoggingAuditCse; raw = $script:LoggingAuditTuple }
     }
-    $sorted = @($result | Sort-Object -Property cse)
-    return [string]::Join('', @($sorted | ForEach-Object { $_.raw }))
+    $byCse = @{}
+    foreach ($pair in $result) { $byCse[[string] $pair.cse] = [string] $pair.raw }
+    $keys = [System.Collections.Generic.List[string]]::new()
+    foreach ($key in $byCse.Keys) { $keys.Add([string] $key) }
+    $keys.Sort($script:LoggingAuditExtensionComparer)
+    $serialized = [string]::Join('', [string[]] @($keys | ForEach-Object { $byCse[$_] }))
+    $null = @(ConvertFrom-LoggingAuditExtensions $serialized)
+    return $serialized
+}
+
+function Get-LoggingAuditOrderRecoveryProof {
+    param([System.Collections.IDictionary] $Pending)
+    $audit = $Pending.audit
+    Assert-LoggingPolicyCondition ($Pending.operation -ceq 'audit_publish' -and $Pending.target.policy_id -ceq 'logging') 'Ordering recovery requires logging/audit_publish intent'
+    Assert-LoggingPolicyCondition (-not $audit.desired_deletion -and $null -ne $audit.desired_hash) 'Ordering recovery requires an existing intended CSV'
+    Assert-LoggingPolicyCondition ($audit.prior_ad_version -eq $audit.prior_gpt_version) 'Ordering recovery prior versions disagree'
+    $version = Get-LoggingAuditNextVersion ([uint32] $audit.prior_ad_version)
+    Assert-LoggingPolicyCondition ($audit.intended_ad_version -eq $version -and $audit.intended_gpt_version -eq $version) 'Ordering recovery original version transition is invalid'
+    $good = Get-LoggingAuditIntendedExtensions ([string] $audit.prior_machine_extensions) $true
+    $expected = @(ConvertFrom-LoggingAuditExtensions $good)
+    $bad = @(Split-LoggingAuditExtensionTuples ([string] $audit.intended_machine_extensions))
+    Assert-LoggingPolicyCondition (-not (Test-LoggingAuditExtensionOrder $bad)) 'Ordering recovery requires an actually unsorted original intent'
+    Assert-LoggingPolicyCondition ($bad.Count -eq $expected.Count) 'Ordering recovery changes the extension set'
+    foreach ($pair in $expected) {
+        $matches = @($bad | Where-Object { $script:LoggingAuditExtensionComparer.Equals([string] $_.cse, [string] $pair.cse) })
+        Assert-LoggingPolicyCondition ($matches.Count -eq 1 -and [string]::Equals([string] $matches[0].raw, [string] $pair.raw, [System.StringComparison]::Ordinal)) 'Ordering recovery changes raw extension tuple bytes'
+    }
+    $next = Get-LoggingAuditNextVersion $version
+    if ($Pending.Contains('order_recovery')) {
+        $journal = $Pending.order_recovery
+        Assert-LoggingPolicyCondition ($journal.intended_ad_version -eq $next -and $journal.intended_gpt_version -eq $next) 'Ordering recovery journal versions do not match original intent'
+        Assert-LoggingPolicyCondition ([string]::Equals([string] $journal.intended_machine_extensions, $good, [System.StringComparison]::Ordinal)) 'Ordering recovery journal extensions do not match original intent'
+    }
+    return @{ version = $version; recovery_version = $next; extensions = $good }
 }
 
 function Read-LoggingAuditGptVersion {
@@ -487,7 +536,7 @@ function Write-LoggingAuditPayload {
         }
         finally { $stream.Dispose() }
         if ([System.IO.File]::Exists($Path)) {
-            [System.IO.File]::Replace($temporary, $Path, $null)
+            [System.IO.File]::Replace($temporary, $Path, [System.Management.Automation.Language.NullString]::Value)
         }
         else {
             [System.IO.File]::Move($temporary, $Path)
@@ -536,7 +585,7 @@ function Set-LoggingAuditGptVersion {
             $stream.Flush($true)
         }
         finally { $stream.Dispose() }
-        [System.IO.File]::Replace($temporary, $Snapshot.gpt_path, $null)
+        [System.IO.File]::Replace($temporary, $Snapshot.gpt_path, [System.Management.Automation.Language.NullString]::Value)
     }
     finally {
         if ([System.IO.File]::Exists($temporary)) { [System.IO.File]::Delete($temporary) }
@@ -575,6 +624,203 @@ function Complete-LoggingAuditPending {
     $record.audit_guids = @($record.pending.intended_ownership.audit_guids)
     $record.pending = $null
     Write-LoggingPolicyState $Context $State
+}
+
+function Set-LoggingAuditContext {
+    param([hashtable] $Context, [hashtable] $Configuration)
+    $record = $Context.state.policies.logging
+    $guidWithBraces = '{' + ([guid] $record.gpo_guid).ToString('D').ToUpperInvariant() + '}'
+    $Context.gpo_guid = [string] $record.gpo_guid
+    $Context.gpo_dn = "CN=$guidWithBraces,CN=Policies,CN=System,$($Context.domain_dn)"
+    # IO always uses the selected DC, independently of the validated domain UNC
+    # returned by gPCFileSysPath.
+    $Context.gpt_path = [System.IO.Path]::Combine($Context.sysvol_root, "Policies\$guidWithBraces")
+    $Context.policy_name = [string] $Configuration.names.logging
+}
+
+function Assert-LoggingAuditRecoveryStateEqual {
+    param([object] $Expected, [object] $Actual)
+    if ($null -eq $Expected -or $null -eq $Actual) {
+        Assert-LoggingPolicyCondition ($null -eq $Expected -and $null -eq $Actual) 'Protected state changed during ordering recovery'
+    }
+    elseif ($Expected -is [System.Collections.IDictionary]) {
+        Assert-LoggingPolicyCondition ($Actual -is [System.Collections.IDictionary]) 'Protected recovery state mapping changed'
+        Assert-LoggingPolicyExactKeys $Actual @($Expected.Keys) 'Protected recovery state readback'
+        foreach ($key in $Expected.Keys) { Assert-LoggingAuditRecoveryStateEqual $Expected[$key] $Actual[$key] }
+    }
+    elseif ($Expected -is [System.Collections.IList]) {
+        Assert-LoggingPolicyCondition ($Actual -is [System.Collections.IList] -and $Expected.Count -eq $Actual.Count) 'Protected recovery state list changed'
+        for ($index = 0; $index -lt $Expected.Count; $index++) {
+            Assert-LoggingAuditRecoveryStateEqual $Expected[$index] $Actual[$index]
+        }
+    }
+    else {
+        # JSON scalar comparison preserves case/types but permits the equivalent
+        # numeric CLR types produced by a protected JSON round trip.
+        $left = ConvertTo-Json -InputObject $Expected -Compress
+        $right = ConvertTo-Json -InputObject $Actual -Compress
+        Assert-LoggingPolicyCondition ([string]::Equals($left, $right, [System.StringComparison]::Ordinal)) 'Protected recovery state value changed'
+    }
+}
+
+function Assert-LoggingAuditRecoveryIdentity {
+    param([hashtable] $Context, [hashtable] $Configuration)
+    # Re-run all ACL/reparse, joined-domain, selected-DC, name and ownership-view
+    # checks. The internal opt-in admits intent; it does not authorize a write.
+    $fresh = Get-LoggingPolicyContext $Configuration $true
+    Assert-LoggingAuditRecoveryStateEqual $Context.state $fresh.state
+    foreach ($key in @('domain_dns', 'domain_dn', 'domain_guid', 'dc', 'sysvol_root', 'state_path', 'writer_host', 'owner_id')) {
+        Assert-LoggingPolicyCondition ([string]::Equals([string] $Context[$key], [string] $fresh[$key], [System.StringComparison]::Ordinal)) "Ordering recovery context changed: $key"
+    }
+    Set-LoggingAuditContext $fresh $Configuration
+    foreach ($key in @('gpo_guid', 'gpo_dn', 'gpt_path', 'policy_name')) {
+        Assert-LoggingPolicyCondition ([string]::Equals([string] $Context[$key], [string] $fresh[$key], [System.StringComparison]::Ordinal)) "Ordering recovery GPO context changed: $key"
+    }
+    $gpo = Get-GPO -Guid $Context.gpo_guid -Domain $Context.domain_dns -Server $Context.dc -ErrorAction Stop
+    $marker = Get-LoggingPolicyMarker $Context.owner_id 'logging'
+    Assert-LoggingPolicyCondition (([guid] $gpo.Id) -eq ([guid] $Context.gpo_guid) -and
+        [string]::Equals([string] $gpo.DisplayName, [string] $Configuration.names.logging, [System.StringComparison]::Ordinal) -and
+        [string]::Equals([string] $gpo.Description, $marker, [System.StringComparison]::Ordinal)) 'Ordering recovery GPO identity/marker changed'
+}
+
+function Assert-LoggingAuditGuidSetsEqual {
+    param([object] $Left, [object] $Right, [string] $Label)
+    Assert-LoggingPolicyCondition (@($Left).Count -eq @($Right).Count) "$Label count differs"
+    foreach ($guid in @($Left)) {
+        Assert-LoggingPolicyCondition (Test-LoggingAuditGuidInList ([string] $guid) $Right) "$Label GUID differs: $guid"
+    }
+}
+
+function Assert-LoggingAuditRecoveryPayload {
+    param([hashtable] $Context, [hashtable] $Configuration, [hashtable] $Payload)
+    $record = $Context.state.policies.logging
+    $pending = $record.pending
+    Assert-LoggingPolicyCondition $Configuration.logging_enabled 'Ordering recovery requires logging to remain enabled'
+    Assert-LoggingAuditGuidSetsEqual $record.audit_guids $pending.prior_ownership.audit_guids 'Committed/prior audit ownership'
+    Assert-LoggingAuditGuidSetsEqual $pending.target.audit_guids $pending.intended_ownership.audit_guids 'Target/intended audit ownership'
+    foreach ($guid in $pending.prior_ownership.audit_guids) {
+        Assert-LoggingPolicyCondition (Test-LoggingAuditGuidInList $guid $pending.intended_ownership.audit_guids) 'Ordering recovery cannot retire prior owned audit GUIDs'
+    }
+    $desired = @(ConvertFrom-LoggingAuditText ([string] $Configuration.desired_audit_csv) $false)
+    foreach ($row in $desired) {
+        Assert-LoggingPolicyCondition ($row.class -eq 0 -and $row.key.StartsWith("system`n")) 'Ordering recovery desired CSV must contain only system-subcategory rows'
+    }
+    $desiredGuids = @($desired | ForEach-Object { $_.guid.Trim('{}') })
+    Assert-LoggingAuditGuidSetsEqual $desiredGuids $pending.intended_ownership.audit_guids 'Configured/intended audit ownership'
+    Assert-LoggingPolicyCondition ($Payload.exists -and [string]::Equals([string] $Payload.hash, [string] $pending.audit.desired_hash, [System.StringComparison]::OrdinalIgnoreCase)) 'Ordering recovery payload differs from original intended hash'
+    foreach ($row in $desired) {
+        $matches = @($Payload.rows | Where-Object { $_.key -ceq $row.key })
+        Assert-LoggingPolicyCondition ($matches.Count -eq 1 -and $matches[0].setting -eq $row.setting) "Ordering recovery audit setting changed for $($row.guid)"
+    }
+    # Other strictly parsed rows stay untouched and are never adopted.
+}
+
+function Get-LoggingAuditOrderObservation {
+    param([hashtable] $Context, [hashtable] $Configuration, [hashtable] $Proof)
+    Assert-LoggingAuditRecoveryIdentity $Context $Configuration
+    $pending = $Context.state.policies.logging.pending
+    $currentProof = Get-LoggingAuditOrderRecoveryProof $pending
+    Assert-LoggingAuditRecoveryStateEqual $Proof $currentProof
+    $directory = Get-LoggingAuditDirectoryState $Context
+    $gptPath = [System.IO.Path]::Combine($Context.gpt_path, 'GPT.INI')
+    $gpt = Read-LoggingAuditGptVersion $gptPath
+    $payload = Read-LoggingAuditPayload ([System.IO.Path]::Combine($Context.gpt_path, 'Machine\Microsoft\Windows NT\Audit\audit.csv'))
+    Assert-LoggingAuditRecoveryPayload $Context $Configuration $payload
+    $original = [uint32] $Proof.version
+    $recovery = [uint32] $Proof.recovery_version
+    $bad = [string]::Equals($directory.extensions, [string] $pending.audit.intended_machine_extensions, [System.StringComparison]::Ordinal)
+    $good = [string]::Equals($directory.extensions, [string] $Proof.extensions, [System.StringComparison]::Ordinal)
+    $hasJournal = $pending.Contains('order_recovery')
+    $phase = $null
+    if ($directory.version -eq $original -and $gpt.version -eq $original -and $bad) {
+        $phase = if ($hasJournal) { 'ldap' } else { 'journal' }
+    }
+    elseif ($hasJournal -and $directory.version -eq $recovery -and $gpt.version -eq $original -and $good) { $phase = 'gpt' }
+    elseif ($hasJournal -and $directory.version -eq $recovery -and $gpt.version -eq $recovery -and $good) { $phase = 'commit' }
+    Assert-LoggingPolicyCondition ($null -ne $phase) "Unexpected ordering recovery state: journal=$hasJournal AD=$($directory.version) GPT=$($gpt.version) original=$original recovery=$recovery extensions=$($directory.extensions)"
+    return @{ phase = $phase; gpt_path = $gptPath; gpt_version = [uint32] $gpt.version }
+}
+
+function Start-LoggingAuditOrderMutation {
+    param([hashtable] $Context, [hashtable] $Proof, [string] $Phase, [string] $Target)
+    Start-LoggingPolicyMutation $Context.progress 'logging' $Phase $Target
+    $Context.progress.current.original_version = $Proof.version
+    $Context.progress.current.recovery_version = $Proof.recovery_version
+    $Context.progress.current.gpo_guid = $Context.gpo_guid
+    $Context.progress.current.payload_hash = $Context.state.policies.logging.pending.audit.desired_hash
+}
+
+function Resume-LoggingAuditOrderRecovery {
+    [CmdletBinding(SupportsShouldProcess)]
+    param([hashtable] $Context, [hashtable] $Configuration, [bool] $PlanOnly)
+    Assert-LoggingPolicyCondition ($Context.writer_held -eq $true) 'Ordering recovery requires the caller-held writer lock'
+    $record = Get-LoggingPolicyRecord $Context.state 'logging'
+    if ($null -eq $record -or $null -eq $record.pending) { return @{ changed = $false; completed = $true } }
+    Set-LoggingAuditContext $Context $Configuration
+    Set-LoggingPolicyProgressScope $Context.progress 'logging' 'audit_order_recovery_preflight' $Context.state_path
+    $proof = Get-LoggingAuditOrderRecoveryProof $record.pending
+    $observation = Get-LoggingAuditOrderObservation $Context $Configuration $proof
+    $description = "recover audit tuple order for $($Context.gpo_guid), version $($proof.version)->$($proof.recovery_version), hash $($record.pending.audit.desired_hash), phase $($observation.phase)"
+    Add-LoggingPolicyPlan $Context.progress.planned_changes $description
+    if ($PlanOnly -or -not $PSCmdlet.ShouldProcess($Context.gpo_guid, $description)) {
+        return @{ changed = $true; completed = $false }
+    }
+
+    if ($observation.phase -eq 'journal') {
+        $candidate = ConvertTo-LoggingPolicyDictionary (ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $Context.state -Depth 12 -Compress))
+        $candidate.policies.logging.pending.order_recovery = @{
+            schema_version = 1; kind = 'audit_extension_order'
+            intended_machine_extensions = [string] $proof.extensions
+            intended_ad_version = [uint32] $proof.recovery_version
+            intended_gpt_version = [uint32] $proof.recovery_version
+        }
+        $observation = Get-LoggingAuditOrderObservation $Context $Configuration $proof
+        Assert-LoggingPolicyCondition ($observation.phase -eq 'journal') 'Ordering recovery changed before journaling'
+        Start-LoggingAuditOrderMutation $Context $proof 'persist_audit_order_recovery' $Context.state_path
+        Write-LoggingPolicyState $Context $candidate
+        $Context.state = $candidate
+        Complete-LoggingPolicyMutation $Context.progress
+        $observation = Get-LoggingAuditOrderObservation $Context $Configuration $proof
+    }
+    # Resumption uses the validated recorded successor, never the observed AD
+    # version as an increment input. Exceptions leave the journal intact.
+    $journal = $Context.state.policies.logging.pending.order_recovery
+    if ($observation.phase -eq 'ldap') {
+        $observation = Get-LoggingAuditOrderObservation $Context $Configuration $proof
+        Assert-LoggingPolicyCondition ($observation.phase -eq 'ldap') 'Ordering recovery changed before LDAP update'
+        Start-LoggingAuditOrderMutation $Context $proof 'audit_order_ldap' $Context.gpo_dn
+        Set-LoggingAuditLdapState $Context ([uint32] $journal.intended_ad_version) ([string] $journal.intended_machine_extensions)
+        Complete-LoggingPolicyMutation $Context.progress
+        $observation = Get-LoggingAuditOrderObservation $Context $Configuration $proof
+        Assert-LoggingPolicyCondition ($observation.phase -eq 'gpt') 'Ordering recovery LDAP readback did not reach the recorded GPT transition'
+    }
+    if ($observation.phase -eq 'gpt') {
+        $observation = Get-LoggingAuditOrderObservation $Context $Configuration $proof
+        Assert-LoggingPolicyCondition ($observation.phase -eq 'gpt') 'Ordering recovery changed before GPT update'
+        Start-LoggingAuditOrderMutation $Context $proof 'audit_order_gpt_version' $observation.gpt_path
+        Set-LoggingAuditGptVersion $observation ([uint32] $journal.intended_gpt_version)
+        Complete-LoggingPolicyMutation $Context.progress
+        $observation = Get-LoggingAuditOrderObservation $Context $Configuration $proof
+    }
+    Assert-LoggingPolicyCondition ($observation.phase -eq 'commit') 'Ordering recovery has not reached the commit state'
+    Set-LoggingPolicyProgressScope $Context.progress 'logging' 'audit_order_final_readback' $Context.state_path
+    $pending = $Context.state.policies.logging.pending
+    Assert-LoggingAuditReadback $Context $pending.audit.desired_hash $false ([uint32] $journal.intended_ad_version) ([string] $journal.intended_machine_extensions)
+    $observation = Get-LoggingAuditOrderObservation $Context $Configuration $proof
+    Assert-LoggingPolicyCondition ($observation.phase -eq 'commit') 'Ordering recovery changed before ownership commit'
+    $null = $Context.progress.completed.Add(@{
+        policy_id = 'logging'; phase = 'audit_order_final_readback'; outcome = 'verified'
+        gpo_guid = $Context.gpo_guid; original_version = $proof.version
+        recovery_version = $proof.recovery_version; payload_hash = $pending.audit.desired_hash
+    })
+    $candidate = ConvertTo-LoggingPolicyDictionary (ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $Context.state -Depth 12 -Compress))
+    $candidate.policies.logging.audit_guids = @($pending.intended_ownership.audit_guids)
+    $candidate.policies.logging.pending = $null
+    Start-LoggingAuditOrderMutation $Context $proof 'commit_audit_order_recovery' $Context.state_path
+    Write-LoggingPolicyState $Context $candidate
+    $Context.state = $candidate
+    Complete-LoggingPolicyMutation $Context.progress
+    return @{ changed = $true; completed = $true }
 }
 
 function Publish-LoggingAudit {

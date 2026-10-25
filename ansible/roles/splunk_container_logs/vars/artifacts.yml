@@ -168,13 +168,8 @@ splunk_container_logs_artifacts:
         metricsEnabled: false
         tracesEnabled: false
         fsyncEnabled: true
-      splunkObservability:
-        realm: ""
-        accessToken: ""
-        metricsEnabled: false
-        tracesEnabled: false
-        profilingEnabled: false
-        secureAppEnabled: false
+      # Leave splunkObservability at chart defaults: the pinned chart's empty
+      # realm selects its supported logs-only configuration.
       agent:
         enabled: true
         service:

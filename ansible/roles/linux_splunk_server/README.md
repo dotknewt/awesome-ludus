@@ -46,7 +46,7 @@ must map the endpoint, index, and token explicitly into each collector role.
 | `splunk_server_hec_enabled` | `false` | Manage the owned HEC app |
 | `splunk_server_hec_validate` | `false` | Send one authenticated acceptance event after convergence |
 | `splunk_server_hec_app` | `ludus_hec` | Stable owned app identity |
-| `splunk_server_hec_port` | `8088` | HEC listener port |
+| `splunk_server_hec_port` | `8088` | HEC listener port; integer or ASCII-decimal string, 1..65535 |
 | `splunk_server_hec_ssl_enabled` | `true` | Use Splunk's shared management/HEC TLS setting |
 | `splunk_server_hec_server_cert` | empty | Optional existing certificate path readable by Splunk |
 | `splunk_server_hec_token_name` | `ludus-container-logs` | Stable owned token stanza name |
@@ -77,7 +77,14 @@ Preflight uses the bounded role-local `filter_plugins/hec_config.py` parser to
 inventory every raw stanza in every on-disk `inputs.conf`/`indexes.conf`,
 including repeated definitions that lose precedence, and to correlate each
 `btool --debug` stanza/key/value with its source file. Vendor defaults may be
-overridden. Compatible administrator-managed global listener values may be
+overridden. For Splunk 10.6.1.1, both
+`system/default/inputs.conf` and
+`apps/splunk_httpinput/default/inputs.conf` are bound to their exact
+checksum-verified package-member SHA256 values before raw or effective
+classification; the legacy vendor-path classifier argument grants no trust, and
+a missing or modified pinned file fails before writes. Leading `indexes.conf` settings
+outside an explicit stanza retain implicit-global provenance and do not create
+index ownership. Compatible administrator-managed global listener values may be
 shared, but incompatible listener values, external reuse of either the token
 stanza name or secret token value, requested indexes defined outside the owned
 app, cluster-peer context, unmarked paths, and ownership identity changes fail

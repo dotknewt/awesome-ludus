@@ -5,7 +5,7 @@ extensions:
   file_storage/exporter_queue:
     directory: {{ (splunk_container_logs_docker_state_dir ~ '/exporter_queue') | to_json }}
     timeout: 0
-    max_size: {{ splunk_container_logs_queue_max_disk_mib * 1048576 }}
+    max_size: {{ (splunk_container_logs_queue_max_disk_mib | splunk_container_queue_disk_mib) * 1048576 }}
     fsync: true
 
 receivers:
@@ -60,7 +60,7 @@ exporters:
       enabled: true
       storage: file_storage/exporter_queue
       sizer: requests
-      queue_size: {{ splunk_container_logs_queue_size }}
+      queue_size: {{ splunk_container_logs_queue_size | splunk_container_queue_size }}
       num_consumers: 10
       block_on_overflow: true
 

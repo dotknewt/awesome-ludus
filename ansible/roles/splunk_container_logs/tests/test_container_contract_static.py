@@ -144,7 +144,7 @@ class ContainerContractStatic(unittest.TestCase):
                          expected_includes)
     def test_preflight_requires_one_supported_mode_and_explicit_transport(self):
         text = task_text(ARTIFACTS.yaml(self, "tasks/preflight.yml", list))
-        for token in ("type_debug", "docker", "kubernetes", "splunk_container_logs_hec_endpoint",
+        for token in ("splunk_container_logs_mode is string", "docker", "kubernetes", "splunk_container_logs_hec_endpoint",
                       "splunk_container_logs_hec_index", "splunk_container_logs_hec_token",
                       "splunk_container_logs_allow_insecure_http", "splunk_container_logs_tls_verify",
                       "splunk_container_logs_ca_file", "splunk_container_logs_start_at"):

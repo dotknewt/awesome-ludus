@@ -1,0 +1,25 @@
+---
+# The caller keeps raw command output private and checks it immediately here.
+# Arbitrary vendor stderr can echo config values: do not guess a redaction rule.
+- name: Require successful HEC btool collection
+  ansible.builtin.assert:
+    that:
+      - splunk_server_hec_btool_result.rc | default(-1) == 0
+    fail_msg: >-
+      btool {{ splunk_server_hec_btool_label }} failed;
+      rc={{ splunk_server_hec_btool_result.rc | default('unavailable') }};
+      stdout_characters={{ splunk_server_hec_btool_result.stdout | default('') | length }};
+      stderr_characters={{ splunk_server_hec_btool_result.stderr | default('') | length }}.
+      {% if splunk_server_hec_btool_result.rc is not defined %}
+      category=module failure without command exit status;
+      {% else %}
+      category=command or process-launch failure (rc alone does not distinguish these);
+      {% endif %}
+      Exact scoped inspection argv={{ ([splunk_server_home ~ '/bin/splunk', 'btool'] +
+        splunk_server_hec_btool_label.split(' (')[0].split()) | to_json }};
+      inspection_command={{ ([splunk_server_home ~ '/bin/splunk', 'btool'] +
+        splunk_server_hec_btool_label.split(' (')[0].split()) | map('quote') | join(' ') }}.
+      Raw stdout/stderr remain protected because unrelated configuration can
+      contain external credentials. No reliable external-credential boundary
+      is established for vendor stderr; inspect it through separately authorized,
+      scoped diagnostics. No successful parse or collection is claimed.

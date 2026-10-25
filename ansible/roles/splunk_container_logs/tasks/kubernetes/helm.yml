@@ -92,30 +92,53 @@
       when: ansible_check_mode
       no_log: true
 
-    - name: Apply only a real reviewed Helm diff with bounded wait
-      kubernetes.core.helm:
-        kubeconfig: "{{ splunk_container_logs_kubeconfig }}"
-        context: "{{ splunk_container_logs_kube_context }}"
-        name: "{{ splunk_container_logs_k8s_release }}"
-        release_namespace: "{{ splunk_container_logs_k8s_namespace }}"
-        chart_ref: >-
-          {{ splunk_container_logs_k8s_workspace.path }}/{{ splunk_container_logs_k8s_chart_filename }}
-        values_files:
-          - "{{ splunk_container_logs_k8s_workspace.path }}/values.yaml"
-        state: present
-        create_namespace: false
-        dependency_update: false
-        update_repo_cache: false
-        force: false
-        replace: false
-        skip_crds: true
-        reset_values: true
-        wait: true
-        timeout: 10m0s
-      environment:
-        HELM_DIFF_THREE_WAY_MERGE: "true"
-      when: not ansible_check_mode
-      no_log: true
+    - name: Diagnose protected Helm apply failure without exposing values
+      block:
+        - name: Apply only a real reviewed Helm diff with bounded wait
+          kubernetes.core.helm:
+            kubeconfig: "{{ splunk_container_logs_kubeconfig }}"
+            context: "{{ splunk_container_logs_kube_context }}"
+            name: "{{ splunk_container_logs_k8s_release }}"
+            release_namespace: "{{ splunk_container_logs_k8s_namespace }}"
+            chart_ref: >-
+              {{ splunk_container_logs_k8s_workspace.path }}/{{ splunk_container_logs_k8s_chart_filename }}
+            values_files:
+              - "{{ splunk_container_logs_k8s_workspace.path }}/values.yaml"
+            state: present
+            create_namespace: false
+            dependency_update: false
+            update_repo_cache: false
+            force: false
+            replace: false
+            skip_crds: true
+            reset_values: true
+            wait: true
+            timeout: 10m0s
+          environment:
+            HELM_DIFF_THREE_WAY_MERGE: "true"
+          when: not ansible_check_mode
+          no_log: true
+      rescue:
+        - name: Collect sanitized protected Helm failure diagnostics
+          block:
+            - name: Inspect fixed Helm failure context and loader metadata
+              action: splunk_container_logs_helm_diagnostics
+              register: splunk_container_logs_helm_diagnostics_result
+              no_log: true
+            - name: Publish only the safe Helm failure report
+              ansible.builtin.debug:
+                msg: "{{ splunk_container_logs_helm_diagnostics_result.report }}"
+              no_log: false
+          rescue:
+            - name: Emit fixed Helm diagnostics-unavailable message
+              ansible.builtin.debug:
+                msg: Helm failure diagnostics unavailable.
+              no_log: false
+          always:
+            - name: Fail after Helm failure diagnostics
+              ansible.builtin.fail:
+                msg: Protected Helm apply failed; review the sanitized diagnostics.
+              no_log: true
   always:
     - name: Remove the protected local chart workspace
       ansible.builtin.file:

@@ -1,0 +1,97 @@
+---
+- name: Recheck pre-service destinations immediately before resume writes
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: "{{ ludus_k3s_bootstrap_service_paths }}"
+  register: ludus_k3s_bootstrap_service_boundary_status
+  when: ludus_k3s_bootstrap_install_state == 'resume_pre_service'
+  vars:
+    ludus_k3s_bootstrap_service_paths:
+      - "{{ ludus_k3s_bootstrap_unit_path }}"
+      - "{{ ludus_k3s_bootstrap_config_dir }}"
+      - "{{ ludus_k3s_bootstrap_kubeconfig }}"
+      - "{{ ludus_k3s_bootstrap_data_dir }}"
+
+- name: Recheck effective systemd identity before resume writes
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - show
+      - k3s.service
+      - --property=LoadState
+      - --property=ActiveState
+      - --property=SubState
+      - --property=FragmentPath
+      - --property=DropInPaths
+      - --property=Environment
+      - --property=EnvironmentFiles
+      - --no-pager
+  register: ludus_k3s_bootstrap_service_boundary_systemd
+  changed_when: false
+  failed_when: false
+  when: ludus_k3s_bootstrap_install_state == 'resume_pre_service'
+
+- name: Require the exact untouched pre-service boundary
+  ansible.builtin.assert:
+    that:
+      - ludus_k3s_bootstrap_service_boundary_status.results | selectattr('stat.exists') | list | length == 0
+      - ludus_k3s_bootstrap_service_boundary_systemd.rc == 0
+      - "'LoadState=not-found' in ludus_k3s_bootstrap_service_boundary_systemd.stdout"
+      - "'ActiveState=inactive' in ludus_k3s_bootstrap_service_boundary_systemd.stdout"
+      - "'SubState=dead' in ludus_k3s_bootstrap_service_boundary_systemd.stdout"
+      - >-
+        (ludus_k3s_bootstrap_service_boundary_systemd.stdout |
+         regex_search('(?m)^FragmentPath=$')) is not none
+      - >-
+        (ludus_k3s_bootstrap_service_boundary_systemd.stdout |
+         regex_search('(?m)^DropInPaths=$')) is not none
+      - >-
+        (ludus_k3s_bootstrap_service_boundary_systemd.stdout |
+         regex_search('(?m)^Environment=$')) is not none
+      - >-
+        (ludus_k3s_bootstrap_service_boundary_systemd.stdout |
+         regex_search('(?m)^EnvironmentFiles=.+$')) is none
+    fail_msg: The pre-service resume boundary changed; no service paths were created.
+  when: ludus_k3s_bootstrap_install_state == 'resume_pre_service'
+  vars:
+    ludus_k3s_bootstrap_service_paths:
+      - "{{ ludus_k3s_bootstrap_unit_path }}"
+      - "{{ ludus_k3s_bootstrap_config_dir }}"
+      - "{{ ludus_k3s_bootstrap_kubeconfig }}"
+      - "{{ ludus_k3s_bootstrap_data_dir }}"
+
+- name: Create the K3s configuration directory
+  ansible.builtin.file:
+    path: "{{ ludus_k3s_bootstrap_config_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Create the K3s state directory
+  ansible.builtin.file:
+    path: "{{ ludus_k3s_bootstrap_data_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Install the owned K3s systemd unit
+  ansible.builtin.template:
+    src: k3s.service.j2
+    dest: "{{ ludus_k3s_bootstrap_unit_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart the owned K3s service
+
+- name: Apply a newly installed K3s unit
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start the owned K3s service
+  ansible.builtin.systemd_service:
+    name: k3s.service
+    daemon_reload: true
+    enabled: true
+    state: started
+    no_block: true

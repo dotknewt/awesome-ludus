@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import re
 import secrets
 
@@ -31,11 +32,13 @@ def _record(source, stanza, key, value, line):
 def _parse_raw(text, source):
     records, stanzas, errors = [], [], []
     stanza = None
+    before_first_stanza = True
     for number, raw_line in enumerate(str(text).splitlines(), 1):
         line = raw_line.strip()
         if not line or line.startswith(("#", ";")):
             continue
         if line.startswith("["):
+            before_first_stanza = False
             if not line.endswith("]") or len(line) < 3:
                 errors.append(f"{source}:{number}: malformed stanza header")
                 stanza = None
@@ -43,33 +46,54 @@ def _parse_raw(text, source):
                 stanza = line[1:-1].strip()
                 stanzas.append({"source": source, "stanza": stanza, "line": number})
             continue
-        if stanza is None or "=" not in line:
+        if "=" not in line:
             errors.append(f"{source}:{number}: malformed setting")
             continue
         key, value = line.split("=", 1)
         if not key.strip():
             errors.append(f"{source}:{number}: empty setting name")
             continue
+        if stanza is None:
+            is_indexes_file = source == "indexes.conf" or source.endswith("/indexes.conf")
+            if before_first_stanza and is_indexes_file:
+                records.append(_record(source, "", key, value, number))
+            else:
+                errors.append(f"{source}:{number}: malformed setting")
+            continue
         records.append(_record(source, stanza, key, value, number))
     return records, stanzas, errors
 
 
 def parse_raw_files(slurp_results):
-    parsed = {"records": [], "stanzas": [], "errors": []}
+    parsed = {"records": [], "stanzas": [], "errors": [], "files": []}
     for result in slurp_results or []:
         if result.get("skipped"):
             continue
         source = result.get("source", "<unknown>")
         try:
-            text = base64.b64decode(result.get("content", ""), validate=True).decode("utf-8")
+            raw = base64.b64decode(result.get("content", ""), validate=True)
+            text = raw.decode("utf-8")
         except (ValueError, UnicodeError) as exc:
             parsed["errors"].append(f"{source}: unreadable UTF-8/base64: {exc}")
             continue
+        parsed["files"].append({"source": source, "sha256": hashlib.sha256(raw).hexdigest()})
         records, stanzas, errors = _parse_raw(text, source)
         parsed["records"].extend(records)
         parsed["stanzas"].extend(stanzas)
         parsed["errors"].extend(errors)
     return parsed
+
+
+def verified_vendor_sources(parsed, expected_path_to_sha256):
+    """Return exact source paths whose parsed raw bytes match pinned digests."""
+    verified = []
+    files = parsed.get("files", [])
+    for source, expected in (expected_path_to_sha256 or {}).items():
+        matches = [item for item in files if item.get("source") == source]
+        if len(matches) == 1 and secrets.compare_digest(
+                str(matches[0].get("sha256", "")), str(expected)):
+            verified.append(source)
+    return sorted(verified)
 
 
 def parse_btool(text):
@@ -114,10 +138,7 @@ def parse_btool(text):
             continue
         record = _record(source, current_stanza, values["key"], values["value"], number)
         parsed["records"].append(record)
-        identity = (source, current_stanza)
-        if identity not in seen:
-            parsed["stanzas"].append({"source": source, "stanza": current_stanza, "line": number})
-            seen.add(identity)
+        # Inherited settings retain their source without declaring a stanza there.
     return parsed
 
 
@@ -130,7 +151,8 @@ def _same(left, right, boolean=False):
 
 
 def raw_conflicts(parsed, owned_inputs, owned_indexes, vendor_inputs, token_name,
-                  token_value, indexes, port, ssl_enabled, server_cert):
+                  token_value, indexes, port, ssl_enabled, server_cert,
+                  trusted_vendor_inputs=()):
     conflicts = list(parsed.get("errors", []))
     expected_http = {
         "disabled": ("0", True),
@@ -152,7 +174,9 @@ def raw_conflicts(parsed, owned_inputs, owned_indexes, vendor_inputs, token_name
         if source.endswith("inputs.conf") and source != owned_inputs and stanza.startswith("http://") and key == "token":
             if _same(record["value"], token_value):
                 conflicts.append(f"external HEC token value reuse: {source} [{stanza}]")
-        if (not source.endswith("inputs.conf") or source in (owned_inputs, vendor_inputs)
+        if (not source.endswith("inputs.conf")
+                or source == owned_inputs
+                or source in trusted_vendor_inputs
                 or stanza != "http" or key not in expected_http):
             continue
         expected, boolean = expected_http[key]
@@ -163,15 +187,16 @@ def raw_conflicts(parsed, owned_inputs, owned_indexes, vendor_inputs, token_name
 
 def preflight_effective_conflicts(inputs, indexes_parsed, owned_inputs, owned_indexes,
                                   vendor_inputs, token_name, token_value, index_names,
-                                  port, ssl_enabled, server_cert):
+                                  port, ssl_enabled, server_cert,
+                                  trusted_vendor_inputs=()):
     combined = {
         "records": inputs.get("records", []) + indexes_parsed.get("records", []),
         "stanzas": inputs.get("stanzas", []) + indexes_parsed.get("stanzas", []),
         "errors": inputs.get("errors", []) + indexes_parsed.get("errors", []),
     }
     conflicts = raw_conflicts(combined, owned_inputs, owned_indexes, vendor_inputs,
-                              token_name, token_value, index_names, port, ssl_enabled,
-                              server_cert)
+                               token_name, token_value, index_names, port, ssl_enabled,
+                               server_cert, trusted_vendor_inputs)
     if not inputs.get("records"):
         conflicts.append("pre-write btool inputs output contained no parsed records")
     if not indexes_parsed.get("records"):
@@ -324,6 +349,7 @@ class FilterModule:
     def filters(self):
         return {
             "splunk_hec_parse_raw_files": parse_raw_files,
+            "splunk_hec_verified_vendor_sources": verified_vendor_sources,
             "splunk_hec_parse_btool": parse_btool,
             "splunk_hec_raw_conflicts": raw_conflicts,
             "splunk_hec_preflight_effective_conflicts": preflight_effective_conflicts,

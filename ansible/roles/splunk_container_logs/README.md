@@ -56,8 +56,8 @@ every collector execution; a same-size modified binary fails closed.
 | `splunk_container_logs_docker_logging_driver` | `""` | Must explicitly equal `json-file` |
 | `splunk_container_logs_collector_url` | reviewed release URL | Same-digest mirror may override |
 | `splunk_container_logs_chart_url` | reviewed chart URL | Same-digest mirror may override |
-| `splunk_container_logs_queue_size` | `1000` | Positive request count |
-| `splunk_container_logs_queue_max_disk_mib` | `512` | At least 200 MiB; rendered as checked MiB-to-byte multiplication |
+| `splunk_container_logs_queue_size` | `1000` | Request count from 1 through 2147483647 |
+| `splunk_container_logs_queue_max_disk_mib` | `512` | From 200 through 8796093022207 MiB; checked before conversion to bytes |
 | `splunk_container_logs_kubeconfig` | `""` | Existing readable kubeconfig; required in Kubernetes mode |
 | `splunk_container_logs_kube_context` | `""` | Exact existing context; never inferred from current context |
 | `splunk_container_logs_k8s_cluster_name` | `""` | Exact cluster named by the context and stable ownership marker |
@@ -73,6 +73,29 @@ every collector execution; a same-size modified binary fails closed.
 Role defaults retain normal Ansible precedence, so Ludus `role_vars` can set all
 public inputs. Version, checksum, archive layout, binary path, and component IDs
 are internal pins and are not public release-substitution inputs.
+
+Both queue inputs accept integers or canonical ASCII decimal strings within
+their bounds. Booleans, floats, signs, whitespace, leading zeroes, decimal points,
+exponents, underscores, and non-ASCII digits are rejected. This supports numeric
+inputs materialized as text without silently coercing malformed values.
+The same strict filters validate the inputs and perform numeric conversion
+inside each Docker or Kubernetes template expression, before multiplication or
+rendering. Queue values remain unquoted YAML numbers; no global Jinja setting
+change or intermediate scalar fact is required.
+
+Shared and Kubernetes text inputs accept strings, including Ansible's YAML and
+unsafe-text string subclasses, without converting non-string values. Existing
+nonempty, URL, authority, identity, and path restrictions still apply.
+If shared or bounded Kubernetes input validation fails, controller-side
+diagnostics report only fixed condition names, booleans, type codes, or an
+`evaluation_error` code. Input values and exception text remain hidden. These
+diagnostics do not permit validation failure to continue into installation.
+
+Helm application failures also produce a value-free error classification and,
+when available, a post-failure controller loader snapshot with the selected
+module path, collection version, and source hash. This snapshot is not a trace
+of the earlier failed task's worker. Raw Helm output and credentials remain
+hidden, the role still fails, and its protected workspace cleanup still runs.
 
 ## Kubernetes credentials and convergence
 

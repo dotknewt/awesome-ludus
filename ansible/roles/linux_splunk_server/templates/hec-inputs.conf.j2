@@ -1,7 +1,7 @@
 # Managed by the linux_splunk_server role. Do not edit in place.
 [http]
 disabled = 0
-port = {{ splunk_server_hec_port }}
+port = {{ splunk_server_hec_port | int }}
 enableSSL = {{ splunk_server_hec_ssl_enabled | ternary('true', 'false') }}
 {% if splunk_server_hec_server_cert | length > 0 %}
 serverCert = {{ splunk_server_hec_server_cert }}

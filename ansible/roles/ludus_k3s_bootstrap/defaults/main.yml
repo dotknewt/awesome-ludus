@@ -1,0 +1,5 @@
+---
+ludus_k3s_bootstrap_service_retries: 60
+ludus_k3s_bootstrap_service_delay: 5
+ludus_k3s_bootstrap_api_retries: 60
+ludus_k3s_bootstrap_api_delay: 5

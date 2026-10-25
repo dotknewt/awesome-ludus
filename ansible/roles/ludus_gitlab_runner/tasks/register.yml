@@ -12,7 +12,6 @@
       else (ludus_gitlab_runner_registration_token
       if ludus_gitlab_runner_registration_token is defined
       else ludus_gitlab_runner_auth_token) }}
-  no_log: true
 
 - name: Remove stale temporary registration config
   ansible.builtin.file:
@@ -48,7 +47,6 @@
       - --description
       - "{{ ludus_gitlab_runner_name }}"
   when: ludus_gitlab_runner_registration_entry | length == 0
-  no_log: true
   changed_when: true
 
 - name: Read registered runner config
@@ -56,7 +54,6 @@
     src: /etc/gitlab-runner/config.toml.ludus-tmp
   register: ludus_gitlab_runner_temp_config
   when: ludus_gitlab_runner_registration_entry | length == 0
-  no_log: true
 
 - name: Parse newly registered TOML structure
   ansible.builtin.command:
@@ -71,14 +68,12 @@
   register: ludus_gitlab_runner_temp_parsed
   changed_when: false
   when: ludus_gitlab_runner_registration_entry | length == 0
-  no_log: true
 
 - name: Select newly registered runner structure
   ansible.builtin.set_fact:
     ludus_gitlab_runner_registration_entry: >-
       {{ (ludus_gitlab_runner_temp_parsed.stdout | from_json).get('runners', []) | first }}
   when: ludus_gitlab_runner_registration_entry | length == 0
-  no_log: true
 
 - name: Write exclusively managed canonical runner config
   ansible.builtin.template:
@@ -88,7 +83,6 @@
     group: root
     mode: '0600'
   register: ludus_gitlab_runner_config_write
-  no_log: true
   diff: false
 
 - name: Remove temporary config after successful canonical write

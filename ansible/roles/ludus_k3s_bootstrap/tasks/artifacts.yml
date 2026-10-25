@@ -1,0 +1,175 @@
+---
+- name: Install only required Ubuntu prerequisites
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - python3-venv
+    state: present
+    update_cache: true
+
+- name: Create the role ownership directory
+  ansible.builtin.file:
+    path: "{{ ludus_k3s_bootstrap_owner_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Establish immutable role ownership before managed writes
+  ansible.builtin.copy:
+    dest: "{{ ludus_k3s_bootstrap_owner_marker }}"
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      owner: ludus_k3s_bootstrap
+      k3s_version: {{ ludus_k3s_bootstrap_k3s_version }}
+      helm_version: {{ ludus_k3s_bootstrap_helm_version }}
+      helm_diff_version: {{ ludus_k3s_bootstrap_helm_diff_version }}
+      kubeconfig: {{ ludus_k3s_bootstrap_kubeconfig }}
+      python: {{ ludus_k3s_bootstrap_python }}
+
+- name: Create protected artifact cache
+  ansible.builtin.file:
+    path: "{{ ludus_k3s_bootstrap_cache_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Download the pinned K3s binary with SHA-256 verification
+  ansible.builtin.get_url:
+    url: "{{ ludus_k3s_bootstrap_k3s_url }}"
+    dest: "{{ ludus_k3s_bootstrap_cached_k3s }}"
+    checksum: "sha256:{{ ludus_k3s_bootstrap_k3s_sha256 }}"
+    owner: root
+    group: root
+    mode: "0500"
+  when: >-
+    ludus_k3s_bootstrap_protected_status.results |
+    selectattr('item', 'equalto', ludus_k3s_bootstrap_k3s_binary) |
+    selectattr('stat.exists') | list | length == 0
+
+- name: Install the verified K3s binary once
+  ansible.builtin.copy:
+    src: "{{ ludus_k3s_bootstrap_cached_k3s }}"
+    dest: "{{ ludus_k3s_bootstrap_k3s_binary }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"
+  when: >-
+    ludus_k3s_bootstrap_protected_status.results |
+    selectattr('item', 'equalto', ludus_k3s_bootstrap_k3s_binary) |
+    selectattr('stat.exists') | list | length == 0
+
+- name: Download the pinned Helm archive with SHA-256 verification
+  ansible.builtin.get_url:
+    url: "{{ ludus_k3s_bootstrap_helm_url }}"
+    dest: "{{ ludus_k3s_bootstrap_helm_archive }}"
+    checksum: "sha256:{{ ludus_k3s_bootstrap_helm_sha256 }}"
+    owner: root
+    group: root
+    mode: "0600"
+  when: ludus_k3s_bootstrap_existing_helm is skipped
+
+- name: Create Helm extraction staging
+  ansible.builtin.file:
+    path: "{{ ludus_k3s_bootstrap_cache_dir }}/helm"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  when: ludus_k3s_bootstrap_existing_helm is skipped
+
+- name: Extract the verified Helm archive
+  ansible.builtin.unarchive:
+    src: "{{ ludus_k3s_bootstrap_helm_archive }}"
+    dest: "{{ ludus_k3s_bootstrap_cache_dir }}/helm"
+    remote_src: true
+    owner: root
+    group: root
+  when: ludus_k3s_bootstrap_existing_helm is skipped
+
+- name: Install the verified Helm binary once
+  ansible.builtin.copy:
+    src: "{{ ludus_k3s_bootstrap_cache_dir }}/helm/linux-amd64/helm"
+    dest: "{{ ludus_k3s_bootstrap_helm_binary }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"
+  when: ludus_k3s_bootstrap_existing_helm is skipped
+
+- name: Read the effective root Helm plugin directory
+  ansible.builtin.command:
+    argv:
+      - "{{ ludus_k3s_bootstrap_helm_binary }}"
+      - env
+      - HELM_PLUGINS
+  environment:
+    HOME: /root
+  register: ludus_k3s_bootstrap_helm_plugins_dir
+  changed_when: false
+
+- name: Require the protected root Helm plugin directory
+  ansible.builtin.assert:
+    that:
+      - ludus_k3s_bootstrap_helm_plugins_dir.stdout == ludus_k3s_bootstrap_root_helm_plugins
+    fail_msg: Helm reported an unexpected root plugin directory; refusing installation.
+
+- name: Download the pinned helm-diff archive with SHA-256 verification
+  ansible.builtin.get_url:
+    url: "{{ ludus_k3s_bootstrap_helm_diff_url }}"
+    dest: "{{ ludus_k3s_bootstrap_helm_diff_archive }}"
+    checksum: "sha256:{{ ludus_k3s_bootstrap_helm_diff_sha256 }}"
+    owner: root
+    group: root
+    mode: "0600"
+  when: ludus_k3s_bootstrap_existing_plugins is skipped
+
+- name: Create helm-diff extraction staging
+  ansible.builtin.file:
+    path: "{{ ludus_k3s_bootstrap_cache_dir }}/helm-diff"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  when: ludus_k3s_bootstrap_existing_plugins is skipped
+
+- name: Extract the verified helm-diff archive without running hooks
+  ansible.builtin.unarchive:
+    src: "{{ ludus_k3s_bootstrap_helm_diff_archive }}"
+    dest: "{{ ludus_k3s_bootstrap_cache_dir }}/helm-diff"
+    remote_src: true
+    owner: root
+    group: root
+  when: ludus_k3s_bootstrap_existing_plugins is skipped
+
+- name: Create the root Helm plugin directory
+  ansible.builtin.file:
+    path: "{{ ludus_k3s_bootstrap_helm_plugins_dir.stdout }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  when: ludus_k3s_bootstrap_existing_plugins is skipped
+
+- name: Create the owned root helm-diff directory
+  ansible.builtin.file:
+    path: "{{ ludus_k3s_bootstrap_helm_plugins_dir.stdout }}/diff"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: ludus_k3s_bootstrap_existing_plugins is skipped
+
+- name: Install helm-diff directly from the verified archive layout
+  ansible.builtin.copy:
+    src: "{{ ludus_k3s_bootstrap_cache_dir }}/helm-diff/diff/"
+    dest: "{{ ludus_k3s_bootstrap_helm_plugins_dir.stdout }}/diff/"
+    remote_src: true
+    owner: root
+    group: root
+    mode: preserve
+  when: ludus_k3s_bootstrap_existing_plugins is skipped

@@ -1,0 +1,39 @@
+---
+ludus_k3s_bootstrap_k3s_version: v1.37.1+k3s1
+ludus_k3s_bootstrap_kubernetes_version: v1.37.1
+ludus_k3s_bootstrap_k3s_url: >-
+  https://github.com/k3s-io/k3s/releases/download/v1.37.1%2Bk3s1/k3s
+ludus_k3s_bootstrap_k3s_sha256: 92b94582eb7b34a8cf532e6006842b9ed215a6783cf56a3dd6271fd35243b2c0
+
+ludus_k3s_bootstrap_helm_version: 3.20.0
+ludus_k3s_bootstrap_helm_url: https://get.helm.sh/helm-v3.20.0-linux-amd64.tar.gz
+ludus_k3s_bootstrap_helm_sha256: dbb4c8fc8e19d159d1a63dda8db655f9ffa4aac1b9a6b188b34a40957119b286
+
+ludus_k3s_bootstrap_helm_diff_version: 3.15.15
+ludus_k3s_bootstrap_helm_diff_url: >-
+  https://github.com/databus23/helm-diff/releases/download/v3.15.15/helm-diff-linux-amd64.tgz
+ludus_k3s_bootstrap_helm_diff_sha256: 504e99410611daa70702362e1b10dc74929df8a912cb3f6b5d21d1ee9d0cb7d9
+
+ludus_k3s_bootstrap_k3s_binary: /usr/local/bin/k3s
+ludus_k3s_bootstrap_helm_binary: /usr/local/bin/helm
+ludus_k3s_bootstrap_unit_path: /etc/systemd/system/k3s.service
+ludus_k3s_bootstrap_data_dir: /var/lib/rancher/k3s
+ludus_k3s_bootstrap_config_dir: /etc/rancher/k3s
+ludus_k3s_bootstrap_kubeconfig: /etc/rancher/k3s/k3s.yaml
+ludus_k3s_bootstrap_kube_context: default
+ludus_k3s_bootstrap_cluster_name: default
+ludus_k3s_bootstrap_kube_user: default
+ludus_k3s_bootstrap_api_server: https://127.0.0.1:6443
+ludus_k3s_bootstrap_root_helm_plugins: /root/.local/share/helm/plugins
+ludus_k3s_bootstrap_python_root: /opt/ludus-k3s
+ludus_k3s_bootstrap_python: /opt/ludus-k3s/python/bin/python
+ludus_k3s_bootstrap_requirements: /opt/ludus-k3s/kubernetes-requirements.txt
+ludus_k3s_bootstrap_python_lock_verifier: /opt/ludus-k3s/verify_python_lock.py
+ludus_k3s_bootstrap_cache_dir: /var/cache/ludus-k3s-bootstrap
+ludus_k3s_bootstrap_cached_k3s: /var/cache/ludus-k3s-bootstrap/k3s-v1.37.1+k3s1
+ludus_k3s_bootstrap_helm_archive: /var/cache/ludus-k3s-bootstrap/helm-v3.20.0-linux-amd64.tar.gz
+ludus_k3s_bootstrap_helm_diff_archive: /var/cache/ludus-k3s-bootstrap/helm-diff-linux-amd64.tgz
+ludus_k3s_bootstrap_helm_diff_binary: /root/.local/share/helm/plugins/diff/bin/diff
+ludus_k3s_bootstrap_helm_diff_manifest: /root/.local/share/helm/plugins/diff/plugin.yaml
+ludus_k3s_bootstrap_owner_dir: /var/lib/ludus-k3s-bootstrap
+ludus_k3s_bootstrap_owner_marker: /var/lib/ludus-k3s-bootstrap/ownership.yml

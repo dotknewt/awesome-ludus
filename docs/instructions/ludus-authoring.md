@@ -9,6 +9,21 @@ Use this policy when creating or reviewing Ludus source content, blueprints, ran
 - Use the documented files: source metadata in root `source.yml`; each source blueprint has `blueprint.yml` metadata and `range-config.yml` topology, with `requirements.yml` for Galaxy roles, collections, or subscription roles. Declare dependencies there with appropriate version pins, or provide source-local roles under `ansible/roles/` and collections under `ansible/collections/`. Do not copy large schemas into examples; link to the official schema and check it for valid fields and types.
 - Treat source content as executable code on the Ludus host; review it before installation and prefer an immutable source ref when appropriate.
 
+## Compatibility checklist
+
+Before relying on a role or configuration, check that:
+
+- Eagerly expanded configuration does not reference facts that are only
+  available later in execution.
+- Numeric string inputs are type-validated and normalized before use.
+- Vendor configuration syntax and behavior are checked against the actual
+  vendor version, with version and evidence provenance recorded.
+- Missing-file `stat` results may omit `path` and file-type fields; guard those
+  accesses and label loop results with the original request.
+- Readiness checks after restart have a bounded deadline and distinguish a
+  crash from a startup race. These are repository compatibility checks, not
+  claims about official Ludus behavior.
+
 ## Range creation defaults
 
 Every range configuration created in this repository must include all three of the following in the range-level `defaults:` block, unless the user explicitly asks to change or exclude one or more of them:
@@ -38,12 +53,19 @@ For every range configuration created in this repository, set the router to `tem
 
 - Never change template default credentials. For simple application username/password defaults used by a role in a disposable lab, define defaults under `<role>/defaults/main.yml`; allow optional per-VM overrides in the range config's `role_vars` (which Ludus passes to user-defined roles).
 - Do not require Ansible Vault or add password generation/rotation machinery solely for disposable in-lab application credentials. These are lab inputs, not production secret-management policy.
+- Credentials and tokens used only by this lab are not secrets: treat them as
+  ordinary diagnostic inputs. For lab failures, report actual values and types,
+  failed expressions, and full errors; do not suppress diagnostics with `no_log`
+  solely because an input is a disposable lab credential. For example, report
+  `invalid port <value> type: <type>`. This does not apply to real external
+  infrastructure or paid-service credentials, which remain confidential as
+  described below. This instruction is repository policy, not official behavior.
 - Real external tokens and credentials for infrastructure or paid services are not disposable lab defaults: do not commit them or expose them as role defaults. Keep them outside committed artifacts and use the appropriate external secret mechanism.
 
 ## Verification and evidence
 
 - Verification is static and live only; do not add or rely on simulations, stateful fakes, or mocked behavior as verification evidence. Static checks may validate structure, syntax, manifests, schema conformance, and code patterns, but do not prove runtime behavior. Follow [AGENTS.md's behavioral verification requirements](../../AGENTS.md#behavioral-verification) for actual-entrypoint evidence, lifecycle and sanitization checks, evidence reporting/reuse, and authorization.
-- When finishing role work, validate changed files only, using file-scoped checks supported by the available tools; do not expand completion checks to unchanged files or whole-role directories. If available tools cannot check the changed files without widening scope, report those checks as unavailable. Reuse results only while the changed files remain unchanged. This check is tied to finishing role work, not a prerequisite for live deployment or retries. Actual failures and coverage errors block claiming the role work is complete, except for the missing optional Galaxy metadata defined above. Carry forward `PASS WITH WARNINGS — NOT VERIFIED` with every unavailable check and unverified target. Static output never establishes runtime behavior or grants deployment authorization. See [`live-debugging.md`](live-debugging.md) for the separate live cycle.
+- Batch scoped validation by owner and reuse evidence only while the file hash, environment, and dependencies relevant to that check remain unchanged. The controller centrally finalizes report status; do not spawn docs-only correction rounds or retest unchanged files. Real code fixes still receive proportionate review. For role work, validate changed files only using supported file-scoped checks; report unavailable checks. Actual failures and coverage errors block claiming completion, except missing optional Galaxy metadata above. Carry forward `PASS WITH WARNINGS — NOT VERIFIED` with every unavailable check and unverified target. Static output never establishes runtime behavior or grants deployment authorization. This check is tied to finishing role work, not a prerequisite for live deployment or retries. See [`live-debugging.md`](live-debugging.md) for the separate live cycle.
 
 ## Official references
 

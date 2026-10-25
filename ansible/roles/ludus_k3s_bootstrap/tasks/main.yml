@@ -1,0 +1,30 @@
+---
+- name: Load immutable K3s artifact contract
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/vars/artifacts.yml"
+
+- name: Validate platform ownership and existing state
+  ansible.builtin.include_tasks: preflight.yml
+
+- name: Install pinned K3s and Helm artifacts
+  ansible.builtin.include_tasks: artifacts.yml
+  when: ludus_k3s_bootstrap_install_state in ['fresh', 'complete']
+
+- name: Build the dedicated Kubernetes Python environment
+  ansible.builtin.include_tasks: python.yml
+  when: ludus_k3s_bootstrap_install_state in ['fresh', 'complete', 'resume_pre_service']
+
+- name: Configure and start the owned K3s service
+  ansible.builtin.include_tasks: service.yml
+
+- name: Verify the single-node prerequisite contract
+  ansible.builtin.include_tasks: verify.yml
+
+# Frozen cross-role output names intentionally differ from this role's prefix.
+- name: Publish stable K3s outputs for subsequent roles  # noqa var-naming[no-role-prefix]
+  ansible.builtin.set_fact:
+    ludus_k3s_kubeconfig_path: "{{ ludus_k3s_bootstrap_kubeconfig }}"
+    ludus_k3s_kube_context: "{{ ludus_k3s_bootstrap_kube_context }}"
+    ludus_k3s_cluster_name: "{{ ludus_k3s_bootstrap_cluster_name }}"
+    ludus_k3s_python_interpreter: "{{ ludus_k3s_bootstrap_python }}"
+    ansible_python_interpreter: "{{ ludus_k3s_bootstrap_python }}"

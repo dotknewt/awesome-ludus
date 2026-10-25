@@ -551,7 +551,21 @@ function Assert-LoggingPolicyPending {
             }
         }
         { $_ -in @('audit_publish', 'audit_delete') } {
-            Assert-LoggingPolicyExactKeys $Pending @('operation', 'target', 'prior_ownership', 'intended_ownership', 'audit') "Pending audit operation for $PolicyId"
+            $pendingKeys = @('operation', 'target', 'prior_ownership', 'intended_ownership', 'audit')
+            if ($Pending.Contains('order_recovery')) {
+                Assert-LoggingPolicyCondition ($PolicyId -ceq 'logging' -and $Pending.operation -ceq 'audit_publish') 'Only logging/audit_publish may contain ordering recovery'
+                $pendingKeys += 'order_recovery'
+                $journal = $Pending.order_recovery
+                Assert-LoggingPolicyCondition ($journal -is [System.Collections.IDictionary]) 'Ordering recovery journal must be a mapping'
+                Assert-LoggingPolicyExactKeys $journal @('schema_version', 'kind', 'intended_machine_extensions', 'intended_ad_version', 'intended_gpt_version') 'Ordering recovery journal'
+                Assert-LoggingPolicyInteger $journal.schema_version 'Ordering recovery schema_version' 1 1
+                Assert-LoggingPolicyCondition ($journal.kind -is [string] -and $journal.kind -ceq 'audit_extension_order') 'Unsupported ordering recovery kind'
+                Assert-LoggingPolicyString $journal.intended_machine_extensions 'Ordering recovery extensions'
+                foreach ($key in @('intended_ad_version', 'intended_gpt_version')) {
+                    Assert-LoggingPolicyInteger $journal[$key] "Ordering recovery $key" 0 ([uint32]::MaxValue)
+                }
+            }
+            Assert-LoggingPolicyExactKeys $Pending $pendingKeys "Pending audit operation for $PolicyId"
             Assert-LoggingPolicyExactKeys $Pending.target @('policy_id', 'target_name', 'gpo_guid', 'audit_guids') "Pending audit target for $PolicyId"
             Assert-LoggingPolicyString $Pending.target.target_name "Pending audit target name for $PolicyId"
             $null = Get-LoggingPolicyGuidString $Pending.target.gpo_guid "Pending audit target GPO GUID for $PolicyId"
@@ -645,6 +659,9 @@ function Assert-LoggingPolicyPending {
         Assert-LoggingPolicyCondition $deletionMatchesHash "Pending audit desired_deletion must be true exactly when desired_hash is null for $PolicyId"
         if ($Pending.operation -eq 'audit_publish') {
             Assert-LoggingPolicyCondition (-not $Pending.audit.desired_deletion) "Pending audit_publish cannot request CSV deletion for $PolicyId"
+        }
+        if ($Pending.Contains('order_recovery')) {
+            $null = Get-LoggingAuditOrderRecoveryProof $Pending
         }
     }
 }
@@ -838,7 +855,7 @@ function Assert-LoggingPolicyContextShape {
 }
 
 function Get-LoggingPolicyContext {
-    param([hashtable] $Configuration)
+    param([hashtable] $Configuration, [bool] $AllowAuditOrderRecovery = $false)
 
     Assert-LoggingPolicyConfiguration $Configuration
     $stateDirectory = Get-LoggingPolicyStateDirectory $Configuration.state_dir
@@ -932,8 +949,10 @@ function Get-LoggingPolicyContext {
         Assert-LoggingPolicyCondition (
             [string]::Equals([string] $state.writer_host, [string] $Configuration.management_host, [System.StringComparison]::OrdinalIgnoreCase)
         ) 'Protected state belongs to a different designated writer host'
+        $pendingCount = 0
         foreach ($policyId in $state.policies.Keys) {
             if ($null -ne $state.policies[$policyId].pending) {
+                $pendingCount++
                 Assert-LoggingPolicyCondition (
                     [string]::Equals([string] $state.policies[$policyId].pending.target.target_name,
                         [string] $Configuration.names[$policyId], [System.StringComparison]::Ordinal)
@@ -944,9 +963,11 @@ function Get-LoggingPolicyContext {
                             $dc, [System.StringComparison]::OrdinalIgnoreCase)
                     ) "Policy '$policyId' pending audit DC does not match the selected DC"
                 }
+                Assert-LoggingPolicyCondition ($AllowAuditOrderRecovery -and $Configuration.logging_enabled -and
+                    $policyId -ceq 'logging' -and $state.policies[$policyId].pending.operation -ceq 'audit_publish') "Policy '$policyId' has unresolved pending state; explicit recovery is required"
             }
-            Assert-LoggingPolicyCondition ($null -eq $state.policies[$policyId].pending) "Policy '$policyId' has unresolved pending state; explicit recovery is required"
         }
+        Assert-LoggingPolicyCondition ($pendingCount -le 1) 'Only one logging audit ordering recovery may be pending'
     }
 
     try {
@@ -1081,7 +1102,7 @@ function Write-LoggingPolicyState {
         Assert-LoggingPolicyNoReparsePath $temporaryPath
         Assert-LoggingPolicyProtectedAcl $temporaryPath
         if ([System.IO.File]::Exists($statePath)) {
-            [System.IO.File]::Replace($temporaryPath, $statePath, $null, $true)
+            [System.IO.File]::Replace($temporaryPath, $statePath, [System.Management.Automation.Language.NullString]::Value, $true)
         }
         else {
             [System.IO.File]::Move($temporaryPath, $statePath)

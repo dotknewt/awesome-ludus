@@ -12,6 +12,7 @@ ludus_gitlab_runner_project_name: "ludus-runner-demo"
 ludus_gitlab_runner_project_namespace: "root"
 ludus_gitlab_runner_project_path: "root/ludus-runner-demo"
 ludus_gitlab_runner_api_token: ""
+ludus_gitlab_runner_smoke_ci_enabled: true
 ludus_gitlab_runner_ci_file: .gitlab-ci.yml
 ludus_gitlab_runner_allow_ci_file_replace: false
 ludus_gitlab_runner_state_path: /var/lib/ludus/gitlab-runner/runner.json

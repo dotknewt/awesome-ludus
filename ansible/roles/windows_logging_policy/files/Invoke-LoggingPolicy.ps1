@@ -256,12 +256,46 @@ function Get-LoggingPolicyRegistryValue {
     $values = @(Get-GPRegistryValue -Guid $Guid -Domain $Context.domain_dns -Server $Context.dc -Key $Identifier.key -ValueName $Identifier.value_name -ErrorAction SilentlyContinue -ErrorVariable +errors)
     if ($errors.Count -gt 0) {
         $notFound = @($errors | Where-Object {
-            $_.CategoryInfo.Category -eq [System.Management.Automation.ErrorCategory]::ObjectNotFound -or
-            $_.FullyQualifiedErrorId -match 'NotFound|ArgumentException'
+            $_.FullyQualifiedErrorId -ceq 'UnableToRetrievePolicyRegistryItem,Microsoft.GroupPolicy.Commands.GetGPRegistryValueCommand' -and
+            $_.CategoryInfo.Category -eq [System.Management.Automation.ErrorCategory]::InvalidArgument -and
+            $_.Exception.GetType() -eq [System.ArgumentException] -and
+            $_.Exception.ParamName -ceq 'keyPath' -and
+            $_.Exception.InnerException -is [System.ComponentModel.Win32Exception] -and
+            $_.Exception.InnerException.NativeErrorCode -eq 2
         })
-        if ($notFound.Count -ne $errors.Count) {
-            throw "Registry policy read failed for '$($Identifier.key)\$($Identifier.value_name)': $($errors[0].Exception.Message)"
+        if ($notFound.Count -ne $errors.Count -or $values.Count -ne 0) {
+            $details = @($errors | ForEach-Object {
+                $chain = @()
+                $exception = $_.Exception
+                while ($null -ne $exception) {
+                    $chain += @{
+                        type = $exception.GetType().FullName
+                        message = $exception.Message
+                        hresult = $exception.HResult
+                        param_name = $(if ($exception -is [System.ArgumentException]) { $exception.ParamName } else { $null })
+                        native_error_code = $(if ($exception -is [System.ComponentModel.Win32Exception]) { $exception.NativeErrorCode } else { $null })
+                    }
+                    $exception = $exception.InnerException
+                }
+                @{
+                    category = [string] $_.CategoryInfo.Category
+                    fully_qualified_error_id = $_.FullyQualifiedErrorId
+                    target = [string] $_.TargetObject
+                    command = [string] $_.InvocationInfo.MyCommand
+                    error_details = [string] $_.ErrorDetails
+                    exception_chain = $chain
+                }
+            })
+            $diagnostic = @{
+                guid = $Guid; domain = $Context.domain_dns; server = $Context.dc
+                key = $Identifier.key; value_name = $Identifier.value_name
+                value_count = $values.Count; error_count = $errors.Count; errors = $details
+            } | ConvertTo-Json -Depth 8 -Compress
+            throw "Registry policy read failed: $diagnostic"
         }
+        # Missing item must not conceal a missing or inaccessible GPO.
+        $existingGpo = Get-GPO -Guid $Guid -Domain $Context.domain_dns -Server $Context.dc -ErrorAction Stop
+        Assert-LoggingPolicyCondition ([guid] $existingGpo.Id -eq [guid] $Guid) 'Registry policy GPO identity changed during the read'
         return $null
     }
     Assert-LoggingPolicyCondition ($values.Count -le 1) "Registry policy read was ambiguous for '$($Identifier.key)\$($Identifier.value_name)'"
@@ -562,16 +596,23 @@ function Invoke-LoggingPolicy {
 
     $plans = $Progress.planned_changes
     $policies = $Progress.policies
-    $initialContext = Get-LoggingPolicyContext $Configuration
+    $initialContext = Get-LoggingPolicyContext $Configuration $true
     Set-LoggingPolicyProgressScope $Progress $null 'acquire_writer' $initialContext.state_path
     $writer = Enter-LoggingPolicyWriter $initialContext $PlanOnly
     try {
-        $context = Get-LoggingPolicyContext $Configuration
+        $context = Get-LoggingPolicyContext $Configuration $true
         $context.writer_held = $true
         $context.progress = $Progress
         Set-LoggingPolicyProgressScope $Progress $null 'reconcile' $context.state_path
         $mutationsAllowed = -not $PlanOnly -and $PSCmdlet.ShouldProcess($context.domain_dns, 'Reconcile role-owned logging policies')
         $effectivePlanOnly = -not $mutationsAllowed
+
+        $recovery = Resume-LoggingAuditOrderRecovery $context $Configuration $effectivePlanOnly
+        if (-not $recovery.completed) {
+            # Pending check/WhatIf is reporting only: normal reconciliation may
+            # neither reinterpret the journal nor perform unrelated mutations.
+            return @{ changed = [bool] $recovery.changed; planned_changes = @($plans); policies = @($policies) }
+        }
 
         Reconcile-LoggingPolicyObjects $context $Configuration $effectivePlanOnly $plans
         Reconcile-LoggingPolicyRegistry $context $Configuration $effectivePlanOnly $plans
@@ -579,11 +620,7 @@ function Invoke-LoggingPolicy {
         $loggingRecord = Get-LoggingPolicyRecord $context.state 'logging'
         if ($null -ne $loggingRecord -and $null -ne $loggingRecord.gpo_guid) {
             # Publish-LoggingAudit owns both audit_publish and audit_delete transitions.
-            $guidWithBraces = '{' + ([guid] $loggingRecord.gpo_guid).ToString('D').ToUpperInvariant() + '}'
-            $context.gpo_guid = [string] $loggingRecord.gpo_guid
-            $context.gpo_dn = "CN=$guidWithBraces,CN=Policies,CN=System,$($context.domain_dn)"
-            $context.gpt_path = [System.IO.Path]::Combine($context.sysvol_root, "Policies\$guidWithBraces")
-            $context.policy_name = [string] $Configuration.names.logging
+            Set-LoggingAuditContext $context $Configuration
             $auditCsv = if ($Configuration.logging_enabled) { [string] $Configuration.desired_audit_csv } else { 'Machine Name,Policy Target,Subcategory,Subcategory GUID,Inclusion Setting,Exclusion Setting,Setting Value' }
             $auditResult = Publish-LoggingAudit -Context $context -State $context.state -DesiredCsv $auditCsv -PlanOnly $effectivePlanOnly
             $context.state = $auditResult.state
