@@ -158,7 +158,7 @@ ludus:
     dns_rewrites:
       - gitlab.evil.internal
     roles:
-      - linux_gitlab_ce
+      - dotknewt.linux_gitlab_ce
     role_vars:
       ludus_gitlab:
         url: http://gitlab.evil.internal
