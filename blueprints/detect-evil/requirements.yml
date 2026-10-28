@@ -11,3 +11,4 @@ collections:
 
 roles:
   - name: badsectorlabs.ludus_adcs
+    version: ">=1.7.0"
