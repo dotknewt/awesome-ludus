@@ -1,6 +1,6 @@
 manifest_version: 1
-name: "Awesome Ludus Source - dotKnewt"
-description: "A collection of awesome Ludus source files curated by dotKnewt. This repository includes various source files for different Ludus labs, including TI & Threat Hunting, Red Teaming, and more. Each source file is designed to provide a comprehensive and realistic environment for security professionals to practice their skills."
+name: "Awesome Ludus Source - dotknewt"
+description: "A collection of awesome Ludus source files curated by dotknewt. This repository includes various source files for different Ludus labs, including TI & Threat Hunting, Red Teaming, and more. Each source file is designed to provide a comprehensive and realistic environment for security professionals to practice their skills."
 authors:
-  - "dotKnewt"
+  - "dotknewt"
 license: AGPL-3.0-or-later
