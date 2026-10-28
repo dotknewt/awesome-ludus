@@ -6,6 +6,18 @@
     - https://gitlab.com/badsectorlabs/ludus-skills;install to project if not already present
 
 ## Roles
+- [ ] **ROLES-001 — ready:** Standardize Linux role identities and metadata on the preferred names.
+    - Canonical names (replace the corresponding legacy identity):
+        - `linux_splunk_server` over `linux_splunk_enterprise`.
+        - `linux_gitlab_ce` over `ludus_gitlab_ce`.
+        - `linux_logging` over `ludus_linux_logging`.
+        - `linux_gitlab_runner` over `ludus_gitlab_runner`.
+        - `linux_k3s_bootstrap` over `ludus_k3s_bootstrap`.
+        - `linux_install_docker` over `ludus_install_docker`.
+    - Scope: reconcile role directory names and `galaxy_info.role_name`, source/blueprint dependencies, range role assignments and `depends_on` references, internal role calls, and current documentation/static checks. Preserve author attribution and existing variable APIs; variable-prefix renames are not part of this task.
+    - Acceptance: the six canonical identities are consistent across active repository references; relevant static checks pass; any retained legacy references are explicitly documented as historical or migration guidance. Verify installed identities against the target Ludus version/catalog before claiming server compatibility.
+    - Dependency/open question: determine how existing installed legacy roles will be migrated or retired without breaking deployed ranges. Server installation/removal and live deployment require separate authorization.
+    - Backlog only: ready does not authorize implementation.
 - [x] **DOCKER-001 — done:** Fix first-run Docker socket access without requiring redeployment.
     - Evidence: the 2026-10-19 `thrunt-malcolm` deployment changed Docker group membership and ran `reset_connection`, but the later Malcolm image pull failed with socket permission denied. Guest diagnostics show Docker was ready before the failure; a later login has the Docker group and the socket is `660 root:docker`.
     - Leading cause remains a hypothesis: stale Ansible session groups due to untemplated connection options during `reset_connection` ([upstream fix](https://github.com/ansible/ansible/pull/84240)). Before the hotfix, controller Ansible-core 2.16.14 passed raw variables to reset, while Ludus `c6528ccc` templates `ansible_user`; this may select a different SSH control socket. The failing process's groups were not captured, so the original incident's causal trace is unconfirmed.

@@ -100,6 +100,23 @@ perform a cycle already explicitly requested.
    diagnostics using the stop-and-wait-for-next-request rule above. Do not make
    another fix before that request or approval.
 
+### Role-verification table
+
+Include one row per role/host in the requested verification scope. Keep deployment,
+runtime readiness, and ingestion conclusions independent; link each observed result
+to its evidence and identify reused evidence explicitly.
+
+| Role / host | Deployment result | Service readiness | Indexed ingestion | Remaining gaps |
+| --- | --- | --- | --- | --- |
+| `<role> / <host>` | `<PASS / FAIL / UNVERIFIED; run/task evidence>` | `<PASS / FAIL / UNVERIFIED / N/A; process or readiness evidence>` | `<PASS / FAIL / UNVERIFIED / N/A; source/index, query window and result>` | `<missing checks, evidence limits, or none>` |
+
+Use `UNVERIFIED` for missing evidence and `N/A` only when the check does not apply
+to the role's configured behavior. Indexed-ingestion `PASS` requires an independent
+query finding the configured source's events; record unique-canary confirmation
+separately from ordinary event presence. Missing authorization or tooling is a gap,
+not permission to broaden the cycle. Finish the report when every scoped role/host
+has a row, with static validation reported separately.
+
 ## Local evidence capture
 
 `scripts/collect_deployment_evidence.py` is a local, read-only parser. It does not

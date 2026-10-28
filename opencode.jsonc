@@ -24,8 +24,7 @@
           "ssh",
           "dotme@hermes",
           "/home/dotme/.local/bin/hermes",
-          "mcp",
-          "serve"
+          "mcp-serve"
         ],
       "disabled": true
       }

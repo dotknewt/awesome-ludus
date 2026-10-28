@@ -1,8 +1,8 @@
-"""Static regression for the pinned chart's empty-realm Observability defaults.
+"""Static regressions for the pinned chart's logs-only pipeline overrides.
 
-Production regression detected: reintroducing the all-false
-``splunkObservability`` override in either the rendered-values template or the
-reviewed artifact contract.
+Production regressions detected: reintroducing the all-false
+``splunkObservability`` override or emitting null disabled-pipeline entries in
+the rendered-values template.
 """
 
 from pathlib import Path
@@ -17,7 +17,7 @@ ARTIFACTS = ROLE / "vars" / "artifacts.yml"
 
 
 class KubernetesChartSchemaStatic(unittest.TestCase):
-    def test_empty_realm_uses_chart_default_without_observability_override(self):
+    def test_logs_only_values_omit_disabled_pipeline_entries(self):
         template = TEMPLATE.read_text(encoding="utf-8")
         artifacts = yaml.safe_load(ARTIFACTS.read_text(encoding="utf-8"))
         required_values = artifacts["splunk_container_logs_artifacts"]["chart"][
@@ -40,8 +40,8 @@ class KubernetesChartSchemaStatic(unittest.TestCase):
         self.assertEqual(required_values["secret"]["create"], False)
         self.assertIn("noDropLogsPipeline: false", template)
         self.assertIn("logs:\n          receivers: [file_log]", template)
-        self.assertIn("metrics: null", template)
-        self.assertIn("traces: null", template)
+        self.assertNotIn("metrics: null", template)
+        self.assertNotIn("traces: null", template)
         for port in ("otlp", "otlp-http", "zipkin", "jaeger-thrift",
                      "jaeger-grpc", "opampforwarder"):
             self.assertIn(f"{port}: null", template)
