@@ -86,7 +86,7 @@ ludus:
     roles:
       - dotknewt.windows_logging_policy
       - dotknewt.ludus_install_sysmon
-      - splunk_forwarder
+      - dotknewt.splunk_forwarder
     role_vars:
       windows_logging_policy_domain: evil.internal
       windows_logging_policy_server: '{{ range_id }}-dc.evil.internal'
@@ -278,7 +278,7 @@ ludus:
         - pipx
         - ncat
     roles:
-      - name: splunk_forwarder
+      - name: dotknewt.splunk_forwarder
         depends_on:
           - vm_name: '{{ range_id }}-splunk'
             role: dotknewt.linux_splunk_server
