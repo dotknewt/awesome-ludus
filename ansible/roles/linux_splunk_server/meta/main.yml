@@ -1,7 +1,7 @@
 ---
 galaxy_info:
   author: dotknewt
-  role_name: linux_splunk_enterprise
+  role_name: linux_splunk_server
   description: "Installs Splunk Enterprise on Linux for Ludus ranges"
   license: "MIT"
   min_ansible_version: "2.10"

@@ -25,7 +25,7 @@ Target:
 - An existing role account, `debian` by default, with become access
 - Internet access to Debian repositories, GitHub, PyPI, and Malcolm image registries during installation
 
-The role depends on the existing `ludus_install_docker` role and passes its
+The role depends on the existing `linux_install_docker` role and passes its
 selected account through the public `ludus_install_docker_user` input. That
 dependency appends the account to the `docker` supplementary group; it does not
 replace the account's primary group, UID, comment, or other memberships. Do not
@@ -108,7 +108,7 @@ recursively replace, or recursively chown an existing tree.
 
 The role executes preflight, packages, system settings, installation,
 configuration, authentication, and service convergence in that order. The
-shared `ludus_install_docker` role runs at the start of the packages phase, only
+shared `linux_install_docker` role runs at the start of the packages phase, only
 after side-effect-free Malcolm input, account, capture, partial-tree, and source
 checks pass. Missing release environment files are initialized from the pinned
 examples; managed keys converge while unknown settings remain. Relevant changes

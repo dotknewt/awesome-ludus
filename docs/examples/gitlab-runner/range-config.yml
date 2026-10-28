@@ -15,7 +15,7 @@ ludus:
     ram_gb: 8
     cpus: 4
     roles:
-      - ludus_gitlab_ce
+      - linux_gitlab_ce
     role_vars:
       ludus_gitlab:
         url: "http://10.{{ range_second_octet }}.10.10"
@@ -36,10 +36,10 @@ ludus:
     ram_gb: 4
     cpus: 2
     roles:
-      - name: ludus_gitlab_runner
+      - name: linux_gitlab_runner
         depends_on:
           - vm_name: "{{ range_id }}-gitlab-ce"
-            role: ludus_gitlab_ce
+            role: linux_gitlab_ce
     role_vars:
       ludus_gitlab_runner_url: "http://10.{{ range_second_octet }}.10.10"
       ludus_gitlab_runner_bootstrap_from_server: true

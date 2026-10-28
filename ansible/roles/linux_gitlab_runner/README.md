@@ -1,4 +1,4 @@
-# ludus_gitlab_runner
+# linux_gitlab_runner
 
 Installs GitLab Runner on Debian/Ubuntu and configures an unprivileged Docker
 executor. The role installs distribution `docker.io`, starts Docker, and adds

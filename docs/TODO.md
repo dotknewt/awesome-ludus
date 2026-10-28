@@ -6,7 +6,7 @@
     - https://gitlab.com/badsectorlabs/ludus-skills;install to project if not already present
 
 ## Roles
-- [ ] **ROLES-001 — ready:** Standardize Linux role identities and metadata on the preferred names.
+- [x] **ROLES-001 — done (repository scope):** Standardize Linux role identities and metadata on the preferred names.
     - Canonical names (replace the corresponding legacy identity):
         - `linux_splunk_server` over `linux_splunk_enterprise`.
         - `linux_gitlab_ce` over `ludus_gitlab_ce`.
@@ -16,12 +16,12 @@
         - `linux_install_docker` over `ludus_install_docker`.
     - Scope: reconcile role directory names and `galaxy_info.role_name`, source/blueprint dependencies, range role assignments and `depends_on` references, internal role calls, and current documentation/static checks. Preserve author attribution and existing variable APIs; variable-prefix renames are not part of this task.
     - Acceptance: the six canonical identities are consistent across active repository references; relevant static checks pass; any retained legacy references are explicitly documented as historical or migration guidance. Verify installed identities against the target Ludus version/catalog before claiming server compatibility.
-    - Dependency/open question: determine how existing installed legacy roles will be migrated or retired without breaking deployed ranges. Server installation/removal and live deployment require separate authorization.
-    - Backlog only: ready does not authorize implementation.
+    - Migration: [staged migration guidance](role-identity-migration.md) preserves existing installed legacy roles until separately authorized installation, range migration, and retirement. Variable APIs, author attribution, and persisted ownership markers are preserved.
+    - Verification (2026-10-28): canonical metadata checks, changed YAML checks, focused Runner/K3s/logging checks, and four existing syntax harnesses passed; six role defaults were byte-identical. Internal Docker dependency assertions passed. **PASS WITH WARNINGS — NOT VERIFIED:** changed-file lint is unavailable because harness lint expands unchanged role contents; target-version/catalog compatibility and live convergence were not verified. Pre-existing Splunk HEC/README static failures remain outside this identity change. No server installation/removal or deployment occurred.
 - [x] **DOCKER-001 — done:** Fix first-run Docker socket access without requiring redeployment.
     - Evidence: the 2026-10-19 `thrunt-malcolm` deployment changed Docker group membership and ran `reset_connection`, but the later Malcolm image pull failed with socket permission denied. Guest diagnostics show Docker was ready before the failure; a later login has the Docker group and the socket is `660 root:docker`.
     - Leading cause remains a hypothesis: stale Ansible session groups due to untemplated connection options during `reset_connection` ([upstream fix](https://github.com/ansible/ansible/pull/84240)). Before the hotfix, controller Ansible-core 2.16.14 passed raw variables to reset, while Ludus `c6528ccc` templates `ansible_user`; this may select a different SSH control socket. The failing process's groups were not captured, so the original incident's causal trace is unconfirmed.
-    - The [controller backport and safeguards](../ansible/roles/linux_docker/docker-socket-reset/README.md) were applied with explicit user authorization on 2026-10-20. The operator log records successful pre/post service runtime, version, config/module path, import, syntax, and file-hash checks; the retained backup is `/var/backups/ludus-ansible-reset-rrf8afhd`. Parent-session read-only SSH independently confirmed installed hashes match all three expected patched hashes. No service restart, deployment, guest probe, or role entrypoint execution occurred. Ansible-core 2.16.14/Python 3.13.5 remains an unsupported baseline.
+    - The [controller backport and safeguards](../ansible/roles/linux_install_docker/docker-socket-reset/README.md) were applied with explicit user authorization on 2026-10-20. The operator log records successful pre/post service runtime, version, config/module path, import, syntax, and file-hash checks; the retained backup is `/var/backups/ludus-ansible-reset-rrf8afhd`. Parent-session read-only SSH independently confirmed installed hashes match all three expected patched hashes. No service restart, deployment, guest probe, or role entrypoint execution occurred. Ansible-core 2.16.14/Python 3.13.5 remains an unsupported baseline.
     - Acceptance: the user confirmed the 2026-10-20 `dev-malcolm` deployment succeeded on the first try, providing live first-run verification after the backport. A separate convergence rerun was not performed; the original 2026-10-19 `thrunt-malcolm` failure's causal trace also remains unconfirmed.
 - [ ] Add opt-out installation of the PSTree splunk app (https://github.com/murchisd/splunk_pstree_app) when installing ludus_splunk_server
 - [ ] **SPLUNK-001 — proposed:** Evaluate optional Windows Security event exclusions after collecting a baseline.
@@ -31,13 +31,14 @@
     - See [Windows Splunk design](superpowers/specs/2026-10-20-ludus-windows-splunk-logging-design.md).
 
 ## Range configs
-- [ ] **RANGE-001 — blocked:** Re-review and fix `blueprints/detect-evil/range-config.yml` after ROLES-001.
+- [x] **RANGE-001 — done (repository scope):** Re-review and fix `blueprints/detect-evil/range-config.yml` after ROLES-001.
     - Dependency: ROLES-001 must be completed before this follow-up begins; reassess the then-current config rather than blindly applying earlier review snippets.
     - Scope: review role inputs and ordering against the finalized role contracts and current official Ludus schema; apply confirmed range-config fixes. Recheck exact `depends_on` matches, the new Linux VM's forwarder-before-logging order and explicit `splunkfwd` Laurel reader, global Windows/Linux inputs, and GPO link structures.
-    - Open question: confirm whether GitLab Docker-job logs must be collected in addition to K3s pod logs; do not silently expand telemetry scope or change executor architecture.
+    - Telemetry decision (2026-10-28): user chose K3s-only pod logs; GitLab Docker-job logs are explicitly deferred. Executor architecture is unchanged.
     - Preserve the prior review exclusions: no separate role-inventory/migration work beyond ROLES-001, Malcolm capture-topology work, fleet-wide Linux telemetry expansion, Defender overlap cleanup, blueprint metadata cleanup, or schema-header-only cleanup.
     - Acceptance: confirmed in-scope issues are fixed, dependency references match assigned roles, scoped static/schema checks are recorded, and remaining telemetry decisions and runtime verification gaps are explicit. Live deployment and guest probes require separate authorization.
-    - Backlog only: this entry does not authorize implementation or automatic execution when ROLES-001 completes.
+    - Result (2026-10-28): new Linux VM now installs `splunk_forwarder` before `linux_logging`, with an exact same-VM dependency and explicit `splunkfwd` reader; forwarder assignments use the local identity. Existing global inputs and GPO link structures required no changes.
+    - Verification: six focused range static checks passed, including global dependency-cycle checks; current official Ludus schema and fresh file-scoped YAML validation passed. Schema SHA-256: `9098e6c671be66deec4f3172612f7b97fa5dd59b6691f36b50e83398a12d8e70` (2026-10-28). [Scope and runtime gaps](../blueprints/detect-evil/README.md#range-001-review-scope-2026-10-28): no deployment, guest probes, GPO application, or event delivery verification occurred.
 
 ## Splunk
 - [ ] **SPLUNK-001 — proposed:** Evaluate optional Windows Security event exclusions after collecting a baseline.

@@ -112,7 +112,7 @@ Do not copy this into the role defaults: topology belongs in the blueprint.
 * [Splunk enable-a-receiver guide](https://help.splunk.com/en/splunk-enterprise/forward-and-process-data/universal-forwarder-manual/10.4/configure-the-universal-forwarder), accessed 2026-10-20: receiver setup; Splunk search documentation identifies 9997 as the standard forwarder receiving port.
 * [Ludus Ansible roles](https://docs.ludus.cloud/docs/developers/ansible-roles/), accessed 2026-10-20: standard structure, mandatory meta file, role testing.
 * [Ludus range configuration](https://docs.ludus.cloud/docs/configuration/), accessed 2026-10-20: role order and `depends_on` shape.
-* [Repository server role README](../../ansible/roles/ludus_splunk_server/README.md) and tasks: repository-specific non-root systemd, seed, checksum, and license conventions.
+* [Repository server role README](../../ansible/roles/linux_splunk_server/README.md) and tasks: repository-specific non-root systemd, seed, checksum, and license conventions. Link updated for the canonical directory; this research records the findings at its original date.
 
 No official 10.6.1.1-specific page was found establishing Debian 13 support,
 Universal Forwarder package metadata, exact boot-start invocation, seed syntax,

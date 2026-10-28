@@ -1,5 +1,5 @@
 galaxy_info:
-  role_name: ludus_gitlab_ce
+  role_name: linux_gitlab_ce
   author: dotknewt
   description: An Ansible Role that installs a Gitlab CE instance and optionnaly create groups and users.
   license: GPLv3

@@ -21,6 +21,7 @@
     owner: root
     group: root
     mode: "0600"
+    # Historical persisted owner marker; not the installed role name.
     content: |
       owner: ludus_k3s_bootstrap
       k3s_version: {{ ludus_k3s_bootstrap_k3s_version }}

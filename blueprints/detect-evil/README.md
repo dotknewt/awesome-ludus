@@ -43,9 +43,16 @@ All templates are stock Ludus built-ins — this source ships no Packer template
 
 ## GitLab CE
 
-The `{{ range_id }}-gitlab` VM runs the local `dotknewt.ludus_gitlab_ce` role from
-[`ansible/roles/ludus_gitlab_ce`](../../ansible/roles/ludus_gitlab_ce). Ensure the
-`debian-12-x64-server-template` template and `dotknewt.ludus_gitlab_ce` role are
+### Repository identity migration
+
+Source-local Linux identities are standardized; see the
+[staged migration guide](../../docs/role-identity-migration.md) before updating
+an existing installation. Repository names do not prove target-server catalog
+compatibility.
+
+The `{{ range_id }}-gitlab` VM runs the local `linux_gitlab_ce` role from
+[`ansible/roles/linux_gitlab_ce`](../../ansible/roles/linux_gitlab_ce). Ensure the
+`debian-12-x64-server-template` template and `linux_gitlab_ce` role are
 available on the Ludus server before deploying. Debian 12 follows the role's
 documented example and supported-platform metadata.
 
@@ -106,6 +113,32 @@ They are not wired into any role — run them by hand (or copy them onto the DC 
    generates telemetry.
 
 ## Known issues
+
+### RANGE-001 review scope (2026-10-28)
+
+The current `range-config.yml` is authoritative for this scoped review;
+the older topology and operational notes elsewhere in this README were not
+comprehensively refreshed by RANGE-001.
+
+- The standalone Linux VM runs `splunk_forwarder` before `linux_logging`;
+  logging explicitly depends on that forwarder and requests `splunkfwd` as
+  its Laurel reader. The runner retains its existing forwarder/K3s/logging
+  prerequisites.
+- Shared Windows event inputs and Linux Laurel monitors remain in
+  `global_role_vars`. Logging-policy GPO links retain the role's category-list
+  structure with explicit target and boolean enabled/enforced values.
+- Container telemetry remains **K3s pod logs only**, from `/var/log/pods`.
+  GitLab Docker-job log collection is deliberately deferred; the Docker
+  executor is unchanged. Pod-log collection does not imply Docker-job coverage.
+- Review references: [official configuration guide](https://docs.ludus.cloud/docs/configuration)
+  and [range schema](https://docs.ludus.cloud/schemas/range-config.json), accessed
+  2026-10-28. Schema checks establish structure, not role execution order in a
+  particular installed Ludus version or successful event delivery.
+- No live deployment or guest probes were performed. Installed role identities,
+  reader creation at the logging boundary, GPO LDAP/SYSVOL access and application,
+  and actual event delivery remain unverified and require separate authorization.
+
+### Earlier notes (not re-reviewed by RANGE-001)
 
 - **Domain name mismatch (GPO deploy).** `role_gpo_deploy` and both manual scripts target
   `CONDEF.local`, while this range deploys `condef.internal`. As shipped, `role_gpo_deploy`'s

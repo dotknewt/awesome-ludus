@@ -77,7 +77,7 @@ ludus:
     template: REPLACE_WITH_DEBIAN_TEMPLATE
     linux: true
     roles:
-      - dotknewt.ludus_splunk_server
+      - linux_splunk_server
     role_vars:
       splunk_server_admin_password: "ReplaceThisLabPassword!"
       splunk_server_enable_boot_start: true

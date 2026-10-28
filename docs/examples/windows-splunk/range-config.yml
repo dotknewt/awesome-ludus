@@ -19,7 +19,7 @@ ludus:
     cpus: 4
     linux: true
     roles:
-      - ludus_splunk_server
+      - linux_splunk_server
 
   - vm_name: "{{ range_id }}-win11"
     hostname: "{{ range_id }}-WIN11"
@@ -34,7 +34,7 @@ ludus:
       - name: dotknewt.splunk_forwarder
         depends_on:
           - vm_name: "{{ range_id }}-splunk"
-            role: ludus_splunk_server
+            role: linux_splunk_server
           - vm_name: "{{ range_id }}-win11"
             role: ludus_install_sysmon
     role_vars:

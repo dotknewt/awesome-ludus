@@ -12,7 +12,7 @@ This balances standalone role reuse with the current source's convenience, avoid
 
 Research in October 2026 reviewed the repository and current official Ludus documentation. Current inventory: **27 role directories** (4 Git submodules and 23 ordinary directories); the existing collection is an additional submodule; **20 template directories**. All 23 ordinary roles have metadata, with mixed authorship/provenance. Metadata does not establish ownership or redistribution rights. The 4 role submodules and the 23 ordinary directories are candidates to assess, not an approved publication list. No `.github` directory was found during evaluation. Inventory and ownership must be rechecked before execution.
 
-Research noted dependencies/coupling including Malcolm's `include_role` of `dotknewt.ludus_install_docker` and Atomic's `include_role` of `cowdogmoo.workstation.package_management`; `constructing-defense/requirements.yml` currently contains collections only. A role reference is not proof that a standalone consumer acquires the referenced dependency. Build the complete transitive role and collection dependency closure and specify how each is installed and pinned.
+Research noted dependencies/coupling including Malcolm's `include_role` of `linux_install_docker` and Atomic's `include_role` of `cowdogmoo.workstation.package_management`; `constructing-defense/requirements.yml` currently contains collections only. A role reference is not proof that a standalone consumer acquires the referenced dependency. Build the complete transitive role and collection dependency closure and specify how each is installed and pinned.
 
 ### Confirmed official contracts (not target-version runtime evidence)
 

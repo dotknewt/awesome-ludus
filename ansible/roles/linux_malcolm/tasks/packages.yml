@@ -1,7 +1,7 @@
 ---
 - name: Install Docker for the selected Malcolm account
   ansible.builtin.include_role:
-    name: dotknewt.ludus_install_docker
+    name: linux_install_docker
   vars:
     ludus_install_docker_user: "{{ ludus_install_malcolm_user }}"
 

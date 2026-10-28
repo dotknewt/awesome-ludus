@@ -8,7 +8,7 @@
       ansible.builtin.fail:
         msg: This fixture is for --syntax-check only; do not run it normally.
   roles:
-    - role: linux_splunk_enterprise
+    - role: linux_splunk_server
   vars:
     splunk_version: "10.6.1.1"  # noqa: var-naming[no-role-prefix]
     splunk_build: "b2ae2962645c"  # noqa: var-naming[no-role-prefix]

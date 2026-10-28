@@ -57,7 +57,7 @@ Syntax-check the complete role, including its Docker dependency:
 Lint the complete production role and changed Docker dependency interface:
 
 ```bash
-"$MALCOLM_TEST_VENV/bin/ansible-lint" -x 'var-naming,yaml[line-length]' ansible/roles/role_malcolm_install ansible/roles/ludus_install_docker/defaults/main.yml ansible/roles/ludus_install_docker/tasks/main.yml
+"$MALCOLM_TEST_VENV/bin/ansible-lint" -x 'var-naming,yaml[line-length]' ansible/roles/role_malcolm_install ansible/roles/linux_install_docker/defaults/main.yml ansible/roles/linux_install_docker/tasks/main.yml
 ```
 
 `var-naming` is excluded because the approved public and internal prefix is

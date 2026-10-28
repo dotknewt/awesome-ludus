@@ -32,9 +32,11 @@ installation, deployment, guest probes, API calls, or live evaluation.
   passed; total evidence is 77 tests. Commands were
   `env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s ansible/roles/ludus_splunk_server/tests -p test_*.py`
   and `env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s ansible/roles/ludus_linux_logging/tests -p test_*.py`.
+  These paths are recorded as run before the 2026-10-28 role identity rename;
+  see [`docs/role-identity-migration.md`](../../role-identity-migration.md).
   Provenance: `/tmp/opencode/splunk-prelive-validation.txt`; these roles/tests
   were unchanged in the closeout validation.
-- Final validator command:
+- Final validator command (same pre-rename paths noted above):
   `python3 .opencode/skills/ansible-validation/scripts/validate.py --data docs/examples/windows-splunk/range-config.yml --data docs/examples/windows-splunk/requirements.yml --role ansible/roles/ludus_splunk_collector --role ansible/roles/ludus_splunk_server --role ansible/roles/ludus_linux_logging --role ansible/roles/ludus_install_sysmon --playbook ansible/roles/ludus_splunk_collector/tests/syntax-windows.yml`
   **PASS:** 4 roles, 5 syntax targets, 5 lint targets, 42 yamllint targets,
   zero coverage errors. `ansible-playbook`, `ansible-lint`, and `yamllint` all
