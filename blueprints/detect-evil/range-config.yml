@@ -282,7 +282,7 @@ ludus:
         depends_on:
           - vm_name: '{{ range_id }}-splunk'
             role: dotknewt.linux_splunk_server
-      - name: linux_logging
+      - name: dotknewt.linux_logging
         depends_on:
           - vm_name: '{{ range_id }}-linux'
             role: dotknewt.splunk_forwarder
