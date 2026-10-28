@@ -1,0 +1,294 @@
+defaults:
+  enable_dynamic_wallpaper: true
+  snapshot_with_RAM: true
+  stale_hours: 0
+  timezone: Europe/Oslo
+  ad_domain_functional_level: Win2012R2
+  ad_forest_functional_level: Win2012R2
+  ad_domain_admin: domainadmin
+  ad_domain_admin_password: "Temp1234!!"
+  ad_domain_user: domainuser
+  ad_domain_user_password: "Temp1234!!"
+  ad_domain_safe_mode_password: "Temp1234!!"
+
+global_role_vars:
+  splunk_version: 10.6.1.1
+  splunk_build: b2ae2962645c
+  splunk_accept_license: true
+  splunk_receiver_ip: 10.{{ range_second_octet }}.10.10
+  splunk_receiver_port: 9997
+  splunk_forwarder_inputs:
+    - name: WinEventLog://Security
+    - name: WinEventLog://System
+    - name: WinEventLog://Application
+    - name: WinEventLog://Microsoft-Windows-Sysmon/Operational
+    - name: WinEventLog://Microsoft-Windows-PowerShell/Operational
+  splunk_forwarder_monitors:
+    - path: /var/log/laurel/audit.log
+      sourcetype: laurel:json
+      index: main
+
+ludus:
+- vm_name: "{{ range_id }}-pcap"
+  hostname: "{{ range_id }}-pcap"
+  template: no-debian-13.5-x64-server-template
+  vlan: 10
+  ip_last_octet: 1
+  ram_gb: 64
+  cpus: 8
+  linux: true
+  roles:
+    - dotknewt.ludus_install_malcolm
+  role_vars:
+    # Existing Constructing Defense lab credential; replace outside this lab.
+    ludus_install_malcolm_admin_username: localuser
+    ludus_install_malcolm_admin_password: "password"
+    ludus_install_malcolm_capture_enabled: true
+
+- vm_name: '{{ range_id }}-splunk'
+  hostname: '{{ range_id }}-splunk'
+  template: no-ubuntu-24.04.2-x64-server-template
+  linux: true
+  vlan: 10
+  ip_last_octet: 10
+  ram_gb: 8
+  cpus: 4
+  roles:
+    - linux_splunk_server
+  role_vars:
+    splunk_server_hec_enabled: true
+    splunk_server_hec_validate: false
+    splunk_server_hec_app: ludus_hec
+    splunk_server_hec_port: 8088
+    splunk_server_hec_ssl_enabled: true
+    splunk_server_hec_token_name: ludus-container-logs
+    splunk_server_hec_token: ed8664fe188751f26376f31b2faf7ed5e73f782d6c73b3db22de9341bdfe28db
+    splunk_server_hec_indexes:
+      - container_logs
+    splunk_server_hec_default_index: container_logs
+
+- vm_name: '{{ range_id }}-dc'
+  hostname: '{{ range_id }}-dc'
+  template: no-windows-server-2022-x64-template
+  windows:
+      sysprep: true
+      gpos:
+        - anon_share_access
+      autologon_user: domainadmin
+      autologon_password: "Temp1234!!"
+  domain:
+    fqdn: evil.internal
+    role: primary-dc
+  vlan: 10
+  ip_last_octet: 11
+  ram_gb: 4
+  cpus: 2
+  roles:
+    - dotknewt.windows_logging_policy
+    - dotknewt.ludus_install_sysmon
+    - dotknewt.splunk_forwarder
+  role_vars:
+    windows_logging_policy_domain: evil.internal
+    windows_logging_policy_server: '{{ range_id }}-dc.evil.internal'
+    windows_logging_policy_management_host: '{{ range_id }}-dc'
+    windows_logging_policy_logging_enabled: true
+    windows_logging_policy_enrollment_enabled: true
+    windows_logging_policy_defender_disable_policy_enabled: true
+    windows_logging_policy_links:
+      logging:
+        - target: domain_root
+          enabled: true
+          enforced: false
+      enrollment:
+        - target: domain_root
+          enabled: true
+          enforced: false
+      defender:
+        - target: domain_root
+          enabled: true
+          enforced: false
+
+- vm_name: "{{ range_id }}-adcs"
+  hostname: "{{ range_id }}-adcs"
+  template: no-windows-server-2022-x64-template
+  vlan: 10
+  ip_last_octet: 12
+  ram_gb: 4
+  cpus: 2
+  windows:
+    sysprep: true
+    autologon_user: domainadmin
+    autologon_password: "Temp1234!!"
+  domain:
+    fqdn: evil.internal
+    role: member
+  roles:
+    - dotknewt.ludus_install_sysmon
+    - dotknewt.splunk_forwarder
+    - badsectorlabs.ludus_adcs
+  role_vars:
+    ludus_adcs_domain: evil.internal
+    ludus_adcs_ca_host: "{{ range_id }}-adcs"
+    ludus_adcs_domain_username: "evil.internal\\domainadmin"
+    ludus_adcs_domain_password: "Temp1234!!"
+    ludus_adcs_ca_common_name: "{{ range_id }}-CA"
+    ludus_adcs_esc1: true
+    ludus_adcs_esc2: false
+    ludus_adcs_esc3: false
+    ludus_adcs_esc3_cra: false
+    ludus_adcs_esc4: false
+    ludus_adcs_esc6: false
+    ludus_adcs_esc8: false
+    ludus_adcs_esc13: false
+    ludus_adcs_esc5: false
+    ludus_adcs_esc7: false
+    ludus_adcs_esc9: false
+    ludus_adcs_esc11: false
+    ludus_adcs_esc15: false
+    ludus_adcs_esc16: false
+
+- vm_name: '{{ range_id }}-gitlab'
+  hostname: '{{ range_id }}-gitlab'
+  template: no-ubuntu-24.04.2-x64-server-template
+  linux: true
+  vlan: 10
+  ip_last_octet: 100
+  ram_gb: 8
+  cpus: 4
+  dns_rewrites:
+  - gitlab.evil.internal
+  roles:
+  - linux_gitlab_ce
+  role_vars:
+    ludus_gitlab:
+      url: http://gitlab.evil.internal
+      displayname: '{{ range_id }} GitLab'
+      smtp: 127.0.0.1
+      email_from: gitlab@evil.internal
+      replyto: no-reply@evil.internal
+      emailroot: admin@evil.internal
+      bootstrap:
+        enabled: true
+        token_file: /var/lib/ludus/gitlab/bootstrap-api-token
+
+- vm_name: '{{ range_id }}-runner'
+  hostname: '{{ range_id }}-runner'
+  template: no-ubuntu-24.04.2-x64-server-template
+  linux: true
+  vlan: 10
+  ip_last_octet: 101
+  ram_gb: 8
+  cpus: 4
+  roles:
+  - name: splunk_forwarder
+    depends_on:
+    - vm_name: '{{ range_id }}-splunk'
+      role: linux_splunk_server
+  - name: ludus_gitlab_runner
+    depends_on:
+    - vm_name: '{{ range_id }}-gitlab'
+      role: linux_gitlab_ce
+  - ludus_k3s_bootstrap
+  - name: linux_logging
+    depends_on:
+    - vm_name: '{{ range_id }}-runner'
+      role: splunk_forwarder
+    - vm_name: '{{ range_id }}-runner'
+      role: ludus_k3s_bootstrap
+  - name: splunk_container_logs
+    depends_on:
+    - vm_name: '{{ range_id }}-splunk'
+      role: linux_splunk_server
+    - vm_name: '{{ range_id }}-runner'
+      role: ludus_k3s_bootstrap
+  role_vars:
+    ludus_gitlab_runner_url: http://gitlab.evil.internal
+    ludus_gitlab_runner_auth_token: ''
+    ludus_gitlab_runner_api_token: ''
+    ludus_gitlab_runner_bootstrap_from_server: true
+    ludus_gitlab_runner_bootstrap_host: '{{ range_id }}-gitlab'
+    ludus_gitlab_runner_name: '{{ range_id }}-runner'
+    ludus_gitlab_runner_tags:
+      - docker
+    ludus_gitlab_runner_project_name: ludus-runner-demo
+    ludus_gitlab_runner_project_namespace: root
+    ludus_gitlab_runner_project_path: root/ludus-runner-demo
+    ludus_gitlab_runner_smoke_ci_enabled: false
+    splunk_container_logs_mode: kubernetes
+    splunk_container_logs_owner_id: ludus-container-logs
+    splunk_container_logs_hec_endpoint: https://10.{{ range_second_octet }}.10.10:8088/services/collector/event
+    splunk_container_logs_hec_index: container_logs
+    splunk_container_logs_hec_token: ed8664fe188751f26376f31b2faf7ed5e73f782d6c73b3db22de9341bdfe28db
+    splunk_container_logs_tls_verify: false
+    splunk_container_logs_allow_insecure_http: false
+    splunk_container_logs_ca_file: ''
+    splunk_container_logs_start_at: end
+    splunk_container_logs_queue_size: 1000
+    splunk_container_logs_queue_max_disk_mib: 512
+    splunk_container_logs_kubeconfig: /etc/rancher/k3s/k3s.yaml
+    splunk_container_logs_kube_context: default
+    splunk_container_logs_k8s_cluster_name: default
+    splunk_container_logs_k8s_namespace: splunk-logs
+    splunk_container_logs_k8s_release: splunk-container-logs
+    splunk_container_logs_k8s_existing_secret: ''
+    splunk_container_logs_k8s_node_selector:
+      kubernetes.io/os: linux
+      kubernetes.io/arch: amd64
+    splunk_container_logs_k8s_tolerations: []
+    splunk_container_logs_k8s_log_paths:
+      - /var/log/pods
+    splunk_container_logs_k8s_checkpoint_path: /var/addon/splunk/otel_pos
+    splunk_container_logs_k8s_queue_path: /var/addon/splunk/exporter_queue
+    ludus_linux_logging_read_users:
+      - splunkfwd
+
+- vm_name: "{{ range_id }}-win11"
+  hostname: "{{ range_id }}-win11"
+  template: no-windows-11-22h2-x64-enterprise-template
+  vlan: 10
+  ip_last_octet: 200
+  ram_gb: 8
+  cpus: 2
+  windows:
+    sysprep: true
+    autologon_user: domainadmin
+    autologon_password: "Temp1234!!"
+  domain:
+    fqdn: evil.internal
+    role: member
+  roles:
+    - dotknewt.ludus_install_sysmon
+    - dotknewt.splunk_forwarder
+
+- vm_name: "{{ range_id }}-linux"
+  hostname: "{{ range_id }}-linux"
+  template: no-debian-13.5-x64-server-template
+  vlan: 10
+  ip_last_octet: 201
+  ram_gb: 8
+  cpus: 2
+  linux:
+    packages:
+      - vim # optional
+      - curl
+      - ca-certificates
+      - bash-completion # optional
+      - git
+      - make
+      - pipx
+      - ncat
+  roles:
+    - dotknewt.linux_logging
+    - name: dotknewt.splunk_forwarder
+      depends_on:
+        - vm_name: '{{ range_id }}-splunk'
+          role: dotknewt.linux_splunk_server
+        - vm_name: '{{ range_id }}-linux'
+          role: dotknewt.linux_logging
+
+router:
+  template: no-debian-13.5-x64-server-template
+  vm_name: '{{ range_id }}-router'
+  hostname: '{{ range_id }}-router'
+  ram_gb: 2
+  cpus: 2

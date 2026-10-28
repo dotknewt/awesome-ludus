@@ -1,0 +1,20 @@
+manifest_version: 1
+id: detect-evil
+name: "Detect Evil"
+description: Detection-engineering lab with AD + ADCS (ESC1), Splunk SIEM, Malcolm network monitoring, minikube K8s telemetry, GitLab CE with runner docker host.
+version: 1.0.0
+config: range-config.yml
+
+tags:
+  - active-directory
+  - adcs
+  - splunk
+  - detection-engineering
+  - kubernetes
+  - malcolm
+  - gitlab
+  - sysmon
+  - windows
+  - linux
+
+min_ludus_version: "2.0.0"

@@ -1,0 +1,108 @@
+# yaml-language-server: $schema=https://docs.ludus.cloud/schemas/range-config.json
+---
+defaults:
+  snapshot_with_RAM: true
+  stale_hours: 0
+  ad_domain_functional_level: Win2012R2
+  ad_forest_functional_level: Win2012R2
+  ad_domain_admin: domainadmin
+  ad_domain_admin_password: "Temp1234!!"
+  ad_domain_user: domainuser
+  ad_domain_user_password: "Temp1234!!"
+  ad_domain_safe_mode_password: "Temp1234!!"
+  timezone: Europe/Oslo
+  enable_dynamic_wallpaper: true
+
+ludus:
+  - vm_name: "DC"
+    hostname: "DC"
+    template: no-windows-server-2022-x64-template
+    vlan: 10
+    ip_last_octet: 11
+    ram_gb: 16
+    cpus: 4
+    windows:
+      sysprep: true
+      gpos:
+        - disable_defender
+        - anon_share_access
+      autologon_user: domainadmin
+      autologon_password: "Temp1234!!"
+    domain:
+      fqdn: condef.internal
+      role: primary-dc
+    roles:
+      - dotknewt.role_gpo_deploy      
+    role_vars:
+      splunk_admin_password: "Temp1234!!"
+      splunk_hec_token_name: "K8s"
+      splunk_hec_token_description: "K8s Logs from LinuxV"
+      splunk_index_name: "kube"
+      splunk_hec_disable_ssl: true
+      ludus_splunk_expected_token: "b448817b-e664-4fce-93fa-79d0c90ba57"
+    testing:
+      snapshot: true
+      block_internet: true
+
+  
+
+
+
+  - vm_name: "WIN11A"
+    hostname: "WIN11A"
+    template: no-windows-11-22h2-x64-enterprise-template
+    vlan: 10
+    ip_last_octet: 14
+    ram_gb: 8
+    cpus: 4
+    windows:
+      sysprep: true
+      chocolatey_ignore_checksums: false
+      chocolatey_packages:
+        - notepadplusplus
+        - 7zip
+      autologon_user: domainadmin
+      autologon_password: "Temp1234!!"
+    domain:
+      fqdn: condef.internal
+      role: member
+    roles:
+      - dotknewt.role_splunk_collector_win11a
+      - dotknewt.ludus_install_sysmon
+
+  - vm_name: "linuxa"
+    hostname: "linuxa"
+    template: no-debian-13.5-x64-server-template
+    vlan: 10
+    ip_last_octet: 15
+    ram_gb: 8
+    cpus: 4
+    linux:
+      packages:
+        - vim # optional
+        - curl
+        - ca-certificates
+        - bash-completion # optional
+        - git
+        - make
+        - pipx
+        - ncat
+
+router:
+  vm_name: "{{ range_id }}-router"
+  hostname: "{{ range_id }}-router"
+  template: no-debian-13.5-x64-server-template
+
+network:
+  inter_vlan_default: ACCEPT
+  external_default: ACCEPT
+  always_blocked_networks:
+    - 192.168.0.0/16
+    - 172.16.0.0/12
+  rules:
+    - name: Allow all VLANs out to internet using any protocol and port
+      vlan_src: all
+      vlan_dst: public
+      protocol: all
+      ports: all
+      action: ACCEPT

@@ -1,0 +1,13 @@
+# requirements.yml: external dependencies for the constructing-defense blueprint.
+# Local roles (role_*, ludus_install_sysmon) are vendored in this source's ansible/roles/.
+
+---
+
+collections:
+  - name: ansible.posix
+    version: ">=2.2.2"
+  - name: community.crypto
+    version: ">=3.4.0"
+
+roles:
+  - name: badsectorlabs.ludus_adcs
