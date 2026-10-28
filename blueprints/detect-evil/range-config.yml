@@ -54,7 +54,7 @@ ludus:
     ram_gb: 8
     cpus: 4
     roles:
-      - linux_splunk_server
+      - dotknewt.linux_splunk_server
     role_vars:
       splunk_server_hec_enabled: true
       splunk_server_hec_validate: false
@@ -180,22 +180,22 @@ ludus:
     ram_gb: 8
     cpus: 4
     roles:
-      - name: splunk_forwarder
+      - name: dotknewt.splunk_forwarder
         depends_on:
           - vm_name: '{{ range_id }}-splunk'
             role: dotknewt.linux_splunk_server
-      - name: linux_gitlab_runner
+      - name: dotknewt.linux_gitlab_runner
         depends_on:
           - vm_name: '{{ range_id }}-gitlab'
             role: dotknewt.linux_gitlab_ce
-      - dotknewt.linux_k3s_bootstrap
-      - name: linux_logging
+      - name: dotknewt.linux_k3s_bootstrap
+      - name: dotknewt.linux_logging
         depends_on:
           - vm_name: '{{ range_id }}-runner'
             role: dotknewt.splunk_forwarder
           - vm_name: '{{ range_id }}-runner'
             role: dotknewt.linux_k3s_bootstrap
-      - name: splunk_container_logs
+      - name: dotknewt.splunk_container_logs
         depends_on:
           - vm_name: '{{ range_id }}-splunk'
             role: dotknewt.linux_splunk_server
