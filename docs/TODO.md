@@ -30,6 +30,15 @@
     - Depends on a deployed Windows logging pipeline and representative unfiltered logs. Keep every exclusion disabled until explicitly approved; this item does not authorize live evaluation or enabling filters.
     - See [Windows Splunk design](superpowers/specs/2026-10-20-ludus-windows-splunk-logging-design.md).
 
+## Range configs
+- [ ] **RANGE-001 — blocked:** Re-review and fix `blueprints/detect-evil/range-config.yml` after ROLES-001.
+    - Dependency: ROLES-001 must be completed before this follow-up begins; reassess the then-current config rather than blindly applying earlier review snippets.
+    - Scope: review role inputs and ordering against the finalized role contracts and current official Ludus schema; apply confirmed range-config fixes. Recheck exact `depends_on` matches, the new Linux VM's forwarder-before-logging order and explicit `splunkfwd` Laurel reader, global Windows/Linux inputs, and GPO link structures.
+    - Open question: confirm whether GitLab Docker-job logs must be collected in addition to K3s pod logs; do not silently expand telemetry scope or change executor architecture.
+    - Preserve the prior review exclusions: no separate role-inventory/migration work beyond ROLES-001, Malcolm capture-topology work, fleet-wide Linux telemetry expansion, Defender overlap cleanup, blueprint metadata cleanup, or schema-header-only cleanup.
+    - Acceptance: confirmed in-scope issues are fixed, dependency references match assigned roles, scoped static/schema checks are recorded, and remaining telemetry decisions and runtime verification gaps are explicit. Live deployment and guest probes require separate authorization.
+    - Backlog only: this entry does not authorize implementation or automatic execution when ROLES-001 completes.
+
 ## Splunk
 - [ ] **SPLUNK-001 — proposed:** Evaluate optional Windows Security event exclusions after collecting a baseline.
     - Decide separately whether the 4662, 566, and 5145 C$ exclusions are warranted by event volume, noise, and detection value; document the rationale for each decision.
