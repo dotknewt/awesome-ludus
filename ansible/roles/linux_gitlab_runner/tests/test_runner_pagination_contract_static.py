@@ -72,6 +72,13 @@ class RunnerPaginationContractStatic(unittest.TestCase):
         self.assertIn("ansible diagnostics", readme)
         self.assertIn("production credentials", readme)
 
+    def test_persisted_config_ownership_marker_remains_legacy_protocol(self):
+        marker = "managed by ludus_gitlab_runner"
+        inspect = (ROLE / "tasks" / "inspect-config.yml").read_text(encoding="utf-8")
+        template = (ROLE / "templates" / "config.toml.j2").read_text(encoding="utf-8")
+        self.assertIn(marker, inspect)
+        self.assertIn(marker, template)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,7 +1,8 @@
 # linux_splunk_server
 
 Installs Splunk Enterprise on Linux for Ludus ranges and configures its
-receiving port. The role keeps its existing role identity and installation
+receiving port. Its canonical source-local role identity is
+`linux_splunk_server`; this identity change does not alter the installation
 lifecycle.
 
 ## Shared inputs
@@ -132,21 +133,23 @@ global_role_vars:
 
 ludus:
   - vm_name: "{{ range_id }}-splunk"
-    # Replace this example role ID with the identity reported by the target server.
+    # Canonical source-local ID; verify it is installed on the target before use.
     roles:
-      - dotknewt.ludus_splunk_server
+      - linux_splunk_server
     role_vars:
       splunk_server_admin_password: "ReplaceThisLabPassword!"
 ```
 
 ## Role identity and attribution
 
-The source directory is `linux_splunk_server`; metadata declares the role name
-`linux_splunk_enterprise`; active examples retain `dotknewt.ludus_splunk_server`
-or `ludus_splunk`. The installed identity is **not verified**. Do not infer it
-from the directory or metadata: use the identity reported by the target Ludus
-server, and update both `roles` and any matching `depends_on.role` references
-consistently. No role or example identity is renamed here.
+The source-local canonical identity is `linux_splunk_server`, matching both
+the directory and `galaxy_info.role_name`. Current repository examples use this
+identity for the source-local role. Older references such as
+`dotknewt.ludus_splunk_server`, `ludus_splunk_server`, and `ludus_splunk` are
+historical aliases, not current source-local role names. Installed server
+identity compatibility remains **not verified**; confirm the identity reported
+by the target Ludus server before migrating a deployed range. See the staged
+[role identity migration guide](../../../docs/role-identity-migration.md).
 
 This role was previously supplied through the stale
 `curi0usJack/ludus_splunk` Git submodule mapping. The supplied local files declare

@@ -1,4 +1,4 @@
-# ludus_linux_logging
+# linux_logging
 
 Install native `auditd` and Laurel v0.6.3 on Debian 13 (trixie) or Ubuntu
 24.04/26.04, x86_64, using systemd. This role is independent: it does not
@@ -160,7 +160,7 @@ those pins requires a reviewed artifact update, not an arbitrary URL override.
 - hosts: linux_hosts
   become: true
   roles:
-    - role: ludus_linux_logging
+    - role: linux_logging
   vars:
     # Override only when the requested reader exists before this role runs.
     ludus_linux_logging_read_users: [splunkfwd]

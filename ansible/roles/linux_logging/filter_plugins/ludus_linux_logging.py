@@ -238,6 +238,7 @@ def transform_audit_rules(
         for item in path_stats
     }
     identities = _identity_status(identity_stats)
+    # Historical generated-file ownership protocol; retain across role renames.
     output: list[str] = ["# Managed by ludus_linux_logging; source attribution: ConstructingDefense."]
     seen_active: set[str] = set()
     for line in text.splitlines():

@@ -8,6 +8,6 @@
       ansible.builtin.fail:
         msg: This playbook is for --syntax-check only; do not run it normally.
   roles:
-    - role: ludus_install_docker
+    - role: linux_install_docker
   vars:
     ludus_install_docker_user: debian

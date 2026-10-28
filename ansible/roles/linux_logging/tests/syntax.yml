@@ -8,4 +8,4 @@
       ansible.builtin.fail:
         msg: This playbook is for --syntax-check only; do not run it normally.
   roles:
-    - role: ludus_linux_logging
+    - role: linux_logging

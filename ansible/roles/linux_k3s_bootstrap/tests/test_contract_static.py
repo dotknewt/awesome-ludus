@@ -99,7 +99,7 @@ class K3sBootstrapContractStatic(unittest.TestCase):
 
     def test_metadata_and_platform_are_exact(self):
         metadata = ARTIFACTS.yaml(self, "meta/main.yml", dict)["galaxy_info"]
-        self.assertEqual(metadata["role_name"], "ludus_k3s_bootstrap")
+        self.assertEqual(metadata["role_name"], "linux_k3s_bootstrap")
         self.assertEqual(metadata["author"], "dotknewt")
         self.assertEqual(metadata["platforms"], [{"name": "Ubuntu", "versions": ["noble"]}])
 
@@ -112,6 +112,12 @@ class K3sBootstrapContractStatic(unittest.TestCase):
             "ansible_service_mgr == 'systemd'",
         ):
             self.assertIn(contract, preflight)
+
+    def test_persisted_owner_marker_keeps_legacy_protocol_identity(self):
+        artifacts = ARTIFACTS.read(self, "tasks/artifacts.yml")
+        preflight = ARTIFACTS.read(self, "tasks/preflight.yml")
+        self.assertIn("owner: ludus_k3s_bootstrap", artifacts)
+        self.assertIn("ludus_k3s_bootstrap_existing_owner.owner == 'ludus_k3s_bootstrap'", preflight)
 
     def test_release_urls_versions_digests_and_paths_are_frozen(self):
         pins = ARTIFACTS.yaml(self, "vars/artifacts.yml", dict)

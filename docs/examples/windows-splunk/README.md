@@ -7,16 +7,19 @@ placeholders/unverified and **must be checked against the target server** before
 use. Do not infer an installed role's identity from a repository directory or
 role metadata alone. The selected target server's Ludus version, template
 catalog, installed-role catalog, and exact role identities remain unverified.
-For the server specifically, the source directory is `linux_splunk_server` and
-metadata declares `linux_splunk_enterprise`, while this example retains
-`ludus_splunk_server`; use the identity reported by the target server and update
-the server's `roles` and dependent `depends_on.role` reference together.
+For the server specifically, the canonical source-local identity is
+`linux_splunk_server`, used by this example for both the server assignment and
+dependent `depends_on.role` reference. Older source/catalog aliases such as
+`ludus_splunk_server` and `ludus_splunk` are historical and are not current
+source-local references. Installed server identity remains unverified; confirm
+the target server identity before migrating a deployed range. See the staged
+[role identity migration guide](../../role-identity-migration.md).
 
 Before use, replace both `REPLACE_WITH_AVAILABLE_*_TEMPLATE` values with
 templates confirmed present on the target server, and replace
 `REPLACE_WITH_RESOLVABLE_SPLUNK_SERVER_ADDRESS` with an address resolvable from
 the Windows VM. Confirm from the target server that the illustrative role IDs
-`ludus_splunk_server`, `ludus_install_sysmon`, and `dotknewt.splunk_forwarder` are
+`linux_splunk_server`, `ludus_install_sysmon`, and `dotknewt.splunk_forwarder` are
 installed and accepted, and that the collector's `depends_on` role references
 match those installed IDs. The server VM is listed first, Sysmon is listed
 before the collector, and the collector declares dependencies on both the

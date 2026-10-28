@@ -10,4 +10,4 @@
       ansible.builtin.fail:
         msg: This playbook is for --syntax-check only; do not run it normally.
   roles:
-    - role: ludus_gitlab_ce
+    - role: linux_gitlab_ce

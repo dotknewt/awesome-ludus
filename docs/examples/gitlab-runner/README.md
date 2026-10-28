@@ -7,7 +7,7 @@ server before deployment.
 
 The server's explicit URL (`http://10.<range-second-octet>.10.10`) is also the
 Runner URL. `bootstrap_host` names the server VM's inventory identity, and
-`depends_on` orders the Runner role after `ludus_gitlab_ce`. CE creates the
+`depends_on` orders the Runner role after `linux_gitlab_ce`. CE creates the
 protected bootstrap credential; the Runner role creates a minimal demo project
 and project runner. No credential is included here.
 
@@ -17,11 +17,11 @@ its defaults. This example therefore explicitly supplies the existing
 as the URL and bootstrap option.
 
 The Runner role installs distribution `docker.io` itself and configures its
-own `gitlab-runner` account for Docker access. Do not add the legacy
-`linux_docker`/`ludus_install_docker` sibling role: it is unnecessary and
+own `gitlab-runner` account for Docker access. Do not add the
+`linux_install_docker` sibling role: it is unnecessary and
 hardcodes a Debian login account that this role intentionally does not assume.
 
-The role metadata declares `ludus_gitlab_ce` and `ludus_gitlab_runner` as role
+The role metadata declares `linux_gitlab_ce` and `linux_gitlab_runner` as role
 identities (the latter is authored by `dotknewt`). Metadata alone does not prove
 those identities are installed under those names on a particular Ludus server;
 confirm the installed role catalog before using this example. Likewise, Ludus

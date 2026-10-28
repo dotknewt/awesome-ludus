@@ -43,6 +43,7 @@
     ludus_gitlab_runner_parsed_toml: "{{ ludus_gitlab_runner_parsed_config.stdout | default('{}') | from_json }}"
 
 - name: Validate existing config ownership and runner identity before API changes
+  # Historical persisted ownership protocol, not the installed role name.
   ansible.builtin.assert:
     that:
       - >-

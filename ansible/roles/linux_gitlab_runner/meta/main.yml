@@ -1,6 +1,6 @@
 ---
 galaxy_info:
-  role_name: ludus_gitlab_runner
+  role_name: linux_gitlab_runner
   author: dotknewt
   description: Install and configure a Docker-executor GitLab Runner
   license: MIT

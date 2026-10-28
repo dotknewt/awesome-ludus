@@ -1,4 +1,4 @@
-# ludus_install_docker
+# linux_install_docker
 
 Installs Docker Engine, the Docker CLI, containerd, Buildx, and Compose from
 the official Docker Debian repository. The role also creates the `docker`
@@ -31,7 +31,7 @@ None.
   become: true
   gather_facts: true
   roles:
-    - ludus_install_docker
+    - linux_install_docker
 ```
 
 ## License

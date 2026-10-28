@@ -15,7 +15,7 @@ ROLE_DIR = Path(__file__).resolve().parents[1]
 PREFLIGHT = ROLE_DIR / "tasks" / "preflight.yml"
 INSTALL = ROLE_DIR / "tasks" / "install.yml"
 DEFAULTS = ROLE_DIR / "defaults" / "main.yml"
-DOCKER_ROLE = ROLE_DIR.parent / "ludus_install_docker"
+DOCKER_ROLE = ROLE_DIR.parent / "linux_install_docker"
 ANSIBLE_PLAYBOOK = Path(os.environ.get("ANSIBLE_PLAYBOOK", "ansible-playbook"))
 DEFAULT_VALUES = yaml.safe_load(DEFAULTS.read_text(encoding="utf-8"))
 
@@ -416,7 +416,7 @@ def test_rejected_malcolm_input_precedes_docker_role_mutation(tmp_path: Path) ->
     roles = tmp_path / "roles"
     roles.mkdir()
     (roles / "role_malcolm_install").symlink_to(ROLE_DIR, target_is_directory=True)
-    fake_docker = roles / "ludus_install_docker" / "tasks"
+    fake_docker = roles / "linux_install_docker" / "tasks"
     fake_docker.mkdir(parents=True)
     sentinel = tmp_path / "docker-role-ran"
     (fake_docker / "main.yml").write_text(
@@ -503,6 +503,6 @@ def test_docker_role_is_reused_after_preflight_for_selected_account() -> None:
     assert meta["dependencies"] == []
     assert packages[0] == {
         "name": "Install Docker for the selected Malcolm account",
-        "ansible.builtin.include_role": {"name": "ludus_install_docker"},
+        "ansible.builtin.include_role": {"name": "linux_install_docker"},
         "vars": {"ludus_install_docker_user": "{{ ludus_install_malcolm_user }}"},
     }

@@ -24,7 +24,7 @@ ludus:
     vlan: 10
     ip_last_octet: 11
     roles:
-      - ludus_splunk
+      - linux_splunk_server
     role_vars:
       splunk_server_enable_boot_start: true
 
@@ -41,7 +41,7 @@ ludus:
       - name: dotknewt.splunk_forwarder
         depends_on:
           - vm_name: "{{ range_id }}-splunk"
-            role: ludus_splunk
+            role: linux_splunk_server
     role_vars:
       splunk_forwarder_inputs:
         - name: "WinEventLog://Security"

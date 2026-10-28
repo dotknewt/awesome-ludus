@@ -125,7 +125,7 @@ class NativeLinuxLoggingStaticContract(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue((ROLE / path).is_file(), f"missing native role artifact: {path}")
         galaxy = self.meta.get("galaxy_info", {})
-        self.assertEqual(galaxy.get("role_name"), "ludus_linux_logging")
+        self.assertEqual(galaxy.get("role_name"), "linux_logging")
         self.assertEqual(galaxy.get("author"), "dotknewt")
         self.assertEqual(galaxy.get("min_ansible_version"), "2.16")
         self.assertEqual(self.meta.get("dependencies"), [], "the role must not depend on its collector sibling")
@@ -140,6 +140,15 @@ class NativeLinuxLoggingStaticContract(unittest.TestCase):
         self.assertEqual(self.defaults.get("ludus_linux_logging_laurel_user"), "_laurel")
         for key in self.defaults:
             self.assertTrue(key.startswith("ludus_linux_logging_"), f"un-namespaced default {key}")
+
+    def test_persisted_generated_file_markers_keep_legacy_protocol_identity(self):
+        marker = "Managed by ludus_linux_logging"
+        helper = _read(ROLE / "filter_plugins/ludus_linux_logging.py")
+        template = _read(ROLE / "templates/laurel.conf.j2")
+        tasks = _read(ROLE / "tasks/main.yml")
+        self.assertIn(marker, helper)
+        self.assertIn(marker, template)
+        self.assertIn(marker, tasks)
 
     def test_pinned_https_artifacts_and_transport_hash_provenance_are_declared(self):
         artifact_paths = (

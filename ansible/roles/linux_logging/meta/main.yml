@@ -1,6 +1,6 @@
 ---
 galaxy_info:
-  role_name: ludus_linux_logging
+  role_name: linux_logging
   author: dotknewt
   description: Install auditd and Laurel with a separately managed Linux audit policy fragment
   license: GPL-3.0-or-later

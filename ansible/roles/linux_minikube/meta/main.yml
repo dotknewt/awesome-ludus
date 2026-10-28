@@ -3,4 +3,4 @@ galaxy_info:
   role_name: ludus_install_minikube
   author: dotknewt
 dependencies:
-  - role: dotknewt.ludus_install_docker
+  - role: linux_install_docker

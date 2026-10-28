@@ -1,4 +1,4 @@
-# ludus_k3s_bootstrap
+# linux_k3s_bootstrap
 
 Installs a pinned native K3s single-server prerequisite on Ubuntu 24.04 amd64.
 K3s runs as a systemd service with its embedded containerd. The role neither
