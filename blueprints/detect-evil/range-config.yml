@@ -183,24 +183,24 @@ ludus:
       - name: splunk_forwarder
         depends_on:
           - vm_name: '{{ range_id }}-splunk'
-            role: linux_splunk_server
+            role: dotknewt.linux_splunk_server
       - name: linux_gitlab_runner
         depends_on:
           - vm_name: '{{ range_id }}-gitlab'
-            role: linux_gitlab_ce
-      - linux_k3s_bootstrap
+            role: dotknewt.linux_gitlab_ce
+      - dotknewt.linux_k3s_bootstrap
       - name: linux_logging
         depends_on:
           - vm_name: '{{ range_id }}-runner'
-            role: splunk_forwarder
+            role: dotknewt.splunk_forwarder
           - vm_name: '{{ range_id }}-runner'
-            role: linux_k3s_bootstrap
+            role: dotknewt.linux_k3s_bootstrap
       - name: splunk_container_logs
         depends_on:
           - vm_name: '{{ range_id }}-splunk'
-            role: linux_splunk_server
+            role: dotknewt.linux_splunk_server
           - vm_name: '{{ range_id }}-runner'
-            role: linux_k3s_bootstrap
+            role: dotknewt.linux_k3s_bootstrap
     role_vars:
       ludus_gitlab_runner_url: http://gitlab.evil.internal
       ludus_gitlab_runner_auth_token: ''
@@ -258,7 +258,7 @@ ludus:
       role: member
     roles:
       - dotknewt.ludus_install_sysmon
-      - splunk_forwarder
+      - dotknewt.splunk_forwarder
 
   - vm_name: "{{ range_id }}-linux"
     hostname: "{{ range_id }}-linux"
@@ -281,11 +281,11 @@ ludus:
       - name: splunk_forwarder
         depends_on:
           - vm_name: '{{ range_id }}-splunk'
-            role: linux_splunk_server
+            role: dotknewt.linux_splunk_server
       - name: linux_logging
         depends_on:
           - vm_name: '{{ range_id }}-linux'
-            role: splunk_forwarder
+            role: dotknewt.splunk_forwarder
     role_vars:
       ludus_linux_logging_read_users:
         - splunkfwd
