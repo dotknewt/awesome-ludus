@@ -124,7 +124,7 @@ ludus:
       role: member
     roles:
       - dotknewt.ludus_install_sysmon
-      - splunk_forwarder
+      - dotknewt.splunk_forwarder
       - badsectorlabs.ludus_adcs
     role_vars:
       ludus_adcs_domain: evil.internal

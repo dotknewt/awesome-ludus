@@ -5,10 +5,7 @@
 
 collections:
   - name: ansible.posix
-    version: ">=2.2.2"
   - name: community.crypto
-    version: ">=3.4.0"
 
 roles:
   - name: badsectorlabs.ludus_adcs
-    version: ">=1.7.0"
