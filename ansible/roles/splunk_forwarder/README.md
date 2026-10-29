@@ -56,6 +56,17 @@ download, installation, or configuration. Windows retains its input-driven
 configuration and standalone install/service flow; it does not install Sysmon
 or SILK and does not automatically subscribe to SILK.
 
+Windows member and standalone hosts are granted Event Log Readers membership
+for the SplunkForwarder service account. Domain controllers instead receive
+`SeSecurityPrivilege` for other service accounts (added without replacing other
+assigned accounts), because the local Event Log Readers group is unavailable on
+a DC. LocalSystem (recognized case-insensitively as `LocalSystem`, `SYSTEM`,
+`NT AUTHORITY\SYSTEM`, or SID `S-1-5-18`) bypasses both access assignments on
+all Windows hosts; it already runs as the built-in system identity. The service
+restarts for an access change only when `splunk_forwarder_start_service` is
+true. A domain Group Policy may override the user-right assignment, and
+assignment alone does not verify effective runtime access to the Security log.
+
 Linux targets remain Debian 13, Ubuntu 24.04 and Ubuntu 26.04, x86_64 with
 systemd. Forwarding uses cooked TCP without TLS; use only on a trusted lab
 network. Existing Linux managed paths and ownership marker, Windows install

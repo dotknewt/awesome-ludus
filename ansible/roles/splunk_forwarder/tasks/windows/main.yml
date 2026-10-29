@@ -85,6 +85,20 @@
     name: SplunkForwarder
   register: splunk_forwarder_account_info
 
+- name: Identify LocalSystem service identity  # noqa: var-naming[no-role-prefix]
+  ansible.builtin.set_fact:
+    splunk_forwarder_runs_as_local_system: >-
+      {{ splunk_forwarder_account_info.username | trim | lower in
+         ['localsystem', 'system', 'nt authority\\system', 's-1-5-18'] }}
+
+- name: Detect Windows domain controller role without changing host state  # noqa: var-naming[no-role-prefix]
+  ansible.windows.win_powershell:
+    script: |
+      $computer = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
+      $Ansible.Result = [int]$computer.DomainRole -in @(4, 5)
+      $Ansible.Changed = $false
+  register: splunk_forwarder_is_domain_controller
+
 - name: Resolve localized Event Log Readers group name  # noqa: var-naming[no-role-prefix]
   ansible.windows.win_powershell:
     script: |
@@ -92,6 +106,9 @@
       $Ansible.Result = $group.Name
       $Ansible.Changed = $false
   register: splunk_forwarder_event_log_readers_group
+  when:
+    - not splunk_forwarder_is_domain_controller.result
+    - not splunk_forwarder_runs_as_local_system
 
 - name: Add SplunkForwarder service account to Event Log Readers  # noqa: var-naming[no-role-prefix]
   ansible.windows.win_group_membership:
@@ -100,13 +117,28 @@
       - "{{ splunk_forwarder_account_info.username }}"
     state: present
   register: splunk_forwarder_event_log_readers_membership
+  when:
+    - not splunk_forwarder_is_domain_controller.result
+    - not splunk_forwarder_runs_as_local_system
 
-- name: Restart SplunkForwarder after Event Log Readers membership changes
+- name: Grant SplunkForwarder account Security log access on domain controllers  # noqa: var-naming[no-role-prefix]
+  ansible.windows.win_user_right:
+    name: SeSecurityPrivilege
+    users:
+      - "{{ splunk_forwarder_account_info.username }}"
+    action: add
+  register: splunk_forwarder_security_privilege
+  when:
+    - splunk_forwarder_is_domain_controller.result
+    - not splunk_forwarder_runs_as_local_system
+
+- name: Restart SplunkForwarder after access changes
   ansible.windows.win_service:
     name: SplunkForwarder
     state: restarted
   when:
-    - splunk_forwarder_event_log_readers_membership.changed
+    - not splunk_forwarder_runs_as_local_system
+    - (splunk_forwarder_security_privilege.changed if splunk_forwarder_is_domain_controller.result else splunk_forwarder_event_log_readers_membership.changed)
     - splunk_forwarder_start_service
 
 - name: Ensure local config directory exists
