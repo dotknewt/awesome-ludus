@@ -1,4 +1,4 @@
-# Repository instructions
+# Ludus repository
 
 ## Ludus skill documentation accuracy
 
@@ -8,15 +8,13 @@ When reviewing, adding, or creating Ludus skills, follow [the official documenta
 
 When authoring or reviewing Ludus sources, blueprints, range configs, or roles, follow the mandatory [Ludus authoring policy](docs/instructions/ludus-authoring.md). It distinguishes repository policy from official behavior and defines verification and evidence requirements.
 
-# Project workflow
-
 ## Live deployment debugging and retries
 
 - For live Ludus deployment debugging or retries, read and follow [`docs/instructions/live-debugging.md`](docs/instructions/live-debugging.md).
 
 ## Router state and recovery
 
-- Read the active session's router head once on entry or recovery, then use the cached result. A repeated reminder alone is not evidence of a state change.
+- For work managed by a session router, read the active session's router head once on entry or recovery, then use the cached result. A repeated reminder alone is not evidence of a state change.
 - Refresh only after a known external update, a restart, or an observed contradiction. After your own successful patch, use the resulting state without a verification reread.
 - If an identical read returns unchanged content, take the next substantive action or await the completion hook; stop the read loop.
 - After a restart, reconcile existing child IDs and saved results before resuming unfinished work. Reuse completed evidence; preserve interrupted edits and resume the original session.
