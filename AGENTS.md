@@ -10,6 +10,8 @@ When reviewing, adding, or creating Ludus skills, follow [the official documenta
 
 When authoring or reviewing Ludus sources, blueprints, range configs, or roles, follow the mandatory [Ludus authoring policy](docs/instructions/ludus-authoring.md). It distinguishes repository policy from official behavior and defines verification and evidence requirements.
 
+For static Ansible checks (`ansible-playbook --syntax-check`, `ansible-lint`, `yamllint`), use the `ansible-validation` skill and its bundled validator. Its inventory must cover every in-scope target and report unresolved paths or harnesses as coverage errors. A missing executable remains an unverified warning, not a pass.
+
 ## Live deployment debugging and retries
 
 - For live Ludus deployment debugging or retries, read and follow [`docs/instructions/live-debugging.md`](docs/instructions/live-debugging.md).
