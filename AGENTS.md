@@ -44,3 +44,12 @@ For static Ansible checks (`ansible-playbook --syntax-check`, `ansible-lint`, `y
   status; do not spawn docs-only report-correction rounds or retest unchanged
   files. Real code fixes still receive proportionate review.
 - Live deployment, guest probes, and destructive cleanup require their own authorization; verification gaps do not authorize those actions.
+
+## Shared instructions
+
+Before one of these tasks, read the matching shared file. Skip the files that do not match.
+
+- Ansible roles, playbooks, or YAML: `~/Projects/instructions/lang/ansible.instructions.md`
+- PowerShell scripts or modules: `~/Projects/instructions/lang/powershell.instructions.md`
+- shell scripts: `~/Projects/instructions/lang/shell.instructions.md`
+- Debian template or host guidance: `~/Projects/instructions/platform/debian-linux.instructions.md`
