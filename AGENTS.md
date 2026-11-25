@@ -1,7 +1,5 @@
 # Ludus repository
 
-- Before creating or locating a design, spec, implementation plan, or handoff, read `~/Projects/instructions/document-placement.instructions.md`.
-
 ## Ludus skill documentation accuracy
 
 When reviewing, adding, or creating Ludus skills, follow [the official documentation verification instructions](docs/instructions/ludus-skill-documentation.md). Verify factual guidance against current official Ludus documentation before completing the work.
@@ -44,12 +42,3 @@ For static Ansible checks (`ansible-playbook --syntax-check`, `ansible-lint`, `y
   status; do not spawn docs-only report-correction rounds or retest unchanged
   files. Real code fixes still receive proportionate review.
 - Live deployment, guest probes, and destructive cleanup require their own authorization; verification gaps do not authorize those actions.
-
-## Shared instructions
-
-Before one of these tasks, read the matching shared file. Skip the files that do not match.
-
-- Ansible roles, playbooks, or YAML: `~/Projects/instructions/lang/ansible.instructions.md`
-- PowerShell scripts or modules: `~/Projects/instructions/lang/powershell.instructions.md`
-- shell scripts: `~/Projects/instructions/lang/shell.instructions.md`
-- Debian template or host guidance: `~/Projects/instructions/platform/debian-linux.instructions.md`
