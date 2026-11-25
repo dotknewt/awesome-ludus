@@ -37,7 +37,7 @@ installation, deployment, guest probes, API calls, or live evaluation.
   Provenance: `/tmp/opencode/splunk-prelive-validation.txt`; these roles/tests
   were unchanged in the closeout validation.
 - Final validator command (same pre-rename paths noted above):
-  `python3 .opencode/skills/ansible-validation/scripts/validate.py --data docs/examples/windows-splunk/range-config.yml --data docs/examples/windows-splunk/requirements.yml --role ansible/roles/ludus_splunk_collector --role ansible/roles/ludus_splunk_server --role ansible/roles/ludus_linux_logging --role ansible/roles/ludus_install_sysmon --playbook ansible/roles/ludus_splunk_collector/tests/syntax-windows.yml`
+  `python3 ~/Projects/skills/ludus/ansible-validation/scripts/validate.py --data docs/examples/windows-splunk/range-config.yml --data docs/examples/windows-splunk/requirements.yml --role ansible/roles/ludus_splunk_collector --role ansible/roles/ludus_splunk_server --role ansible/roles/ludus_linux_logging --role ansible/roles/ludus_install_sysmon --playbook ansible/roles/ludus_splunk_collector/tests/syntax-windows.yml`
   **PASS:** 4 roles, 5 syntax targets, 5 lint targets, 42 yamllint targets,
   zero coverage errors. `ansible-playbook`, `ansible-lint`, and `yamllint` all
   passed; overall status PASS. Output provenance:

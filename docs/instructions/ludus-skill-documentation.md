@@ -1,6 +1,6 @@
 # Verify Ludus skills against official documentation
 
-Apply these instructions when reviewing existing Ludus skills or adding or creating new ones, including their reference files. Local skills live under `.opencode/skills/`.
+Apply these instructions when reviewing existing Ludus skills or adding or creating new ones, including their reference files. The skills are maintained in the Home repository under `~/Projects/skills/ludus/`, not in this repository.
 
 Adapted from [sync-ludus-docs](https://gitlab.com/badsectorlabs/ludus-skills/-/blob/main/.claude/commands/sync-ludus-docs.md). This instruction covers both maintenance and new skill authoring.
 
