@@ -1,7 +1,7 @@
 ---
 description: Run one requested live Ludus debugging cycle
 agent: build
-model: openai/gpt-6.1-sol#low
+model: openai/gpt-6-luna#low
 ---
 
 Run the live Ludus deployment debugging workflow for range `$1` and scope `$2`.
