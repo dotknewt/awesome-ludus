@@ -20,6 +20,7 @@
       $fallback = $false
       $exclusionAdded = $false
       $preferenceError = $null
+      $unmetPreferences = @()
       $paths = @($preference.ExclusionPath | ForEach-Object { [string]$_ })
       if ($Mode -eq 'disable') {
           $desired = @{
@@ -43,10 +44,16 @@
                   $preferenceError = $_.Exception.Message
               }
           }
+          $postPreference = Get-MpPreference -ErrorAction Stop
+          $unmetPreferences = @($desired.Keys | Where-Object {
+              [bool]$postPreference.$_ -ne [bool]$desired[$_]
+          })
       }
 
       $status = Get-MpComputerStatus -ErrorAction Stop
-      if ($Mode -eq 'disable' -and [bool]$status.RealTimeProtectionEnabled) {
+      if ($Mode -eq 'disable' -and (
+          [bool]$status.RealTimeProtectionEnabled -or $unmetPreferences.Count -gt 0
+      )) {
           $fallback = $true
           if (-not ($paths | Where-Object { $_ -ieq $InstallPath })) {
               Add-MpPreference -ExclusionPath $InstallPath -ErrorAction Stop
@@ -71,6 +78,7 @@
           exclusion_added = $exclusionAdded
           exclusion_present = [bool]($paths | Where-Object { $_ -ieq $InstallPath })
           preference_error = $preferenceError
+          unmet_preferences = @($unmetPreferences)
       }
     parameters:
       InstallPath: "{{ atomic_red_team_install_path_windows }}"
@@ -85,8 +93,12 @@
 - name: Report the Defender exclusion fallback
   ansible.builtin.debug:
     msg: >-
-      Windows Defender real-time protection remains enabled; falling back to a
-      Defender exclusion for {{ atomic_red_team_install_path_windows }}.
+      Windows Defender protection could not be fully disabled; falling back to
+      a Defender exclusion for {{ atomic_red_team_install_path_windows }}.
+      Unmet preferences:
+      {{ atomic_red_team_defender.result.unmet_preferences | default([], true) | join(', ') | default('none', true) }}.
+      Set-MpPreference error:
+      {{ atomic_red_team_defender.result.preference_error | default('none', true) }}.
   when:
     - atomic_red_team_defender.result.fallback | default(false) | bool
 
