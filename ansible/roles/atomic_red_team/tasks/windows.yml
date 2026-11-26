@@ -1,4 +1,438 @@
 ---
-- name: Atomic Red Team Windows placeholder
+- name: Check Windows Defender availability and apply the requested policy
+  ansible.windows.win_powershell:
+    error_action: stop
+    script: |
+      $Ansible.Changed = $false
+      $statusCommand = Get-Command Get-MpComputerStatus -ErrorAction SilentlyContinue
+      if ($null -eq $statusCommand) {
+          $Ansible.Result = [pscustomobject]@{
+              available = $false
+              realtime = $null
+              fallback = $false
+              exclusion_added = $false
+              exclusion_present = $false
+          }
+          return
+      }
+
+      $preference = Get-MpPreference -ErrorAction Stop
+      $fallback = $false
+      $exclusionAdded = $false
+      $paths = @($preference.ExclusionPath | ForEach-Object { [string]$_ })
+      if ($Mode -eq 'disable') {
+          $desired = @{
+              DisableRealtimeMonitoring = $true
+              DisableBehaviorMonitoring = $true
+              DisableIOAVProtection = $true
+              DisableScriptScanning = $true
+          }
+          $needsChange = $false
+          foreach ($name in $desired.Keys) {
+              if ([bool]$preference.$name -ne [bool]$desired[$name]) {
+                  $needsChange = $true
+              }
+          }
+          if ($needsChange) {
+              Set-MpPreference @desired -ErrorAction Stop
+              $Ansible.Changed = $true
+          }
+      }
+
+      $status = Get-MpComputerStatus -ErrorAction Stop
+      if ($Mode -eq 'disable' -and [bool]$status.RealTimeProtectionEnabled) {
+          $fallback = $true
+          if (-not ($paths | Where-Object { $_ -ieq $InstallPath })) {
+              Add-MpPreference -ExclusionPath $InstallPath -ErrorAction Stop
+              $Ansible.Changed = $true
+              $exclusionAdded = $true
+              $paths += $InstallPath
+          }
+      }
+      elseif ($Mode -eq 'exclude') {
+          if (-not ($paths | Where-Object { $_ -ieq $InstallPath })) {
+              Add-MpPreference -ExclusionPath $InstallPath -ErrorAction Stop
+              $Ansible.Changed = $true
+              $exclusionAdded = $true
+              $paths += $InstallPath
+          }
+      }
+
+      $Ansible.Result = [pscustomobject]@{
+          available = $true
+          realtime = [bool]$status.RealTimeProtectionEnabled
+          fallback = $fallback
+          exclusion_added = $exclusionAdded
+          exclusion_present = [bool]($paths | Where-Object { $_ -ieq $InstallPath })
+      }
+    parameters:
+      InstallPath: "{{ atomic_red_team_install_path_windows }}"
+      Mode: "{{ atomic_red_team_defender_mode }}"
+  register: atomic_red_team_defender
+
+- name: Report that Windows Defender is unavailable
   ansible.builtin.debug:
-    msg: Atomic Red Team Windows tasks will be added in a later task.
+    msg: "Windows Defender is unavailable; skipping Defender configuration."
+  when: not (atomic_red_team_defender.result.available | default(false) | bool)
+
+- name: Report the Defender exclusion fallback
+  ansible.builtin.debug:
+    msg: >-
+      Windows Defender real-time protection remains enabled; falling back to a
+      Defender exclusion for {{ atomic_red_team_install_path_windows }}.
+  when:
+    - atomic_red_team_defender.result.fallback | default(false) | bool
+
+- name: Refuse downloads when Defender protection has no exclusion
+  ansible.builtin.assert:
+    that:
+      - >-
+        not (
+          atomic_red_team_defender.result.available | default(false) | bool and
+          atomic_red_team_defender.result.realtime | default(false) | bool and
+          not (atomic_red_team_defender.result.exclusion_present | default(false) | bool)
+        )
+    fail_msg: >-
+      Windows Defender real-time protection is enabled and the Atomic Red Team
+      install path has no Defender exclusion; refusing to download atomics.
+
+- name: Enable TLS 1.2 for PowerShell downloads
+  ansible.windows.win_powershell:
+    error_action: stop
+    script: |
+      [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+      $Ansible.Changed = $false
+
+- name: Ensure the NuGet provider meets the minimum version
+  ansible.windows.win_powershell:
+    error_action: stop
+    script: |
+      $minimum = [version]'2.8.5.201'
+      $provider = @(Get-PackageProvider -Name NuGet -ListAvailable -ErrorAction SilentlyContinue) |
+          Sort-Object Version -Descending |
+          Select-Object -First 1
+      if ($null -eq $provider -or [version]$provider.Version -lt $minimum) {
+          Install-PackageProvider -Name NuGet -MinimumVersion $minimum -Force -ErrorAction Stop |
+              Out-Null
+          $Ansible.Changed = $true
+      }
+      else {
+          $Ansible.Changed = $false
+      }
+
+- name: Ensure the PowerShell Gallery is trusted
+  ansible.windows.win_powershell:
+    error_action: stop
+    script: |
+      $gallery = Get-PSRepository -Name PSGallery -ErrorAction Stop
+      if ([string]$gallery.InstallationPolicy -ne 'Trusted') {
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction Stop
+          $Ansible.Changed = $true
+      }
+      else {
+          $Ansible.Changed = $false
+      }
+
+- name: Install powershell-yaml for all users when necessary
+  ansible.windows.win_powershell:
+    error_action: stop
+    script: |
+      $roots = @(
+          "$env:ProgramFiles\WindowsPowerShell\Modules",
+          "$env:ProgramFiles\PowerShell\Modules",
+          "$env:ProgramW6432\WindowsPowerShell\Modules"
+      )
+      $machineModulePath = [Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')
+      if ($machineModulePath) {
+          $roots += $machineModulePath -split ';'
+      }
+      $roots = @($roots | Where-Object { $_ } | ForEach-Object {
+          $_.TrimEnd('\')
+      } | Select-Object -Unique)
+      $allUsersModule = @(Get-Module -ListAvailable -Name powershell-yaml -ErrorAction SilentlyContinue) |
+          Where-Object {
+              $base = $_.ModuleBase.TrimEnd('\')
+              $roots | Where-Object {
+                  $base.StartsWith($_ + '\', [StringComparison]::OrdinalIgnoreCase)
+              }
+          } |
+          Select-Object -First 1
+      if ($null -eq $allUsersModule) {
+          Install-Module -Name powershell-yaml -Scope AllUsers -Force -ErrorAction Stop
+          $Ansible.Changed = $true
+      }
+      else {
+          $Ansible.Changed = $false
+      }
+
+- name: Create the Atomic Red Team installation directory
+  ansible.windows.win_file:
+    path: "{{ atomic_red_team_install_path_windows }}"
+    state: directory
+
+- name: Check for the installed Atomic Red Team module
+  ansible.windows.win_stat:
+    path: '{{ atomic_red_team_install_path_windows }}\invoke-atomicredteam\Invoke-AtomicRedTeam.psd1'
+    get_checksum: false
+  register: atomic_red_team_module
+
+- name: Check for the installed atomics
+  ansible.windows.win_stat:
+    path: '{{ atomic_red_team_install_path_windows }}\atomics'
+    get_checksum: false
+  register: atomic_red_team_atomics
+  when: atomic_red_team_install_atomics | bool
+
+- name: Download the Atomic Red Team installer
+  ansible.windows.win_get_url:
+    url: "{{ atomic_red_team_installer_url }}"
+    dest: '{{ atomic_red_team_install_path_windows }}\install-atomicredteam.ps1'
+    validate_certs: true
+  when: not (atomic_red_team_module.stat.exists | default(false) | bool)
+
+- name: Run the Atomic Red Team installer
+  ansible.windows.win_powershell:
+    error_action: stop
+    script: |
+      . $InstallerScript
+      Install-AtomicRedTeam -InstallPath $InstallPath
+    parameters:
+      InstallerScript: '{{ atomic_red_team_install_path_windows }}\install-atomicredteam.ps1'
+      InstallPath: "{{ atomic_red_team_install_path_windows }}"
+  when: not (atomic_red_team_module.stat.exists | default(false) | bool)
+
+- name: Download the atomics installer
+  ansible.windows.win_get_url:
+    url: https://raw.githubusercontent.com/redcanaryco/invoke-atomicredteam/master/install-atomicsfolder.ps1
+    dest: '{{ atomic_red_team_install_path_windows }}\install-atomicsfolder.ps1'
+    validate_certs: true
+  when:
+    - atomic_red_team_install_atomics | bool
+    - not (atomic_red_team_atomics.stat.exists | default(false) | bool)
+
+- name: Run the atomics installer
+  ansible.windows.win_powershell:
+    error_action: stop
+    script: |
+      . $InstallerScript
+      if ($NoPayloads) {
+          Install-AtomicsFolder -InstallPath $InstallPath -NoPayloads
+      }
+      else {
+          Install-AtomicsFolder -InstallPath $InstallPath
+      }
+    parameters:
+      InstallerScript: '{{ atomic_red_team_install_path_windows }}\install-atomicsfolder.ps1'
+      InstallPath: "{{ atomic_red_team_install_path_windows }}"
+      NoPayloads: "{{ atomic_red_team_no_payloads }}"
+  when:
+    - atomic_red_team_install_atomics | bool
+    - not (atomic_red_team_atomics.stat.exists | default(false) | bool)
+
+- name: Verify the Atomic Red Team installation explicitly
+  ansible.windows.win_powershell:
+    error_action: stop
+    script: |
+      $moduleManifest = Join-Path $InstallPath 'invoke-atomicredteam\Invoke-AtomicRedTeam.psd1'
+      $atomicsPath = Join-Path $InstallPath 'atomics'
+      $errors = @()
+      $manifestExists = Test-Path -LiteralPath $moduleManifest -PathType Leaf
+      $commandResolves = $false
+      if (-not $manifestExists) {
+          $errors += "Atomic Red Team module manifest is missing: $moduleManifest"
+      }
+      else {
+          try {
+              Import-Module -Name $moduleManifest -Force -ErrorAction Stop | Out-Null
+              $commandResolves = $null -ne (Get-Command Invoke-AtomicTest -ErrorAction SilentlyContinue)
+              if (-not $commandResolves) {
+                  $errors += 'Get-Command Invoke-AtomicTest did not resolve after importing the module.'
+              }
+          }
+          catch {
+              $errors += "Import-Module failed: $($_.Exception.Message)"
+          }
+      }
+
+      $atomicsValid = $true
+      if ($InstallAtomics) {
+          $techniques = @(
+              Get-ChildItem -LiteralPath $atomicsPath -Directory -Filter 'T*' -ErrorAction SilentlyContinue
+          )
+          $atomicsValid = (Test-Path -LiteralPath $atomicsPath -PathType Container) -and
+              $techniques.Count -gt 0
+          if (-not $atomicsValid) {
+              $errors += "No atomic technique directories were found below: $atomicsPath"
+          }
+      }
+
+      $Ansible.Changed = $false
+      $Ansible.Result = [pscustomobject]@{
+          manifest_exists = $manifestExists
+          command_resolves = $commandResolves
+          atomics_valid = $atomicsValid
+          errors = @($errors)
+      }
+      if ($errors.Count -gt 0) {
+          $Ansible.Failed = $true
+      }
+    parameters:
+      InstallPath: "{{ atomic_red_team_install_path_windows }}"
+      InstallAtomics: "{{ atomic_red_team_install_atomics }}"
+
+- name: Collect PowerShell homes for the managed profiles
+  ansible.windows.win_powershell:
+    error_action: stop
+    script: |
+      $homes = @()
+      $powershell = Get-Command powershell.exe -ErrorAction SilentlyContinue
+      if ($null -ne $powershell) {
+          $home = (& powershell.exe -NoLogo -NoProfile -NonInteractive -Command '$PSHOME' | Out-String).Trim()
+          if ($home) {
+              $homes += $home
+          }
+      }
+      $pwsh = 'C:\Program Files\PowerShell\7\pwsh.exe'
+      if (Test-Path -LiteralPath $pwsh -PathType Leaf) {
+          $home = (& $pwsh -NoLogo -NoProfile -NonInteractive -Command '$PSHOME' | Out-String).Trim()
+          if ($home) {
+              $homes += $home
+          }
+      }
+      $Ansible.Changed = $false
+      $Ansible.Result = @($homes | Select-Object -Unique)
+  register: atomic_red_team_profile_homes
+
+- name: Fail when no PowerShell home was found
+  ansible.builtin.assert:
+    that:
+      - (atomic_red_team_profile_homes.result | default([]) | length) > 0
+    fail_msg: Unable to determine a PowerShell home for the Atomic Red Team profile.
+  register: atomic_red_team_profile_homes_assertion
+
+- name: Reconcile the managed Atomic Red Team profile block
+  ansible.windows.win_powershell:
+    error_action: stop
+    script: |
+      $profilePath = Join-Path $ProfileHome 'Microsoft.PowerShell_profile.ps1'
+      if (Test-Path -LiteralPath $profilePath -PathType Leaf) {
+          $existing = [System.IO.File]::ReadAllText($profilePath)
+      }
+      else {
+          $existing = ''
+      }
+
+      $modulePath = Join-Path $InstallPath 'invoke-atomicredteam\Invoke-AtomicRedTeam.psd1'
+      $atomicsPath = Join-Path $InstallPath 'atomics'
+      $begin = "# BEGIN $Marker (managed by Ansible)"
+      $end = "# END $Marker (managed by Ansible)"
+      $lines = @(
+          "Import-Module `"$modulePath`" -Force"
+      )
+      if ($InstallAtomics) {
+          $lines += '$PSDefaultParameterValues["Invoke-AtomicTest:PathToAtomicsFolder"] = "' +
+              $atomicsPath + '"'
+      }
+      $block = $begin + [Environment]::NewLine + ($lines -join [Environment]::NewLine) +
+          [Environment]::NewLine + $end
+
+      $pattern = '(?ms)^' + [regex]::Escape($begin) +
+          '\r?\n.*?^' + [regex]::Escape($end) + '(?:\r?\n|$)'
+      $matches = [regex]::Matches($existing, $pattern)
+      if ($matches.Count -gt 0) {
+          $match = $matches[0]
+          if ($match.Value.EndsWith("`r`n")) {
+              $ending = "`r`n"
+          }
+          elseif ($match.Value.EndsWith("`n")) {
+              $ending = "`n"
+          }
+          else {
+              $ending = ''
+          }
+          $replacement = $block + $ending
+          $updated = $existing.Remove($match.Index, $match.Length).Insert($match.Index, $replacement)
+      }
+      elseif ([string]::IsNullOrEmpty($existing)) {
+          $updated = $block
+      }
+      else {
+          $separator = if ($existing.EndsWith("`r`n") -or $existing.EndsWith("`n")) {
+              ''
+          }
+          else {
+              [Environment]::NewLine
+          }
+          $updated = $existing + $separator + $block
+      }
+
+      $Ansible.Changed = $updated -cne $existing
+      if ($Ansible.Changed) {
+          $utf8 = [System.Text.UTF8Encoding]::new($false)
+          [System.IO.File]::WriteAllText($profilePath, $updated, $utf8)
+      }
+    parameters:
+      ProfileHome: "{{ atomic_red_team_profile_home }}"
+      InstallPath: "{{ atomic_red_team_install_path_windows }}"
+      InstallAtomics: "{{ atomic_red_team_install_atomics }}"
+      Marker: "{{ atomic_red_team_profile_marker }}"
+  loop: "{{ atomic_red_team_profile_homes.result | default([]) }}"
+  loop_control:
+    loop_var: atomic_red_team_profile_home
+
+- name: Apply the requested execution policy when it is not GPO-controlled
+  ansible.windows.win_powershell:
+    error_action: stop
+    script: |
+      $policies = @(Get-ExecutionPolicy -List -ErrorAction Stop)
+      $observed = @($policies | ForEach-Object {
+          "$($_.Scope)=$($_.ExecutionPolicy)"
+      })
+      $effective = [string](Get-ExecutionPolicy -ErrorAction Stop)
+      $machine = [string](($policies | Where-Object Scope -eq 'MachinePolicy').ExecutionPolicy)
+      $user = [string](($policies | Where-Object Scope -eq 'UserPolicy').ExecutionPolicy)
+      $gpoControlled = (
+          $machine -and $machine -ne 'Undefined'
+      ) -or (
+          $user -and $user -ne 'Undefined'
+      )
+      $changed = $false
+      if ($effective -in @('Restricted', 'AllSigned') -and -not $gpoControlled) {
+          Set-ExecutionPolicy -Scope LocalMachine -ExecutionPolicy $Policy -Force -ErrorAction Stop
+          $changed = $true
+      }
+      $Ansible.Changed = $changed
+      $Ansible.Result = [pscustomobject]@{
+          effective = $effective
+          observed = $observed
+          gpo_controlled = $gpoControlled
+      }
+    parameters:
+      Policy: "{{ atomic_red_team_execution_policy }}"
+  register: atomic_red_team_execution_policy_result
+
+- name: Fail when a GPO controls a restrictive execution policy
+  ansible.builtin.fail:
+    msg: >-
+      Execution policy is {{ atomic_red_team_execution_policy_result.result.effective }}
+      and is controlled by MachinePolicy or UserPolicy:
+      {{ atomic_red_team_execution_policy_result.result.observed | join(', ') }}.
+  when: atomic_red_team_execution_policy_result.result.gpo_controlled | bool
+
+- name: Verify Invoke-AtomicTest in a fresh PowerShell session
+  ansible.windows.win_powershell:
+    error_action: stop
+    script: |
+      $output = & powershell.exe -NoLogo -Command "Get-Command Invoke-AtomicTest" 2>&1
+      $exitCode = $LASTEXITCODE
+      $text = ($output | Out-String).Trim()
+      $resolved = $exitCode -eq 0 -and $text -match 'Invoke-AtomicTest'
+      $Ansible.Changed = $false
+      $Ansible.Result = [pscustomobject]@{
+          exit_code = $exitCode
+          output = $text
+          resolved = $resolved
+      }
+      if (-not $resolved) {
+          $Ansible.Failed = $true
+      }
