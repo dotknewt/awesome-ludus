@@ -40,6 +40,24 @@ On Windows, `disable` requests Defender real-time protection be disabled.
 When protection remains on, the role falls back to an exclusion for the install
 path. `exclude` adds only that exclusion, and `none` makes no Defender changes.
 
+On Linux, an existing `pwsh` is used. If PowerShell is not already available,
+Debian 12/13 and Ubuntu 22.04/24.04/26.04 use Microsoft's
+`packages-microsoft-prod.deb` repository package, while Kali installs
+`powershell` from its own repository. An unsupported Linux distribution or
+version fails with an explicit message rather than attempting an unverified
+package source.
+
+On Windows, when the effective execution policy is `Restricted` or `AllSigned`,
+the role sets the machine-wide policy to `atomic_red_team_execution_policy` if
+neither `MachinePolicy` nor `UserPolicy` is enforcing the policy. If a
+restrictive policy is enforced by Group Policy, the role fails instead of
+claiming that the requested policy was applied.
+
+Before pending Windows downloads, the role refuses to continue when Defender
+real-time protection is active and the install path has no Defender exclusion.
+This safety check runs after the requested Defender policy and fallback
+exclusion handling.
+
 ## Example Ludus range config
 
 ```yaml

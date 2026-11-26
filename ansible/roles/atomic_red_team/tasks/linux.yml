@@ -170,11 +170,16 @@
     argv:
       - pwsh
       - -NoProfile
-      - -File
-      - "{{ atomic_red_team_install_path_linux }}/install-atomicredteam.ps1"
-      - -InstallPath
-      - "{{ atomic_red_team_install_path_linux }}"
+      - -Command
+      - >-
+        $installer = $env:ATOMIC_RED_TEAM_INSTALLER;
+        $installPath = $env:ATOMIC_RED_TEAM_INSTALL_PATH;
+        . $installer;
+        Install-AtomicRedTeam -InstallPath $installPath
     creates: "{{ atomic_red_team_install_path_linux }}/invoke-atomicredteam/Invoke-AtomicRedTeam.psd1"
+  environment:
+    ATOMIC_RED_TEAM_INSTALLER: "{{ atomic_red_team_install_path_linux }}/install-atomicredteam.ps1"
+    ATOMIC_RED_TEAM_INSTALL_PATH: "{{ atomic_red_team_install_path_linux }}"
   register: atomic_red_team_module_install
   become: true
   when: not atomic_red_team_module_manifest.stat.exists
@@ -184,12 +189,16 @@
     argv:
       - pwsh
       - -NoProfile
-      - -File
-      - "{{ atomic_red_team_install_path_linux }}/install-atomicsfolder.ps1"
-      - -InstallPath
-      - "{{ atomic_red_team_install_path_linux }}"
-      - -NoPayloads
+      - -Command
+      - >-
+        $installer = $env:ATOMIC_RED_TEAM_INSTALLER;
+        $installPath = $env:ATOMIC_RED_TEAM_INSTALL_PATH;
+        . $installer;
+        Install-AtomicsFolder -InstallPath $installPath -NoPayloads
     creates: "{{ atomic_red_team_install_path_linux }}/atomics"
+  environment:
+    ATOMIC_RED_TEAM_INSTALLER: "{{ atomic_red_team_install_path_linux }}/install-atomicsfolder.ps1"
+    ATOMIC_RED_TEAM_INSTALL_PATH: "{{ atomic_red_team_install_path_linux }}"
   register: atomic_red_team_atomics_install
   become: true
   when:
@@ -202,11 +211,16 @@
     argv:
       - pwsh
       - -NoProfile
-      - -File
-      - "{{ atomic_red_team_install_path_linux }}/install-atomicsfolder.ps1"
-      - -InstallPath
-      - "{{ atomic_red_team_install_path_linux }}"
+      - -Command
+      - >-
+        $installer = $env:ATOMIC_RED_TEAM_INSTALLER;
+        $installPath = $env:ATOMIC_RED_TEAM_INSTALL_PATH;
+        . $installer;
+        Install-AtomicsFolder -InstallPath $installPath
     creates: "{{ atomic_red_team_install_path_linux }}/atomics"
+  environment:
+    ATOMIC_RED_TEAM_INSTALLER: "{{ atomic_red_team_install_path_linux }}/install-atomicsfolder.ps1"
+    ATOMIC_RED_TEAM_INSTALL_PATH: "{{ atomic_red_team_install_path_linux }}"
   register: atomic_red_team_atomics_install
   become: true
   when:
@@ -272,7 +286,9 @@
     marker_end: END
     block: |
       Import-Module "{{ atomic_red_team_install_path_linux }}/invoke-atomicredteam/Invoke-AtomicRedTeam.psd1" -Force
+      {% if atomic_red_team_install_atomics %}
       $PSDefaultParameterValues["Invoke-AtomicTest:PathToAtomicsFolder"] = "{{ atomic_red_team_install_path_linux }}/atomics"
+      {% endif %}
   become: true
 
 - name: Verify Invoke-AtomicTest in a fresh PowerShell session
