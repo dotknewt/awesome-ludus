@@ -19,6 +19,7 @@
       $preference = Get-MpPreference -ErrorAction Stop
       $fallback = $false
       $exclusionAdded = $false
+      $preferenceError = $null
       $paths = @($preference.ExclusionPath | ForEach-Object { [string]$_ })
       if ($Mode -eq 'disable') {
           $desired = @{
@@ -34,8 +35,13 @@
               }
           }
           if ($needsChange) {
-              Set-MpPreference @desired -ErrorAction Stop
-              $Ansible.Changed = $true
+              try {
+                  Set-MpPreference @desired -ErrorAction Stop
+                  $Ansible.Changed = $true
+              }
+              catch {
+                  $preferenceError = $_.Exception.Message
+              }
           }
       }
 
@@ -64,6 +70,7 @@
           fallback = $fallback
           exclusion_added = $exclusionAdded
           exclusion_present = [bool]($paths | Where-Object { $_ -ieq $InstallPath })
+          preference_error = $preferenceError
       }
     parameters:
       InstallPath: "{{ atomic_red_team_install_path_windows }}"
@@ -82,19 +89,6 @@
       Defender exclusion for {{ atomic_red_team_install_path_windows }}.
   when:
     - atomic_red_team_defender.result.fallback | default(false) | bool
-
-- name: Refuse downloads when Defender protection has no exclusion
-  ansible.builtin.assert:
-    that:
-      - >-
-        not (
-          atomic_red_team_defender.result.available | default(false) | bool and
-          atomic_red_team_defender.result.realtime | default(false) | bool and
-          not (atomic_red_team_defender.result.exclusion_present | default(false) | bool)
-        )
-    fail_msg: >-
-      Windows Defender real-time protection is enabled and the Atomic Red Team
-      install path has no Defender exclusion; refusing to download atomics.
 
 - name: Enable TLS 1.2 for PowerShell downloads
   ansible.windows.win_powershell:
@@ -182,6 +176,26 @@
     get_checksum: false
   register: atomic_red_team_atomics
   when: atomic_red_team_install_atomics | bool
+
+- name: Refuse pending downloads when Defender protection has no exclusion
+  ansible.builtin.assert:
+    that:
+      - >-
+        not (
+          atomic_red_team_defender.result.available | default(false) | bool and
+          atomic_red_team_defender.result.realtime | default(false) | bool and
+          not (atomic_red_team_defender.result.exclusion_present | default(false) | bool)
+        )
+    fail_msg: >-
+      Windows Defender real-time protection is enabled and the Atomic Red Team
+      install path has no Defender exclusion; refusing to download atomics.
+  when:
+    - >-
+      (not (atomic_red_team_module.stat.exists | default(false) | bool)) or
+      (
+        atomic_red_team_install_atomics | bool and
+        not (atomic_red_team_atomics.stat.exists | default(false) | bool)
+      )
 
 - name: Download the Atomic Red Team installer
   ansible.windows.win_get_url:
@@ -368,7 +382,7 @@
 
       $Ansible.Changed = $updated -cne $existing
       if ($Ansible.Changed) {
-          $utf8 = [System.Text.UTF8Encoding]::new($false)
+          $utf8 = [System.Text.UTF8Encoding]::new($true)
           [System.IO.File]::WriteAllText($profilePath, $updated, $utf8)
       }
     parameters:
@@ -417,7 +431,9 @@
       Execution policy is {{ atomic_red_team_execution_policy_result.result.effective }}
       and is controlled by MachinePolicy or UserPolicy:
       {{ atomic_red_team_execution_policy_result.result.observed | join(', ') }}.
-  when: atomic_red_team_execution_policy_result.result.gpo_controlled | bool
+  when:
+    - atomic_red_team_execution_policy_result.result.effective in ['Restricted', 'AllSigned']
+    - atomic_red_team_execution_policy_result.result.gpo_controlled | bool
 
 - name: Verify Invoke-AtomicTest in a fresh PowerShell session
   ansible.windows.win_powershell:
