@@ -1,0 +1,20 @@
+manifest_version: 1
+id: test
+name: "test"
+description: test
+version: 1.0.0
+config: range-config.yml
+
+tags:
+  - active-directory
+  - adcs
+  - splunk
+  - detection-engineering
+  - kubernetes
+  - malcolm
+  - gitlab
+  - sysmon
+  - windows
+  - linux
+
+min_ludus_version: "2.0.0"
