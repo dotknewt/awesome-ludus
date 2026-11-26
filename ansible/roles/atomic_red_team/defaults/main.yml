@@ -1,0 +1,9 @@
+---
+atomic_red_team_install_path_windows: 'C:\Tools'
+atomic_red_team_install_path_linux: /opt/tools
+atomic_red_team_install_atomics: true
+atomic_red_team_no_payloads: false
+atomic_red_team_defender_mode: disable
+atomic_red_team_execution_policy: RemoteSigned
+atomic_red_team_installer_url: https://raw.githubusercontent.com/redcanaryco/invoke-atomicredteam/master/install-atomicredteam.ps1
+atomic_red_team_profile_marker: atomic_red_team

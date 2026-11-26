@@ -1,0 +1,8 @@
+---
+galaxy_info:
+  role_name: atomic_red_team
+  author: dotknewt
+  description: Install Invoke-AtomicRedTeam and its atomics on Windows and Linux.
+  license: GPL-3.0-only
+  min_ansible_version: "2.16"
+dependencies: []
