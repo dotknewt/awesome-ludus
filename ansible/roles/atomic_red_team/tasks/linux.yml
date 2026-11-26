@@ -1,4 +1,293 @@
 ---
-- name: Atomic Red Team Linux placeholder
-  ansible.builtin.debug:
-    msg: Atomic Red Team Linux tasks will be added in a later task.
+- name: Check whether PowerShell is already installed
+  ansible.builtin.command:
+    argv:
+      - pwsh
+      - -NoProfile
+      - -Command
+      - $PSHOME
+  register: atomic_red_team_pwsh_check
+  changed_when: false
+  failed_when: false
+
+- name: Reject unsupported Linux distributions for PowerShell installation
+  ansible.builtin.fail:
+    msg: >-
+      PowerShell installation is unsupported on {{ ansible_distribution }}
+      {{ ansible_distribution_version }}. Supported distributions and versions
+      are Debian 12 or 13, Ubuntu 22.04, 24.04, or 26.04, and Kali Linux
+      (using its own repository).
+  when:
+    - atomic_red_team_pwsh_check.rc != 0
+    - not (
+        (ansible_distribution == 'Kali')
+        or
+        (ansible_distribution == 'Debian' and
+         ansible_distribution_major_version in ['12', '13'])
+        or
+        (ansible_distribution == 'Ubuntu' and
+         ansible_distribution_version in ['22.04', '24.04', '26.04'])
+      )
+
+- name: Install APT prerequisites for Microsoft's PowerShell repository
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - wget
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  become: true
+  when:
+    - atomic_red_team_pwsh_check.rc != 0
+    - ansible_distribution in ['Debian', 'Ubuntu']
+
+- name: Download Microsoft's PowerShell repository package
+  ansible.builtin.get_url:
+    url: >-
+      https://packages.microsoft.com/config/{{
+        'debian/' ~ ansible_distribution_major_version
+        if ansible_distribution == 'Debian'
+        else 'ubuntu/' ~ ansible_distribution_version
+      }}/packages-microsoft-prod.deb
+    dest: /tmp/packages-microsoft-prod.deb
+    mode: '0644'
+  become: true
+  when:
+    - atomic_red_team_pwsh_check.rc != 0
+    - ansible_distribution in ['Debian', 'Ubuntu']
+
+- name: Register Microsoft's PowerShell repository
+  ansible.builtin.apt:
+    deb: /tmp/packages-microsoft-prod.deb
+    state: present
+  become: true
+  when:
+    - atomic_red_team_pwsh_check.rc != 0
+    - ansible_distribution in ['Debian', 'Ubuntu']
+
+- name: Remove Microsoft's PowerShell repository package
+  ansible.builtin.file:
+    path: /tmp/packages-microsoft-prod.deb
+    state: absent
+  become: true
+  when:
+    - atomic_red_team_pwsh_check.rc != 0
+    - ansible_distribution in ['Debian', 'Ubuntu']
+
+- name: Install PowerShell from Microsoft's repository
+  ansible.builtin.apt:
+    name: powershell
+    state: present
+    update_cache: true
+  become: true
+  when:
+    - atomic_red_team_pwsh_check.rc != 0
+    - ansible_distribution in ['Debian', 'Ubuntu']
+
+- name: Install PowerShell from the Kali repository
+  ansible.builtin.apt:
+    name: powershell
+    state: present
+    update_cache: true
+  become: true
+  when:
+    - atomic_red_team_pwsh_check.rc != 0
+    - ansible_distribution == 'Kali'
+
+- name: Ensure the Atomic Red Team installation directory exists
+  ansible.builtin.file:
+    path: "{{ atomic_red_team_install_path_linux }}"
+    state: directory
+    mode: '0755'
+  become: true
+
+- name: Check for the Invoke-AtomicRedTeam module manifest
+  ansible.builtin.stat:
+    path: "{{ atomic_red_team_install_path_linux }}/invoke-atomicredteam/Invoke-AtomicRedTeam.psd1"
+  register: atomic_red_team_module_manifest
+
+- name: Check for the atomics directory
+  ansible.builtin.stat:
+    path: "{{ atomic_red_team_install_path_linux }}/atomics"
+  register: atomic_red_team_atomics_directory
+
+- name: Derive the atomics installer URL
+  ansible.builtin.set_fact:
+    atomic_red_team_atomics_installer_url: >-
+      {{ atomic_red_team_installer_url |
+      regex_replace('install-atomicredteam\.ps1$', 'install-atomicsfolder.ps1') }}
+
+- name: Download the Invoke-AtomicRedTeam installer
+  ansible.builtin.get_url:
+    url: "{{ atomic_red_team_installer_url }}"
+    dest: "{{ atomic_red_team_install_path_linux }}/install-atomicredteam.ps1"
+    mode: '0755'
+  become: true
+  when: not atomic_red_team_module_manifest.stat.exists
+
+- name: Download the atomics installer
+  ansible.builtin.get_url:
+    url: "{{ atomic_red_team_atomics_installer_url }}"
+    dest: "{{ atomic_red_team_install_path_linux }}/install-atomicsfolder.ps1"
+    mode: '0755'
+  become: true
+  when:
+    - atomic_red_team_install_atomics
+    - not atomic_red_team_atomics_directory.stat.exists
+
+- name: Ensure powershell-yaml is installed for all users
+  ansible.builtin.command:
+    argv:
+      - pwsh
+      - -NoProfile
+      - -Command
+      - >-
+        $ErrorActionPreference = 'Stop';
+        $allUsersModulePaths = @(
+          '/usr/local/share/powershell/Modules',
+          '/usr/share/powershell/Modules',
+          (Join-Path $PSHOME 'Modules')
+        );
+        $module = $allUsersModulePaths |
+        ForEach-Object { Join-Path $_ 'powershell-yaml' } |
+        Where-Object { Test-Path $_ } |
+        Select-Object -First 1;
+        if (-not $module) {
+          Install-Module -Name powershell-yaml -Scope AllUsers -Force
+             -ErrorAction Stop;
+          Write-Output 'installed'
+        } else {
+          Write-Output 'present'
+        }
+  register: atomic_red_team_powershell_yaml
+  changed_when: "'installed' in atomic_red_team_powershell_yaml.stdout"
+  failed_when: atomic_red_team_powershell_yaml.rc != 0
+  become: true
+
+- name: Install Invoke-AtomicRedTeam
+  ansible.builtin.command:
+    argv:
+      - pwsh
+      - -NoProfile
+      - -File
+      - "{{ atomic_red_team_install_path_linux }}/install-atomicredteam.ps1"
+      - -InstallPath
+      - "{{ atomic_red_team_install_path_linux }}"
+    creates: "{{ atomic_red_team_install_path_linux }}/invoke-atomicredteam/Invoke-AtomicRedTeam.psd1"
+  register: atomic_red_team_module_install
+  become: true
+  when: not atomic_red_team_module_manifest.stat.exists
+
+- name: Install atomics without payloads
+  ansible.builtin.command:
+    argv:
+      - pwsh
+      - -NoProfile
+      - -File
+      - "{{ atomic_red_team_install_path_linux }}/install-atomicsfolder.ps1"
+      - -InstallPath
+      - "{{ atomic_red_team_install_path_linux }}"
+      - -NoPayloads
+    creates: "{{ atomic_red_team_install_path_linux }}/atomics"
+  register: atomic_red_team_atomics_install
+  become: true
+  when:
+    - atomic_red_team_install_atomics
+    - atomic_red_team_no_payloads
+    - not atomic_red_team_atomics_directory.stat.exists
+
+- name: Install atomics with payloads
+  ansible.builtin.command:
+    argv:
+      - pwsh
+      - -NoProfile
+      - -File
+      - "{{ atomic_red_team_install_path_linux }}/install-atomicsfolder.ps1"
+      - -InstallPath
+      - "{{ atomic_red_team_install_path_linux }}"
+    creates: "{{ atomic_red_team_install_path_linux }}/atomics"
+  register: atomic_red_team_atomics_install
+  become: true
+  when:
+    - atomic_red_team_install_atomics
+    - not atomic_red_team_no_payloads
+    - not atomic_red_team_atomics_directory.stat.exists
+
+- name: Verify Invoke-AtomicRedTeam and the atomics folder
+  ansible.builtin.command:
+    argv:
+      - pwsh
+      - -NoProfile
+      - -Command
+      - >-
+        $ErrorActionPreference = 'Stop';
+        $manifest = '{{ atomic_red_team_install_path_linux
+        }}/invoke-atomicredteam/Invoke-AtomicRedTeam.psd1';
+        if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) {
+          throw "Invoke-AtomicRedTeam manifest is missing: $manifest"
+        };
+        Import-Module -Name $manifest -Force -ErrorAction Stop;
+        if (-not (Get-Command Invoke-AtomicTest -ErrorAction SilentlyContinue)) {
+          throw 'Invoke-AtomicTest is not available after importing the module'
+        };
+        {% if atomic_red_team_install_atomics %}
+        $atomics = '{{ atomic_red_team_install_path_linux }}/atomics';
+        if (-not (Test-Path -LiteralPath $atomics -PathType Container)) {
+          throw "Atomics directory is missing: $atomics"
+        };
+        $techniques = @(Get-ChildItem -LiteralPath $atomics -Directory |
+          Where-Object { $_.Name -match '^T\d{4}(?:\.\d+)?$' });
+        if ($techniques.Count -eq 0) {
+          throw "No technique folders found in $atomics"
+        };
+        {% endif %}
+        Write-Output 'Invoke-AtomicRedTeam verification passed'
+  register: atomic_red_team_verification
+  changed_when: false
+  failed_when: atomic_red_team_verification.rc != 0
+  become: true
+
+- name: Resolve the PowerShell home directory
+  ansible.builtin.command:
+    argv:
+      - pwsh
+      - -NoProfile
+      - -Command
+      - $PSHOME
+  register: atomic_red_team_pshome
+  changed_when: false
+  failed_when: >-
+    atomic_red_team_pshome.rc != 0 or
+    atomic_red_team_pshome.stdout | trim | length == 0
+  become: true
+
+- name: Configure the AllUsers PowerShell profile
+  ansible.builtin.blockinfile:
+    path: "{{ atomic_red_team_pshome.stdout | trim }}/Microsoft.PowerShell_profile.ps1"
+    create: true
+    mode: '0644'
+    marker: "# {mark} {{ atomic_red_team_profile_marker }} (managed by Ansible)"
+    marker_begin: BEGIN
+    marker_end: END
+    block: |
+      Import-Module "{{ atomic_red_team_install_path_linux }}/invoke-atomicredteam/Invoke-AtomicRedTeam.psd1" -Force
+      $PSDefaultParameterValues["Invoke-AtomicTest:PathToAtomicsFolder"] = "{{ atomic_red_team_install_path_linux }}/atomics"
+  become: true
+
+- name: Verify Invoke-AtomicTest in a fresh PowerShell session
+  ansible.builtin.command:
+    argv:
+      - pwsh
+      - -NoLogo
+      - -Command
+      - >-
+        $ErrorActionPreference = 'Stop';
+        if (-not (Get-Command Invoke-AtomicTest
+        -ErrorAction SilentlyContinue)) {
+          throw 'Invoke-AtomicTest is not available in a fresh session'
+        }
+  register: atomic_red_team_fresh_session
+  changed_when: false
+  failed_when: atomic_red_team_fresh_session.rc != 0
+  become: true
