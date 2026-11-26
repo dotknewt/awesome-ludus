@@ -1,0 +1,4 @@
+---
+- name: Atomic Red Team Linux placeholder
+  ansible.builtin.debug:
+    msg: Atomic Red Team Linux tasks will be added in a later task.

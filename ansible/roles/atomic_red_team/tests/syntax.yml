@@ -1,0 +1,13 @@
+---
+# Static parser target only. Ordinary play execution stops unconditionally
+# before the role. Dynamic include_tasks bodies are not recursively executed
+# or fully validated by ansible-playbook --syntax-check.
+- name: Parse the Atomic Red Team role entrypoint without executing it
+  hosts: localhost
+  gather_facts: false
+  pre_tasks:
+    - name: Stop before Atomic Red Team role tasks during ordinary execution
+      ansible.builtin.fail:
+        msg: This play is for ansible-playbook --syntax-check only.
+  roles:
+    - role: atomic_red_team

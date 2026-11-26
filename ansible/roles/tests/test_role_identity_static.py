@@ -15,6 +15,7 @@ IDENTITIES = {
     "linux_gitlab_runner": ("dotknewt", "linux_gitlab_runner"),
     "linux_k3s_bootstrap": ("dotknewt", "linux_k3s_bootstrap"),
     "linux_install_docker": ("dotknewt", "linux_install_docker"),
+    "atomic_red_team": ("dotknewt", "atomic_red_team"),
 }
 
 

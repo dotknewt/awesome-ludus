@@ -1,0 +1,13 @@
+---
+- name: Install Atomic Red Team on Windows
+  ansible.builtin.include_tasks: windows.yml
+  when: ansible_os_family == 'Windows'
+
+- name: Install Atomic Red Team on Debian-family Linux
+  ansible.builtin.include_tasks: linux.yml
+  when: ansible_os_family == 'Debian'
+
+- name: Reject unsupported operating systems
+  ansible.builtin.fail:
+    msg: "unsupported OS family {{ ansible_os_family }}"
+  when: ansible_os_family not in ['Windows', 'Debian']

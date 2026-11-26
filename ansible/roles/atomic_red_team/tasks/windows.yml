@@ -1,0 +1,4 @@
+---
+- name: Atomic Red Team Windows placeholder
+  ansible.builtin.debug:
+    msg: Atomic Red Team Windows tasks will be added in a later task.

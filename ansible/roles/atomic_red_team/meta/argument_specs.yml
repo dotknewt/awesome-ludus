@@ -1,0 +1,49 @@
+---
+argument_specs:
+  main:
+    short_description: Install Invoke-AtomicRedTeam and its atomics.
+    options:
+      atomic_red_team_install_path_windows:
+        type: str
+        required: false
+        default: 'C:\Tools'
+        description: Windows installation path for Invoke-AtomicRedTeam and atomics.
+      atomic_red_team_install_path_linux:
+        type: str
+        required: false
+        default: /opt/tools
+        description: Linux installation path for Invoke-AtomicRedTeam and atomics.
+      atomic_red_team_install_atomics:
+        type: bool
+        required: false
+        default: true
+        description: Install the atomics folder.
+      atomic_red_team_no_payloads:
+        type: bool
+        required: false
+        default: false
+        description: Do not download atomic test payloads.
+      atomic_red_team_defender_mode:
+        type: str
+        required: false
+        default: disable
+        choices:
+          - disable
+          - exclude
+          - none
+        description: Windows Defender handling mode.
+      atomic_red_team_execution_policy:
+        type: str
+        required: false
+        default: RemoteSigned
+        description: PowerShell execution policy used by the role.
+      atomic_red_team_installer_url:
+        type: str
+        required: false
+        default: https://raw.githubusercontent.com/redcanaryco/invoke-atomicredteam/master/install-atomicredteam.ps1
+        description: URL of the upstream Invoke-AtomicRedTeam installer.
+      atomic_red_team_profile_marker:
+        type: str
+        required: false
+        default: atomic_red_team
+        description: Marker name for the managed PowerShell profile block.
