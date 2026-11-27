@@ -7,7 +7,7 @@ import unittest
 import yaml
 
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[1]
 IDENTITIES = {
     "linux_splunk_server": ("dotknewt", "linux_splunk_server"),
     "linux_gitlab_ce": ("dotknewt", "linux_gitlab_ce"),
