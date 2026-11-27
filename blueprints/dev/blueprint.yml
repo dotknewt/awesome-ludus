@@ -1,7 +1,7 @@
 manifest_version: 1
-id: test
-name: "test"
-description: test
+id: dev
+name: "dev"
+description: dev
 version: 1.0.0
 config: range-config.yml
 
