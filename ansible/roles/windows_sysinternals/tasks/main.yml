@@ -55,3 +55,59 @@
     elements: "{{ sysinternals_install_dir }}"
     scope: machine
     state: present
+
+# Tools read the global HKCU\Software\Sysinternals\EulaAccepted value. Write it
+# to the Default profile (future users) and every existing user profile.
+- name: Pre-accept the Sysinternals EULA for existing and future users
+  when: sysinternals_accept_eula | bool
+  ansible.windows.win_powershell:
+    error_action: stop
+    script: |
+      $Ansible.Changed = $false
+
+      function Set-EulaAccepted {
+          param([string]$HiveRoot)
+          $path = "Registry::$HiveRoot\Software\Sysinternals"
+          if (-not (Test-Path -LiteralPath $path)) {
+              New-Item -Path $path -Force | Out-Null
+          }
+          $current = (Get-ItemProperty -LiteralPath $path -Name EulaAccepted -ErrorAction SilentlyContinue).EulaAccepted
+          if ($current -ne 1) {
+              New-ItemProperty -LiteralPath $path -Name EulaAccepted -PropertyType DWord -Value 1 -Force | Out-Null
+              $Ansible.Changed = $true
+          }
+      }
+
+      $targets = @(
+          [pscustomobject]@{ Sid = 'Default'; Hive = Join-Path $env:SystemDrive 'Users\Default\NTUSER.DAT' }
+      )
+      $profileList = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList'
+      foreach ($key in Get-ChildItem -LiteralPath $profileList) {
+          if ($key.PSChildName -notlike 'S-1-5-21-*') { continue }
+          $profilePath = [Environment]::ExpandEnvironmentVariables([string]$key.GetValue('ProfileImagePath'))
+          $targets += [pscustomobject]@{ Sid = $key.PSChildName; Hive = Join-Path $profilePath 'NTUSER.DAT' }
+      }
+
+      foreach ($target in $targets) {
+          $loadedRoot = "HKEY_USERS\$($target.Sid)"
+          if ($target.Sid -ne 'Default' -and (Test-Path -LiteralPath "Registry::$loadedRoot")) {
+              Set-EulaAccepted -HiveRoot $loadedRoot
+              continue
+          }
+          if (-not (Test-Path -LiteralPath $target.Hive)) { continue }
+          $mount = "HKEY_USERS\AnsibleSysinternals_$($target.Sid)"
+          & reg.exe load $mount $target.Hive | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+              throw "reg.exe load failed for $($target.Hive) (exit $LASTEXITCODE)"
+          }
+          try {
+              Set-EulaAccepted -HiveRoot $mount
+          } finally {
+              [gc]::Collect()
+              [gc]::WaitForPendingFinalizers()
+              & reg.exe unload $mount | Out-Null
+              if ($LASTEXITCODE -ne 0) {
+                  throw "reg.exe unload failed for $mount (exit $LASTEXITCODE)"
+              }
+          }
+      }
