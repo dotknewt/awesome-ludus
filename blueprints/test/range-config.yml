@@ -97,6 +97,7 @@ ludus:
       fqdn: evil.internal
       role: member
     roles:
+      - dotknewt.atomic_red_team
       - dotknewt.windows_logging_policy
       - dotknewt.ludus_install_sysmon
       - name: dotknewt.splunk_forwarder
@@ -122,6 +123,7 @@ ludus:
         - pipx
         - ncat
     roles:
+      - dotknewt.atomic_red_team
       - name: dotknewt.splunk_forwarder
         depends_on:
           - vm_name: '{{ range_id }}-splunk'
