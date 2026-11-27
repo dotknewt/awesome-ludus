@@ -1,11 +1,13 @@
 ---
+# Public inputs use the short sysinternals_ prefix (approved design), not the
+# role-directory prefix that ansible-lint derives.
 # Directory that receives the extracted suite. Shared with other tool roles;
 # this role only adds and overwrites files, it never cleans the directory.
-sysinternals_install_dir: 'C:\Tools'
-sysinternals_suite_url: https://download.sysinternals.com/files/SysinternalsSuite.zip
+sysinternals_install_dir: 'C:\Tools'  # noqa: var-naming[no-role-prefix]
+sysinternals_suite_url: https://download.sysinternals.com/files/SysinternalsSuite.zip  # noqa: var-naming[no-role-prefix]
 # Optional SHA256 of the downloaded zip. Empty skips checksum verification.
-sysinternals_suite_sha256: ""
+sysinternals_suite_sha256: ""  # noqa: var-naming[no-role-prefix]
 # Re-download and overwrite the suite on every run.
-sysinternals_update: false
-sysinternals_add_to_path: true
-sysinternals_accept_eula: true
+sysinternals_update: false  # noqa: var-naming[no-role-prefix]
+sysinternals_add_to_path: true  # noqa: var-naming[no-role-prefix]
+sysinternals_accept_eula: true  # noqa: var-naming[no-role-prefix]
