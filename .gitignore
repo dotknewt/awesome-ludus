@@ -53,6 +53,7 @@ Temporary Items
 .env/
 .pytest_cache
 __pycache__/
+.ruff_cache/
 
 # Local orchestration state
 .slim/deepwork/
