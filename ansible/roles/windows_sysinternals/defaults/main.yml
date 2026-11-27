@@ -1,0 +1,11 @@
+---
+# Directory that receives the extracted suite. Shared with other tool roles;
+# this role only adds and overwrites files, it never cleans the directory.
+sysinternals_install_dir: 'C:\Tools'
+sysinternals_suite_url: https://download.sysinternals.com/files/SysinternalsSuite.zip
+# Optional SHA256 of the downloaded zip. Empty skips checksum verification.
+sysinternals_suite_sha256: ""
+# Re-download and overwrite the suite on every run.
+sysinternals_update: false
+sysinternals_add_to_path: true
+sysinternals_accept_eula: true

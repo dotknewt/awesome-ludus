@@ -1,0 +1,113 @@
+---
+- name: Assert that host is a supported Operating System
+  ansible.builtin.assert:
+    that: >
+      ansible_distribution is search("Microsoft Windows Server 2016") or
+      ansible_distribution is search("Microsoft Windows Server 2019") or
+      ansible_distribution is search("Microsoft Windows Server 2022") or
+      ansible_distribution is search("Microsoft Windows 10") or
+      ansible_distribution is search("Microsoft Windows 11")
+    msg: "{{ ansible_distribution }} is not a supported Operating System for this role."
+    quiet: true
+
+- name: Check for an existing Sysinternals installation
+  ansible.windows.win_stat:
+    path: '{{ sysinternals_install_dir }}\procexp64.exe'
+  register: sysinternals_marker
+
+- name: Download and extract the Sysinternals suite
+  when: not sysinternals_marker.stat.exists or sysinternals_update | bool
+  block:
+    - name: Create a staging directory
+      ansible.windows.win_tempfile:
+        state: directory
+        suffix: sysinternals
+      register: sysinternals_staging
+
+    - name: Download the Sysinternals suite
+      ansible.windows.win_get_url:
+        url: "{{ sysinternals_suite_url }}"
+        dest: '{{ sysinternals_staging.path }}\SysinternalsSuite.zip'
+        checksum: "{{ sysinternals_suite_sha256 if sysinternals_suite_sha256 | length > 0 else omit }}"
+        checksum_algorithm: "{{ 'sha256' if sysinternals_suite_sha256 | length > 0 else omit }}"
+        force: true
+
+    - name: Ensure the install directory exists
+      ansible.windows.win_file:
+        path: "{{ sysinternals_install_dir }}"
+        state: directory
+
+    - name: Extract the Sysinternals suite
+      community.windows.win_unzip:
+        src: '{{ sysinternals_staging.path }}\SysinternalsSuite.zip'
+        dest: "{{ sysinternals_install_dir }}"
+  always:
+    - name: Remove the staging directory
+      when: sysinternals_staging.path is defined
+      ansible.windows.win_file:
+        path: "{{ sysinternals_staging.path }}"
+        state: absent
+      changed_when: false
+
+- name: Add the install directory to the machine PATH
+  when: sysinternals_add_to_path | bool
+  ansible.windows.win_path:
+    elements: "{{ sysinternals_install_dir }}"
+    scope: machine
+    state: present
+
+# Tools read the global HKCU\Software\Sysinternals\EulaAccepted value. Write it
+# to the Default profile (future users) and every existing user profile.
+- name: Pre-accept the Sysinternals EULA for existing and future users
+  when: sysinternals_accept_eula | bool
+  ansible.windows.win_powershell:
+    error_action: stop
+    script: |
+      $Ansible.Changed = $false
+
+      function Set-EulaAccepted {
+          param([string]$HiveRoot)
+          $path = "Registry::$HiveRoot\Software\Sysinternals"
+          if (-not (Test-Path -LiteralPath $path)) {
+              New-Item -Path $path -Force | Out-Null
+          }
+          $current = (Get-ItemProperty -LiteralPath $path -Name EulaAccepted -ErrorAction SilentlyContinue).EulaAccepted
+          if ($current -ne 1) {
+              New-ItemProperty -LiteralPath $path -Name EulaAccepted -PropertyType DWord -Value 1 -Force | Out-Null
+              $Ansible.Changed = $true
+          }
+      }
+
+      $targets = @(
+          [pscustomobject]@{ Sid = 'Default'; Hive = Join-Path $env:SystemDrive 'Users\Default\NTUSER.DAT' }
+      )
+      $profileList = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList'
+      foreach ($key in Get-ChildItem -LiteralPath $profileList) {
+          if ($key.PSChildName -notlike 'S-1-5-21-*') { continue }
+          $profilePath = [Environment]::ExpandEnvironmentVariables([string]$key.GetValue('ProfileImagePath'))
+          $targets += [pscustomobject]@{ Sid = $key.PSChildName; Hive = Join-Path $profilePath 'NTUSER.DAT' }
+      }
+
+      foreach ($target in $targets) {
+          $loadedRoot = "HKEY_USERS\$($target.Sid)"
+          if ($target.Sid -ne 'Default' -and (Test-Path -LiteralPath "Registry::$loadedRoot")) {
+              Set-EulaAccepted -HiveRoot $loadedRoot
+              continue
+          }
+          if (-not (Test-Path -LiteralPath $target.Hive)) { continue }
+          $mount = "HKEY_USERS\AnsibleSysinternals_$($target.Sid)"
+          & reg.exe load $mount $target.Hive | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+              throw "reg.exe load failed for $($target.Hive) (exit $LASTEXITCODE)"
+          }
+          try {
+              Set-EulaAccepted -HiveRoot $mount
+          } finally {
+              [gc]::Collect()
+              [gc]::WaitForPendingFinalizers()
+              & reg.exe unload $mount | Out-Null
+              if ($LASTEXITCODE -ne 0) {
+                  throw "reg.exe unload failed for $mount (exit $LASTEXITCODE)"
+              }
+          }
+      }
