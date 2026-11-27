@@ -3,6 +3,11 @@
   ansible.windows.win_powershell:
     error_action: stop
     script: |
+      param(
+          [string]$InstallPath,
+          [string]$Mode
+      )
+
       $Ansible.Changed = $false
       $statusCommand = Get-Command Get-MpComputerStatus -ErrorAction SilentlyContinue
       if ($null -eq $statusCommand) {
@@ -235,6 +240,11 @@
   ansible.windows.win_powershell:
     error_action: stop
     script: |
+      param(
+          [string]$InstallerScript,
+          [string]$InstallPath
+      )
+
       . $InstallerScript
       Install-AtomicRedTeam -InstallPath $InstallPath
     parameters:
@@ -255,6 +265,12 @@
   ansible.windows.win_powershell:
     error_action: stop
     script: |
+      param(
+          [string]$InstallerScript,
+          [string]$InstallPath,
+          [bool]$NoPayloads
+      )
+
       . $InstallerScript
       if ($NoPayloads) {
           Install-AtomicsFolder -InstallPath $InstallPath -NoPayloads
@@ -274,6 +290,11 @@
   ansible.windows.win_powershell:
     error_action: stop
     script: |
+      param(
+          [string]$InstallPath,
+          [bool]$InstallAtomics
+      )
+
       $moduleManifest = Join-Path $InstallPath 'invoke-atomicredteam\Invoke-AtomicRedTeam.psd1'
       $atomicsPath = Join-Path $InstallPath 'atomics'
       $errors = @()
@@ -355,6 +376,13 @@
   ansible.windows.win_powershell:
     error_action: stop
     script: |
+      param(
+          [string]$ProfileHome,
+          [string]$InstallPath,
+          [bool]$InstallAtomics,
+          [string]$Marker
+      )
+
       $profilePath = Join-Path $ProfileHome 'Microsoft.PowerShell_profile.ps1'
       if (Test-Path -LiteralPath $profilePath -PathType Leaf) {
           $existing = [System.IO.File]::ReadAllText($profilePath)
@@ -425,6 +453,10 @@
   ansible.windows.win_powershell:
     error_action: stop
     script: |
+      param(
+          [string]$Policy
+      )
+
       $policies = @(Get-ExecutionPolicy -List -ErrorAction Stop)
       $observed = @($policies | ForEach-Object {
           "$($_.Scope)=$($_.ExecutionPolicy)"
