@@ -3,12 +3,31 @@
   ansible.windows.win_powershell:
     error_action: stop
     script: |
+      param([bool]$InstallAtomics = $true)
       $Ansible.Changed = $false
       $statusCommand = Get-Command Get-MpComputerStatus -ErrorAction SilentlyContinue
       if ($null -eq $statusCommand) {
+          throw 'Defender state unknown: Get-MpComputerStatus is unavailable.'
+      }
+      $service = Get-Service -Name WinDefend -ErrorAction Stop
+      if ($service.Status -eq 'Stopped' -and $service.StartType -eq 'Disabled') {
+          try {
+              $status = Get-MpComputerStatus -ErrorAction Stop
+          } catch {
+              throw "Defender state unknown: $($_.Exception.Message)"
+          }
+          foreach ($name in 'AMServiceEnabled', 'AntivirusEnabled', 'RealTimeProtectionEnabled') {
+              if ($status.$name -isnot [bool] -or $status.$name) {
+                  throw "Defender state unknown: WinDefend is stopped and disabled but $name is not explicitly false."
+              }
+          }
+          if ($InstallAtomics) {
+              throw 'WinDefend is stopped and disabled; refusing the requested atomics installation.'
+          }
           $Ansible.Result = [pscustomobject]@{
-              available = $false
-              realtime = $null
+              inactive_module_only = $true
+              available = $true
+              realtime = $false
               fallback = $false
               exclusion_added = $false
               exclusion_present = $false
@@ -81,14 +100,15 @@
           unmet_preferences = @($unmetPreferences)
       }
     parameters:
+      InstallAtomics: "{{ atomic_red_team_install_atomics | bool }}"
       InstallPath: "{{ atomic_red_team_install_path_windows }}"
       Mode: "{{ atomic_red_team_defender_mode }}"
   register: atomic_red_team_defender
 
-- name: Report that Windows Defender is unavailable
+- name: Report the module-only installation on a host with inactive Defender
   ansible.builtin.debug:
-    msg: "Windows Defender is unavailable; skipping Defender configuration."
-  when: not (atomic_red_team_defender.result.available | default(false) | bool)
+    msg: "WinDefend is stopped and disabled; continuing without reading or changing Defender preferences."
+  when: atomic_red_team_defender.result.inactive_module_only | default(false) | bool
 
 - name: Report the Defender exclusion fallback
   ansible.builtin.debug:
