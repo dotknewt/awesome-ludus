@@ -57,6 +57,7 @@ __pycache__/
 
 # Local orchestration state
 .slim/deepwork/
+/.tmp/
 # worktrees
 .worktrees/
 # BEGIN oh-my-opencode-slim worktrees

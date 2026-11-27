@@ -349,16 +349,16 @@
       $homes = @()
       $powershell = Get-Command powershell.exe -ErrorAction SilentlyContinue
       if ($null -ne $powershell) {
-          $home = (& powershell.exe -NoLogo -NoProfile -NonInteractive -Command '$PSHOME' | Out-String).Trim()
-          if ($home) {
-              $homes += $home
+          $shellHome = (& powershell.exe -NoLogo -NoProfile -NonInteractive -Command '$PSHOME' | Out-String).Trim()
+          if ($shellHome) {
+              $homes += $shellHome
           }
       }
       $pwsh = 'C:\Program Files\PowerShell\7\pwsh.exe'
       if (Test-Path -LiteralPath $pwsh -PathType Leaf) {
-          $home = (& $pwsh -NoLogo -NoProfile -NonInteractive -Command '$PSHOME' | Out-String).Trim()
-          if ($home) {
-              $homes += $home
+          $shellHome = (& $pwsh -NoLogo -NoProfile -NonInteractive -Command '$PSHOME' | Out-String).Trim()
+          if ($shellHome) {
+              $homes += $shellHome
           }
       }
       $Ansible.Changed = $false
