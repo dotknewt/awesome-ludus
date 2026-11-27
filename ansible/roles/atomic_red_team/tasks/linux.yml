@@ -154,8 +154,7 @@
         Where-Object { Test-Path $_ } |
         Select-Object -First 1;
         if (-not $module) {
-          Install-Module -Name powershell-yaml -Scope AllUsers -Force
-             -ErrorAction Stop;
+          Install-Module -Name powershell-yaml -Scope AllUsers -Force -ErrorAction Stop;
           Write-Output 'installed'
         } else {
           Write-Output 'present'
