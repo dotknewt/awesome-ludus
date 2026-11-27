@@ -38,8 +38,10 @@ In `range-config.yml`:
 
 ## Behavior
 
-- **Install check.** If `procexp64.exe` exists in `sysinternals_install_dir`
-  and `sysinternals_update` is false, the download is skipped.
+- **Install check.** After a successful extraction the role writes
+  `.windows_sysinternals_installed` into `sysinternals_install_dir`. If that
+  marker exists and `sysinternals_update` is false, the download is skipped;
+  an interrupted extraction leaves no marker and is retried on the next run.
 - **Download.** The zip is downloaded to a temporary directory and only
   extracted after the download (and the checksum, when
   `sysinternals_suite_sha256` is set) succeeds. The temporary directory is

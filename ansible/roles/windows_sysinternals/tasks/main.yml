@@ -10,24 +10,26 @@
     msg: "{{ ansible_distribution }} is not a supported Operating System for this role."
     quiet: true
 
-- name: Check for an existing Sysinternals installation
+# Role-owned completion marker, written only after a successful extraction, so
+# an interrupted extraction is retried on the next run.
+- name: Check for a completed Sysinternals installation
   ansible.windows.win_stat:
-    path: '{{ sysinternals_install_dir }}\procexp64.exe'
-  register: sysinternals_marker
+    path: '{{ sysinternals_install_dir }}\.windows_sysinternals_installed'
+  register: windows_sysinternals_marker
 
 - name: Download and extract the Sysinternals suite
-  when: not sysinternals_marker.stat.exists or sysinternals_update | bool
+  when: not windows_sysinternals_marker.stat.exists or sysinternals_update | bool
   block:
     - name: Create a staging directory
       ansible.windows.win_tempfile:
         state: directory
         suffix: sysinternals
-      register: sysinternals_staging
+      register: windows_sysinternals_staging
 
     - name: Download the Sysinternals suite
       ansible.windows.win_get_url:
         url: "{{ sysinternals_suite_url }}"
-        dest: '{{ sysinternals_staging.path }}\SysinternalsSuite.zip'
+        dest: '{{ windows_sysinternals_staging.path }}\SysinternalsSuite.zip'
         checksum: "{{ sysinternals_suite_sha256 if sysinternals_suite_sha256 | length > 0 else omit }}"
         checksum_algorithm: "{{ 'sha256' if sysinternals_suite_sha256 | length > 0 else omit }}"
         force: true
@@ -39,13 +41,18 @@
 
     - name: Extract the Sysinternals suite
       community.windows.win_unzip:
-        src: '{{ sysinternals_staging.path }}\SysinternalsSuite.zip'
+        src: '{{ windows_sysinternals_staging.path }}\SysinternalsSuite.zip'
         dest: "{{ sysinternals_install_dir }}"
+
+    - name: Record the completed installation
+      ansible.windows.win_copy:
+        content: "{{ sysinternals_suite_url }}\n"
+        dest: '{{ sysinternals_install_dir }}\.windows_sysinternals_installed'
   always:
     - name: Remove the staging directory
-      when: sysinternals_staging.path is defined
+      when: windows_sysinternals_staging.path is defined
       ansible.windows.win_file:
-        path: "{{ sysinternals_staging.path }}"
+        path: "{{ windows_sysinternals_staging.path }}"
         state: absent
       changed_when: false
 
@@ -64,18 +71,25 @@
     error_action: stop
     script: |
       $Ansible.Changed = $false
+      $users = [Microsoft.Win32.Registry]::Users
 
+      # Uses .NET keys closed in finally so no handle keeps a mounted hive open.
       function Set-EulaAccepted {
-          param([string]$HiveRoot)
-          $path = "Registry::$HiveRoot\Software\Sysinternals"
-          if (-not (Test-Path -LiteralPath $path)) {
-              New-Item -Path $path -Force | Out-Null
+          param([string]$HiveName)
+          $key = $users.CreateSubKey("$HiveName\Software\Sysinternals")
+          try {
+              if ($key.GetValue('EulaAccepted') -ne 1) {
+                  $key.SetValue('EulaAccepted', 1, [Microsoft.Win32.RegistryValueKind]::DWord)
+                  $Ansible.Changed = $true
+              }
+          } finally {
+              $key.Close()
           }
-          $current = (Get-ItemProperty -LiteralPath $path -Name EulaAccepted -ErrorAction SilentlyContinue).EulaAccepted
-          if ($current -ne 1) {
-              New-ItemProperty -LiteralPath $path -Name EulaAccepted -PropertyType DWord -Value 1 -Force | Out-Null
-              $Ansible.Changed = $true
-          }
+      }
+
+      function Test-HiveMounted {
+          param([string]$HiveName)
+          return @($users.GetSubKeyNames()) -contains $HiveName
       }
 
       $targets = @(
@@ -89,25 +103,35 @@
       }
 
       foreach ($target in $targets) {
-          $loadedRoot = "HKEY_USERS\$($target.Sid)"
-          if ($target.Sid -ne 'Default' -and (Test-Path -LiteralPath "Registry::$loadedRoot")) {
-              Set-EulaAccepted -HiveRoot $loadedRoot
+          if ($target.Sid -ne 'Default' -and (Test-HiveMounted $target.Sid)) {
+              Set-EulaAccepted -HiveName $target.Sid
               continue
           }
           if (-not (Test-Path -LiteralPath $target.Hive)) { continue }
-          $mount = "HKEY_USERS\AnsibleSysinternals_$($target.Sid)"
-          & reg.exe load $mount $target.Hive | Out-Null
-          if ($LASTEXITCODE -ne 0) {
-              throw "reg.exe load failed for $($target.Hive) (exit $LASTEXITCODE)"
+          $mount = "AnsibleSysinternals_$($target.Sid)"
+          # A mount left behind by an interrupted run is reused, then unloaded.
+          if (-not (Test-HiveMounted $mount)) {
+              & reg.exe load "HKU\$mount" $target.Hive | Out-Null
+              if ($LASTEXITCODE -ne 0) {
+                  throw "reg.exe load failed for $($target.Hive) (exit $LASTEXITCODE)"
+              }
           }
           try {
-              Set-EulaAccepted -HiveRoot $mount
+              Set-EulaAccepted -HiveName $mount
           } finally {
               [gc]::Collect()
               [gc]::WaitForPendingFinalizers()
-              & reg.exe unload $mount | Out-Null
-              if ($LASTEXITCODE -ne 0) {
-                  throw "reg.exe unload failed for $mount (exit $LASTEXITCODE)"
+              $unloaded = $false
+              for ($attempt = 1; $attempt -le 5 -and -not $unloaded; $attempt++) {
+                  & reg.exe unload "HKU\$mount" | Out-Null
+                  if ($LASTEXITCODE -eq 0) {
+                      $unloaded = $true
+                  } else {
+                      Start-Sleep -Seconds 2
+                  }
+              }
+              if (-not $unloaded) {
+                  throw "reg.exe unload failed for HKU\$mount after 5 attempts"
               }
           }
       }
