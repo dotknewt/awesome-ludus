@@ -1,0 +1,8 @@
+---
+galaxy_info:
+  role_name: windows_sysinternals
+  author: dotknewt
+  description: Install the Sysinternals suite to a tools directory on Windows hosts.
+  license: GPL-3.0-only
+  min_ansible_version: "2.16"
+dependencies: []

@@ -1,0 +1,57 @@
+---
+- name: Assert that host is a supported Operating System
+  ansible.builtin.assert:
+    that: >
+      ansible_distribution is search("Microsoft Windows Server 2016") or
+      ansible_distribution is search("Microsoft Windows Server 2019") or
+      ansible_distribution is search("Microsoft Windows Server 2022") or
+      ansible_distribution is search("Microsoft Windows 10") or
+      ansible_distribution is search("Microsoft Windows 11")
+    msg: "{{ ansible_distribution }} is not a supported Operating System for this role."
+    quiet: true
+
+- name: Check for an existing Sysinternals installation
+  ansible.windows.win_stat:
+    path: '{{ sysinternals_install_dir }}\procexp64.exe'
+  register: sysinternals_marker
+
+- name: Download and extract the Sysinternals suite
+  when: not sysinternals_marker.stat.exists or sysinternals_update | bool
+  block:
+    - name: Create a staging directory
+      ansible.windows.win_tempfile:
+        state: directory
+        suffix: sysinternals
+      register: sysinternals_staging
+
+    - name: Download the Sysinternals suite
+      ansible.windows.win_get_url:
+        url: "{{ sysinternals_suite_url }}"
+        dest: '{{ sysinternals_staging.path }}\SysinternalsSuite.zip'
+        checksum: "{{ sysinternals_suite_sha256 if sysinternals_suite_sha256 | length > 0 else omit }}"
+        checksum_algorithm: "{{ 'sha256' if sysinternals_suite_sha256 | length > 0 else omit }}"
+        force: true
+
+    - name: Ensure the install directory exists
+      ansible.windows.win_file:
+        path: "{{ sysinternals_install_dir }}"
+        state: directory
+
+    - name: Extract the Sysinternals suite
+      community.windows.win_unzip:
+        src: '{{ sysinternals_staging.path }}\SysinternalsSuite.zip'
+        dest: "{{ sysinternals_install_dir }}"
+  always:
+    - name: Remove the staging directory
+      when: sysinternals_staging.path is defined
+      ansible.windows.win_file:
+        path: "{{ sysinternals_staging.path }}"
+        state: absent
+      changed_when: false
+
+- name: Add the install directory to the machine PATH
+  when: sysinternals_add_to_path | bool
+  ansible.windows.win_path:
+    elements: "{{ sysinternals_install_dir }}"
+    scope: machine
+    state: present

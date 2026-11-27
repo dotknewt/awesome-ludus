@@ -1,0 +1,35 @@
+---
+argument_specs:
+  main:
+    short_description: Install the Sysinternals suite on Windows.
+    options:
+      sysinternals_install_dir:
+        type: str
+        required: false
+        default: 'C:\Tools'
+        description: Directory that receives the extracted suite.
+      sysinternals_suite_url:
+        type: str
+        required: false
+        default: https://download.sysinternals.com/files/SysinternalsSuite.zip
+        description: Download URL of the Sysinternals suite zip.
+      sysinternals_suite_sha256:
+        type: str
+        required: false
+        default: ""
+        description: Optional SHA256 of the downloaded zip. Empty skips checksum verification.
+      sysinternals_update:
+        type: bool
+        required: false
+        default: false
+        description: Re-download and overwrite the suite even when it is already installed.
+      sysinternals_add_to_path:
+        type: bool
+        required: false
+        default: true
+        description: Add the install directory to the machine PATH.
+      sysinternals_accept_eula:
+        type: bool
+        required: false
+        default: true
+        description: Pre-accept the Sysinternals EULA for existing and future users.
