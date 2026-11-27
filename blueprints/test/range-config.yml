@@ -44,7 +44,7 @@ ludus:
     hostname: '{{ range_id }}-dc'
     template: no-windows-server-2022-x64-template
     windows:
-      sysprep: true
+      sysprep: false
       gpos:
         - anon_share_access
         - disable_defender
@@ -90,7 +90,7 @@ ludus:
     ram_gb: 8
     cpus: 2
     windows:
-      sysprep: true
+      sysprep: false
       autologon_user: domainadmin
       autologon_password: "Temp1234!!"
     domain:
